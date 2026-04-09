@@ -20,10 +20,12 @@ COLUMNS = [
     ("profit_conservative",     "Profit (Conservative)",18, "gbp"),
     ("margin_current",          "Margin (Current)",     16, "pct"),
     ("margin_conservative",     "Margin (Conservative)",18, "pct"),
+    ("sales_estimate",          "Est. Sales/Month",     16, "int"),
+    ("bought_past_month",       "Bought/Month (Keepa)", 18, "int"),
+    ("sales_rank",              "BSR",                  14, "int"),
     ("fba_seller_count",        "FBA Sellers",          12, "int"),
     ("amazon_on_listing",       "Amazon On Listing",    16, "text"),
     ("amazon_bb_pct_90",        "Amazon Share % (90d)", 18, "text"),
-    ("sales_estimate",          "Est. Sales/Month",     16, "int"),
     ("fees_current",            "Total Fees (Current)", 16, "gbp"),
     ("fees_conservative",       "Total Fees (Conserv.)",18, "gbp"),
     ("raw_conservative_price",  "Conservative Price",   16, "gbp"),
@@ -32,8 +34,6 @@ COLUMNS = [
     ("buy_box_drop_pct_90",     "Price Drop % (90d)",   16, "text"),
     ("rating",                  "Rating",               10, "text"),
     ("review_count",            "Reviews",              12, "int"),
-    ("sales_rank",              "BSR",                  12, "int"),
-    ("bought_past_month",       "Bought/Month (Keepa)", 18, "int"),
     ("price_basis",             "Fulfilment",           12, "text"),
     ("match_type",              "Match Type",           12, "text"),
     ("ean",                     "EAN",                  16, "text"),
@@ -107,7 +107,7 @@ def write_excel(df: pd.DataFrame, path: str, market_data: dict | None = None):
         title_cell = ws.cell(row=1, column=1)
         shortlist_count = (out["decision"] == "SHORTLIST").sum()
         review_count = (out["decision"] == "REVIEW").sum()
-        title_cell.value = f"Abgee Supplier Analysis — {shortlist_count} Shortlisted, {review_count} Review  |  {pd.Timestamp.now().strftime('%Y-%m-%d')}"
+        title_cell.value = f"Connect Beauty Analysis — {shortlist_count} Shortlisted, {review_count} Review  |  {pd.Timestamp.now().strftime('%Y-%m-%d')}"
         title_cell.font = Font(bold=True, size=13, color="FFFFFF")
         title_cell.fill = header_fill
         title_cell.alignment = Alignment(horizontal="left", vertical="center")
