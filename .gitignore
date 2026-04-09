@@ -1,7 +1,3 @@
-# Sensitive credentials
-keepa_niche_finder/CLAUDE.md
-keepa_niche_finder/config/google-service-account.json
-
 # Claude Code local settings
 .claude/
 **/.claude/
