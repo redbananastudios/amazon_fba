@@ -1,0 +1,36 @@
+Niche: pet-care
+Date: 2026-03-24
+
+Phase 1 input count: 9997
+After pre-filter: 3022
+Removed at pre-filter:
+  Single seller: 5973
+  Price erosion: 106
+  Low velocity (<100/mo): 363
+  Oversaturated (>20 sellers): 5
+  Hazmat (Keepa flag): 0
+  Hazmat title keyword: 16
+  Heavy/bulky title keyword: 512
+  Total removed: 6975
+SellerAmp processed: 0 (enriched from Keepa data)
+After enrichment trim:
+  Hazmat removed: 16
+  MAYBE-ROI flagged: 2584
+  Amazon dominant flagged: 452
+Final enriched count: 3022
+Weight flags:
+  HEAVY: 1000
+  OVERSIZE: 0
+Listing quality breakdown:
+  STRONG: 776
+  AVERAGE: 1386
+  WEAK: 860
+Brand 1P detected: 306
+Reviews > 500: 579
+Reviews < 20: 837
+Pre-filter flags:
+  PRICE CHECK: 159
+  AMAZON CHECK: 747
+  LOW SELLER CHECK: 1333
+  PRICE DRIFT: 43
+Note: Enrichment derived from Keepa export data. Gating status requires SellerAmp lookup.

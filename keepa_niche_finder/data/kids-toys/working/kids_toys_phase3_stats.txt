@@ -1,0 +1,41 @@
+Niche: kids-toys
+Date: 2026-03-24
+Input: 143 products from Phase 2
+Composite threshold: 6.5
+
+Lane config:
+  cashflow_volume_threshold: 40
+  cashflow_min_unit_profit: 0.6
+  cashflow_monthly_profit_threshold: 30
+  balanced_volume_threshold: 25
+  balanced_profit_threshold: 4
+  balanced_monthly_profit_threshold: 50
+  profit_unit_profit_threshold: 6
+  max_seller_count_by_lane: BALANCED=8, CASH FLOW=12, PROFIT=8
+  amazon_risk_penalty: 1
+  price_drop_penalty: 1
+
+Verdict breakdown:
+  YES:            0
+  MAYBE:          27
+  MAYBE-ROI:      94
+  BRAND APPROACH: 1
+  BUY THE DIP:    0
+  GATED:          0
+  PRICE EROSION:  0
+  NO:             21
+
+Shortlist total: 45
+
+Lane breakdown:
+  BALANCED:   6
+  CASH FLOW:  87
+  PROFIT:     0
+  UNASSIGNED: 50
+
+Top 5 by commercial priority:
+  1. B0F1SJY5S3 - One Piece Card Game The Best Vol.2 (PRB-02) Booste - BALANCED - MAYBE - GBP1680.30/mo
+  2. B0CGS363W3 - Magna-Tiles Downhill Duo 40-Piece Set, Black - BALANCED - MAYBE - GBP1362.20/mo
+  3. B0CFDWW5QW - Lavievert Tilting Puzzle Board with 2-in-1 Designe - BALANCED - MAYBE - GBP847.40/mo
+  4. B09PQBM615 - One Random PSA Graded and Authenticated Encased Po - BALANCED - MAYBE-ROI - GBP829.10/mo
+  5. B0FZTTPL3Y - Yu-Gi-Oh! Maze of Muertos Display (24) - BALANCED - BRAND APPROACH - GBP805.00/mo

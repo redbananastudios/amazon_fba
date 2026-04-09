@@ -1,0 +1,40 @@
+Niche: educational-toys
+Date: 2026-03-23
+Input: 48 products from Phase 5 final results
+
+Decision distribution:
+  BUY: 0
+  NEGOTIATE: 15
+  WATCH: 2
+  KILL: 31
+
+Opportunity Lane:
+  BALANCED: 5
+  CASH FLOW: 35
+  UNASSIGNED: 8
+
+IP Risk Band:
+  Low: 48
+
+Private Label Risk:
+  Unlikely: 11
+  -: 37
+
+Shortlist rows: 15
+
+Top 15 by Decision Score:
+  1. B0D8Y3L5FK | NEGOTIATE | 78 | NEGOTIATE | BALANCED | GBP848.00/mo | low IP risk | unlikely PL risk | rising (7%) | supplier cost missing
+  2. B0BZHDKW1V | NEGOTIATE | 74 | NEGOTIATE | CASH FLOW | GBP2599.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  3. B079RVGZ62 | NEGOTIATE | 74 | NEGOTIATE | BALANCED | GBP603.00/mo | low IP risk | unlikely PL risk | stable | supplier cost missing
+  4. B0DFWQ6N2K | NEGOTIATE | 73 | NEGOTIATE | BALANCED | GBP1232.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  5. B0006SK3WG | NEGOTIATE | 72 | NEGOTIATE | CASH FLOW | GBP1476.00/mo | low IP risk | - PL risk | rising (4%) | supplier cost missing
+  6. B0DPYWZ124 | NEGOTIATE | 71 | NEGOTIATE | BALANCED | GBP375.00/mo | low IP risk | unlikely PL risk | rising (5%) | supplier cost missing
+  7. B00LU09HO4 | NEGOTIATE | 68 | NEGOTIATE | BALANCED | GBP427.00/mo | low IP risk | - PL risk | slight dip (6%) | supplier cost missing
+  8. B000URHPLA | NEGOTIATE | 67 | NEGOTIATE | CASH FLOW | GBP586.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  9. B0FHQR4S6D | NEGOTIATE | 66 | NEGOTIATE | CASH FLOW | GBP318.00/mo | low IP risk | - PL risk | rising (4%) | supplier cost missing
+  10. B00AQURFUW | NEGOTIATE | 65 | NEGOTIATE | CASH FLOW | GBP304.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  11. B01B14XK00 | NEGOTIATE | 63 | NEGOTIATE | CASH FLOW | GBP336.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  12. B0CT3VZSCV | NEGOTIATE | 63 | NEGOTIATE | CASH FLOW | GBP317.00/mo | low IP risk | - PL risk | slight dip (8%) | supplier cost missing
+  13. B01CNYY3WQ | NEGOTIATE | 61 | NEGOTIATE | CASH FLOW | GBP229.00/mo | low IP risk | unlikely PL risk | stable | supplier cost missing
+  14. B00KH52EKC | NEGOTIATE | 60 | NEGOTIATE | CASH FLOW | GBP308.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  15. B0D7J67MGG | NEGOTIATE | 60 | NEGOTIATE | CASH FLOW | GBP226.00/mo | low IP risk | unlikely PL risk | rising (6%) | supplier cost missing

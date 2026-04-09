@@ -1,0 +1,36 @@
+Niche: kids-toys
+Date: 2026-03-24
+
+Phase 1 input count (after subcategory/title filter): 7785
+Subcategory/title pre-filter:
+  Removed educational subcategories: 399
+  Removed apparel/costume: 1637
+  Removed heavy/outdoor: 154
+After pre-filter: 143
+Removed at pre-filter:
+  Single seller: 4020
+  Price erosion: 201
+  Low velocity (<100/mo): 3243
+  Oversaturated: 176
+  Hazmat: 2
+SellerAmp processed: 0 (enriched from Keepa data)
+SellerAmp errors: 0
+After enrichment trim:
+  Hazmat removed: 2
+  Gated (flagged): unknown (no SellerAmp)
+  MAYBE-ROI flagged: 137
+  Amazon dominant flagged: 69
+Final enriched count: 143
+Listing quality breakdown:
+  STRONG: 85
+  AVERAGE: 54
+  WEAK: 4
+Brand 1P detected: 14
+Reviews > 500: 65
+Reviews < 20: 9
+Pre-filter flags:
+  PRICE CHECK: 20
+  AMAZON CHECK: 93
+  LOW SELLER CHECK: 31
+  PRICE DRIFT: 1
+Note: Enrichment derived from Keepa export data. Gating status requires SellerAmp lookup.

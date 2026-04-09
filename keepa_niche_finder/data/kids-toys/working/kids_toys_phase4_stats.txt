@@ -1,0 +1,35 @@
+Niche: kids-toys
+Date: 2026-03-24
+Input: 45 products from Phase 3 shortlist
+
+IP Risk Band distribution:
+  High:   2 (4%)
+  Medium: 8 (18%)
+  Low:    35 (78%)
+
+Brand Seller Match:
+  YES:     10
+  PARTIAL: 0
+  NO:      35
+
+Fortress Listings: 0
+
+Brand Type:
+  ESTABLISHED: 19
+  GENERIC:     22
+  SYNTHETIC:   4
+
+Top 10 highest IP Risk:
+  1. B095J3PK5Y - Wildspire - 7 - High - Brand=Seller match (YES) | Established brand | A+ content | Likely brand store | Category HIGH risk
+  2. B09MHV9NF1 - TALKING POINT CARDS - 7 - High - Brand=Seller match (YES) | Established brand | A+ content | Likely brand store | Category HIGH risk
+  3. B0D1QN278M - ZLemma - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category HIGH risk
+  4. B0D9WC3RVY - THE TWIDDLERS - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category HIGH risk
+  5. B0DTHJ3JH8 - kiothdre - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category HIGH risk
+  6. B0F17K1YGJ - Dreamon - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category HIGH risk
+  7. B0DQPLXBKR - BONNYCO - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category HIGH risk
+  8. B07SK99ZGX - The Magic Toy Shop - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category HIGH risk
+  9. B09FT6WPRH - Unibos - 4 - Medium - Brand=Seller match (YES) | Category HIGH risk
+  10. B0DX2JPFQH - tonies - 4 - Medium - Brand=Seller match (YES) | Category HIGH risk
+
+False positives avoided (Low risk with Brand 1P = Y):
+  None

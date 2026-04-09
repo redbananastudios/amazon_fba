@@ -1,0 +1,14 @@
+Niche: educational-toys
+Date: 2026-03-21
+BSR range used: 5000 - 200000 (widened from 10000-80000 due to low count with Toys & Games filter)
+BSR 90d avg ceiling: 250000
+Velocity floor: 50 (lowered from 100 to get sufficient results)
+Price range: GBP 20 - 70
+FBA sellers: 2 - 20
+Root category: Toys & Games
+Safety filters: isHazMat=No, batteriesRequired=No, batteriesIncluded=No, Physical only, Single variation
+Raw export count: 699
+Exclusions applied: 0 (first run)
+Weight flags: 2 HEAVY, 0 OVERSIZE, 0 HEAVY+OVERSIZE, 697 OK
+Output: educational_toys_phase1_filtered.csv
+Notes: Educational toys is a narrow niche within Toys & Games. Original BSR 10000-80000 with velocity 100 returned only 139 products (under 200 threshold). Widened BSR to 5000-200000 and lowered velocity to 50 to reach 699 products. Scoring in Phase 3 will rank higher-velocity products above lower ones.

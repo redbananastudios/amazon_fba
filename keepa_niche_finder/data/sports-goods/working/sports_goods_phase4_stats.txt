@@ -1,0 +1,35 @@
+Niche: sports-goods
+Date: 2026-03-24
+Input: 96 products from Phase 3 shortlist
+
+IP Risk Band distribution:
+  High:   1 (1%)
+  Medium: 11 (11%)
+  Low:    84 (88%)
+
+Brand Seller Match:
+  YES:     12
+  PARTIAL: 0
+  NO:      84
+
+Fortress Listings: 0
+
+Brand Type:
+  ESTABLISHED: 52
+  GENERIC:     28
+  SYNTHETIC:   16
+
+Top 10 highest IP Risk:
+  1. B019RM0C0O - Andux - 7 - High - Brand=Seller match (YES) | Established brand | A+ content | Likely brand store | Category MEDIUM risk
+  2. B07DSR141W - Andux - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category MEDIUM risk
+  3. B0GNMVQCK2 - Raquex - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category MEDIUM risk
+  4. B0D5GXRP2K - VEVOR - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category MEDIUM risk
+  5. B01MQGZNYP - Andux - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category MEDIUM risk
+  6. B003VRN56A - JOOLA - 5 - Medium - Brand=Seller match (YES) | Established brand | Category MEDIUM risk
+  7. B0D5WN51GX - Unibos - 4 - Medium - Brand=Seller match (YES) | Category MEDIUM risk
+  8. B0CP85MKRR - TH Golf - 4 - Medium - Brand=Seller match (YES) | Category MEDIUM risk
+  9. B0CHW9BBN3 - Sweatband.com - 4 - Medium - Brand=Seller match (YES) | Category MEDIUM risk
+  10. B0CKRWT41W - Racketworld - 4 - Medium - Brand=Seller match (YES) | Category MEDIUM risk
+
+False positives avoided (Low risk with Brand 1P = Y):
+  None

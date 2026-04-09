@@ -1,0 +1,42 @@
+Niche: sports-goods
+Date: 2026-03-23
+Input: 85 products from Phase 5 final results
+
+Decision distribution:
+  BUY: 0
+  NEGOTIATE: 5
+  WATCH: 36
+  KILL: 44
+
+Opportunity Lane:
+  BALANCED: 24
+  CASH FLOW: 37
+  PROFIT: 4
+  UNASSIGNED: 20
+
+IP Risk Band:
+  Low: 84
+  Medium: 1
+
+Private Label Risk:
+  -: 28
+  Unlikely: 57
+
+Shortlist rows: 5
+
+Top 15 by Decision Score:
+  1. B09TG4W776 | NEGOTIATE | 72 | NEGOTIATE | BALANCED | GBP707.00/mo | low IP risk | - PL risk | rising (3%) | supplier cost missing
+  2. B07L19GFPT | NEGOTIATE | 71 | NEGOTIATE | CASH FLOW | GBP667.00/mo | low IP risk | unlikely PL risk | stable | supplier cost missing
+  3. B07TB9Y1BD | NEGOTIATE | 69 | NEGOTIATE | CASH FLOW | GBP663.00/mo | low IP risk | unlikely PL risk | slight dip (3%) | supplier cost missing
+  4. B0DYVQC2V2 | NEGOTIATE | 65 | NEGOTIATE | BALANCED | GBP294.00/mo | low IP risk | unlikely PL risk | slight dip (8%) | supplier cost missing
+  5. B0F8VN1PKD | NEGOTIATE | 61 | NEGOTIATE | BALANCED | GBP276.00/mo | low IP risk | unlikely PL risk | slight dip (7%) | supplier cost missing
+  6. B09QF6DYH3 | WATCH | 60 | WATCH | CASH FLOW | GBP367.00/mo | low IP risk | unlikely PL risk | stable | supplier cost missing
+  7. B09MTS97QP | WATCH | 59 | WATCH | BALANCED | GBP798.00/mo | low IP risk | - PL risk | dropping (11%) | supplier cost missing
+  8. B0CYMS1TKX | WATCH | 59 | WATCH | BALANCED | GBP414.00/mo | low IP risk | unlikely PL risk | dropping (12%) | supplier cost missing
+  9. B07T98XV91 | WATCH | 59 | WATCH | BALANCED | GBP341.00/mo | low IP risk | - PL risk | dropping (13%) | supplier cost missing
+  10. B0F5BG54SM | WATCH | 58 | WATCH | CASH FLOW | GBP249.00/mo | low IP risk | unlikely PL risk | rising (4%) | supplier cost missing
+  11. B0CRZ8JWGH | WATCH | 58 | WATCH | BALANCED | GBP209.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  12. B0DK6YZMN1 | WATCH | 58 | WATCH | BALANCED | GBP193.00/mo | low IP risk | unlikely PL risk | slight dip (6%) | supplier cost missing
+  13. B083Y29SDG | WATCH | 58 | WATCH | BALANCED | GBP157.00/mo | low IP risk | unlikely PL risk | rising (5%) | supplier cost missing
+  14. B0D4M229LM | WATCH | 58 | WATCH | BALANCED | GBP127.00/mo | low IP risk | unlikely PL risk | dropping (15%) | supplier cost missing
+  15. B0191ZAD92 | WATCH | 58 | WATCH | BALANCED | GBP82.00/mo | low IP risk | unlikely PL risk | dropping (17%) | supplier cost missing

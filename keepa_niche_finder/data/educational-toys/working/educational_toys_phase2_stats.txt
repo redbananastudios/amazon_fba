@@ -1,0 +1,32 @@
+Niche: educational-toys
+Date: 2026-03-21
+
+Phase 1 input count: 399
+After pre-filter: 60
+Removed at pre-filter:
+  Single seller: 183
+  Price erosion: 12
+  Low velocity: 139
+  Oversaturated: 5
+  Hazmat: 0
+SellerAmp processed: 0 (enriched from Keepa data)
+SellerAmp errors: 0
+After enrichment trim:
+  Hazmat removed: 0
+  Gated (flagged): unknown (no SellerAmp)
+  MAYBE-ROI flagged: 55
+  Amazon dominant flagged: 24
+Final enriched count: 60
+Listing quality breakdown:
+  STRONG: 47
+  AVERAGE: 13
+  WEAK: 0
+Brand 1P detected: 4
+Reviews > 500: 40
+Reviews < 20: 3
+Pre-filter flags:
+  PRICE CHECK: 6
+  AMAZON CHECK: 42
+  LOW SELLER CHECK: 14
+  PRICE DRIFT: 0
+Note: Enrichment derived from Keepa export data. Gating status requires SellerAmp lookup.

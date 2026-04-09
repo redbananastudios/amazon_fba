@@ -1,0 +1,18 @@
+Niche: sports-goods
+Date: 2026-03-21
+BSR range used: 10000 - 80000
+Buy Box price range: £20 - £60
+Velocity floor: 50
+Root category: Sports & Outdoors
+Subcategories: Tennis (7), Badminton (7), Golf (19) = 33 total
+Title keyword: (none - subcategory filtering used instead)
+HazMat: No
+Product type: Physical only
+Variations: Single variation only
+Raw export count: 853
+Exclusions applied: 0 (first run)
+Weight flags: 14 HEAVY, 0 OVERSIZE
+Output: sports_goods_phase1_filtered.csv
+Notes: Used subcategory-based filtering instead of title keywords.
+  Golf added to scope alongside Tennis and Badminton.
+  Page size set to 5000 (all 854 results on single page).

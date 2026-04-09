@@ -1,0 +1,6 @@
+supplier,ean,product_name,match_type,supplier_price_basis,case_qty,unit_cost_ex_vat,unit_cost_inc_vat,case_cost_ex_vat,case_cost_inc_vat,decision,decision_reason,risk_flags
+Fubbles,093539154047,Fubbles No-Spill Mini Pals Bubble Machine Assortment,UNIT,CASE,6,4.163333333333333,4.9959999999999996,24.98,29.976,REJECT,No Amazon match found,
+Fubbles,093539004113,Fubbles Light-Up Bubble Torch,UNIT,UNIT,1,4.16,4.992,,,REJECT,No Amazon match found,
+Fubbles,093539004564,Fubbles No-Spill Fun-Finiti Bubble Machine,UNIT,UNIT,1,7.08,8.496,,,REJECT,No Amazon match found,
+Fubbles,093539004953,Fubbles No-Spill Motorized Bubble Mower,UNIT,UNIT,1,10.41,12.491999999999999,,,REJECT,No Amazon match found,
+Fubbles,093539980080,Fubbles No-Spill Bubble Tumbler Mini 2x12 pc PDQ,UNIT,CASE,24,1.0374999999999999,1.2449999999999999,24.9,29.879999999999995,REJECT,No Amazon match found,

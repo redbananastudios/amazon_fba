@@ -1,0 +1,7 @@
+interface:
+  display_name: "Keepa Product Finder"
+  short_description: "Resolve Keepa filters from plain text, run searches, and save exports."
+  default_prompt: "Use $keepa-product-finder to interpret my plain-language Keepa filters, resolve any needed category or select values, build the finder URL, and save the query plus export to the path I specify."
+
+policy:
+  allow_implicit_invocation: true

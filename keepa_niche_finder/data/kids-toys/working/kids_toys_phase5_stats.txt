@@ -1,0 +1,19 @@
+Niche: kids-toys
+Date: 2026-03-24
+Phase 5 Build Output
+Products in final CSV: 35
+Confirmed private label excluded: 10
+Columns: 67
+
+Lane breakdown:
+  BALANCED: 5
+  CASH FLOW: 19
+  UNASSIGNED: 11
+
+Verdict breakdown:
+  MAYBE: 18
+  MAYBE-ROI: 16
+  BRAND APPROACH: 1
+
+Supplier columns: empty (run skill-99-find-suppliers to populate)
+Rejected private label CSV: ./data\kids-toys\working\kids_toys_phase5_rejected_private_label.csv

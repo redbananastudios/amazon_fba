@@ -1,0 +1,35 @@
+Niche: pet-care
+Date: 2026-03-24
+Input: 83 products from Phase 3 shortlist
+
+IP Risk Band distribution:
+  High:   1 (1%)
+  Medium: 6 (7%)
+  Low:    76 (92%)
+
+Brand Seller Match:
+  YES:     7
+  PARTIAL: 1
+  NO:      75
+
+Fortress Listings: 0
+
+Brand Type:
+  ESTABLISHED: 13
+  GENERIC:     54
+  SYNTHETIC:   16
+
+Top 10 highest IP Risk:
+  1. B09YVP3L22 - FZONE - 7 - High - Brand=Seller match (YES) | Established brand | A+ content | Likely brand store | Category MEDIUM risk
+  2. B01N9TQKSN - AntHouse - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category MEDIUM risk
+  3. B0DV5NC256 - Eden Holistic Pet Foods - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category MEDIUM risk
+  4. B08MQHHW69 - Hind Handicrafts - 4 - Medium - Brand=Seller match (YES) | Category MEDIUM risk
+  5. B08MZFQPJZ - EFAN - 4 - Medium - Brand=Seller match (YES) | Category MEDIUM risk
+  6. B08P7M76X4 - Avonstar Classics Range - 4 - Medium - Brand=Seller match (YES) | Category MEDIUM risk
+  7. B079B18PY9 - Express Pet Supplies - 4 - Medium - Brand=Seller match (YES) | Category MEDIUM risk
+  8. B01EVDZQ5K - PetSafe - 3 - Low - Established brand | A+ content | Category MEDIUM risk
+  9. B09M49HNKS - Bactador - 3 - Low - Established brand | A+ content | Category MEDIUM risk
+  10. B0D88ZCM8M - Kinzua Environmental - 3 - Low - Established brand | A+ content | Category MEDIUM risk
+
+False positives avoided (Low risk with Brand 1P = Y):
+  None

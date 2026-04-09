@@ -1,0 +1,21 @@
+Niche: pet-care
+Date: 2026-03-19
+BSR range used: 1 - 100000 (widened from config 10000-60000 to meet minimum result threshold)
+BSR 90-day avg ceiling: 120000
+Velocity floor: 50 (lowered from config 100 to increase results for UK Pet Supplies)
+Buy Box price range: GBP 20 - GBP 70
+FBA seller count: 2 - 20
+Sales Rank Drops 90d: >= 3
+HazMat: excluded
+Heat sensitive: excluded
+Physical product only, single variation per product
+Root category: Pet Supplies (340840031)
+Raw export count: 246 (245 products + 1 header)
+Output: pet_care_phase1_raw.csv
+Notes: UK Pet Supplies is a smaller marketplace category. Original config filters
+  (BSR 10000-60000, velocity 100) yielded only 4 products. BSR range was widened
+  to 1-100000 and velocity lowered to 50 to reach 246 products. This is above the
+  200 minimum threshold but below the 500 target. The dataset includes strong brands
+  (FRONTLINE, Applaws, Good Boy, Lily's Kitchen, GOURMET, Encore, BAKERS) and covers
+  dog food, cat food, flea treatments, pet treats, and accessories. Further filtering
+  in Skill 2 and Skill 3 will refine quality.

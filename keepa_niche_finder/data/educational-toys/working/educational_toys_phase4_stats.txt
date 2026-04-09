@@ -1,0 +1,35 @@
+Niche: educational-toys
+Date: 2026-03-24
+Input: 52 products from Phase 3 shortlist
+
+IP Risk Band distribution:
+  High:   2 (4%)
+  Medium: 2 (4%)
+  Low:    48 (92%)
+
+Brand Seller Match:
+  YES:     4
+  PARTIAL: 0
+  NO:      48
+
+Fortress Listings: 0
+
+Brand Type:
+  ESTABLISHED: 37
+  GENERIC:     13
+  SYNTHETIC:   2
+
+Top 10 highest IP Risk:
+  1. B082NMQ1PN - Stoie's - 7 - High - Brand=Seller match (YES) | Established brand | A+ content | Likely brand store | Category HIGH risk
+  2. B0D22WB565 - UGears - 7 - High - Brand=Seller match (YES) | Established brand | A+ content | Likely brand store | Category HIGH risk
+  3. B0G533WL97 - Gibsons - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category HIGH risk
+  4. B0C5WZXZNY - EDUMAN - 6 - Medium - Brand=Seller match (YES) | A+ content | Likely brand store | Category HIGH risk
+  5. B0006SK3WG - John Adams - 3 - Low - Established brand | A+ content | Category HIGH risk
+  6. B0DFWQ6N2K - PUZZLE POTATO - 3 - Low - Established brand | A+ content | Category HIGH risk
+  7. B0D8Y3L5FK - ESAKO - 3 - Low - Established brand | A+ content | Category HIGH risk
+  8. B079RVGZ62 - My Salah Mat - 3 - Low - Established brand | A+ content | Category HIGH risk
+  9. B000URHPLA - Learning Resources - 3 - Low - Established brand | A+ content | Category HIGH risk
+  10. B00LU09HO4 - Playmags - 3 - Low - Established brand | A+ content | Category HIGH risk
+
+False positives avoided (Low risk with Brand 1P = Y):
+  None

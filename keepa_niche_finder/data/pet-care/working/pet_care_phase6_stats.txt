@@ -1,0 +1,40 @@
+Niche: pet-care
+Date: 2026-03-23
+Input: 86 products from Phase 5 final results
+
+Decision distribution:
+  BUY: 0
+  NEGOTIATE: 7
+  WATCH: 2
+  KILL: 77
+
+Opportunity Lane:
+  BALANCED: 4
+  CASH FLOW: 34
+  UNASSIGNED: 48
+
+IP Risk Band:
+  Low: 86
+
+Private Label Risk:
+  Unlikely: 42
+  -: 44
+
+Shortlist rows: 7
+
+Top 15 by Decision Score:
+  1. B07RMNXHXW | NEGOTIATE | 73 | NEGOTIATE | BALANCED | GBP1506.00/mo | low IP risk | unlikely PL risk | stable | supplier cost missing
+  2. B01N7VZQZW | NEGOTIATE | 70 | NEGOTIATE | CASH FLOW | GBP689.00/mo | low IP risk | unlikely PL risk | stable | supplier cost missing
+  3. B0DJ14BNNT | NEGOTIATE | 69 | NEGOTIATE | CASH FLOW | GBP760.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  4. B0CYW22BZ9 | NEGOTIATE | 69 | NEGOTIATE | CASH FLOW | GBP517.00/mo | low IP risk | unlikely PL risk | slight dip (3%) | supplier cost missing
+  5. B08JYZ6GG2 | NEGOTIATE | 66 | NEGOTIATE | CASH FLOW | GBP399.00/mo | low IP risk | unlikely PL risk | stable | supplier cost missing
+  6. B0034YQ738 | NEGOTIATE | 63 | NEGOTIATE | CASH FLOW | GBP314.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  7. B08T7THZ69 | NEGOTIATE | 60 | NEGOTIATE | CASH FLOW | GBP230.00/mo | low IP risk | unlikely PL risk | stable | supplier cost missing
+  8. B009GODTTK | WATCH | 59 | WATCH | BALANCED | GBP582.00/mo | low IP risk | - PL risk | dropping (14%) | supplier cost missing
+  9. B083FBGDJM | WATCH | 54 | WATCH | UNASSIGNED | GBP265.00/mo | low IP risk | - PL risk | dropping (21%) | supplier cost missing
+  10. B0F1SYXYTH | KILL | 35 | KILL | CASH FLOW | GBP1250.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  11. B0CKHXWTFQ | KILL | 35 | KILL | CASH FLOW | GBP992.00/mo | low IP risk | unlikely PL risk | stable | supplier cost missing
+  12. B06XQ492N8 | KILL | 35 | KILL | CASH FLOW | GBP681.00/mo | low IP risk | unlikely PL risk | dropping (11%) | supplier cost missing
+  13. B0CRDX4NR2 | KILL | 35 | KILL | CASH FLOW | GBP552.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  14. B07BL4S7B3 | KILL | 35 | KILL | CASH FLOW | GBP531.00/mo | low IP risk | - PL risk | stable | supplier cost missing
+  15. B01BHUXKJY | KILL | 35 | KILL | CASH FLOW | GBP418.00/mo | low IP risk | - PL risk | stable | supplier cost missing

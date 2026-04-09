@@ -1,0 +1,31 @@
+# Sensitive credentials
+keepa_niche_finder/CLAUDE.md
+keepa_niche_finder/config/google-service-account.json
+
+# Claude Code local settings
+.claude/
+**/.claude/
+
+# Playwright MCP logs
+.playwright-mcp/
+**/.playwright-mcp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db

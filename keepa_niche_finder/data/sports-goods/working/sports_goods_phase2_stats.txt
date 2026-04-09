@@ -1,0 +1,33 @@
+Niche: sports-goods
+Date: 2026-03-24
+
+Phase 1 input count: 854
+After pre-filter: 320
+Removed at pre-filter:
+  Single seller: 496
+  Price erosion: 13
+  Low velocity: 25
+  Oversaturated: 0
+  Hazmat: 0
+SellerAmp processed: 0 (enriched from Keepa data)
+After enrichment trim:
+  Hazmat removed: 0
+  MAYBE-ROI flagged: 290
+  Amazon dominant flagged: 67
+Final enriched count: 320
+Weight flags:
+  HEAVY: 14
+  OVERSIZE: 0
+Listing quality breakdown:
+  STRONG: 80
+  AVERAGE: 162
+  WEAK: 78
+Brand 1P detected: 41
+Reviews > 500: 45
+Reviews < 20: 111
+Pre-filter flags:
+  PRICE CHECK: 13
+  AMAZON CHECK: 109
+  LOW SELLER CHECK: 181
+  PRICE DRIFT: 4
+Note: Enrichment derived from Keepa export data. Gating status requires SellerAmp lookup.

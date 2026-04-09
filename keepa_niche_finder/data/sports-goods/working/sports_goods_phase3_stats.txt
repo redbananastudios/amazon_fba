@@ -1,0 +1,41 @@
+Niche: sports-goods
+Date: 2026-03-24
+Input: 320 products from Phase 2
+Composite threshold: 6.5
+
+Lane config:
+  cashflow_volume_threshold: 40
+  cashflow_min_unit_profit: 0.6
+  cashflow_monthly_profit_threshold: 30
+  balanced_volume_threshold: 25
+  balanced_profit_threshold: 4
+  balanced_monthly_profit_threshold: 50
+  profit_unit_profit_threshold: 6
+  max_seller_count_by_lane: BALANCED=8, CASH FLOW=12, PROFIT=8
+  amazon_risk_penalty: 1
+  price_drop_penalty: 1
+
+Verdict breakdown:
+  YES:            2
+  MAYBE:          44
+  MAYBE-ROI:      146
+  BRAND APPROACH: 55
+  BUY THE DIP:    0
+  GATED:          0
+  PRICE EROSION:  0
+  NO:             73
+
+Shortlist total: 96
+
+Lane breakdown:
+  BALANCED:   58
+  CASH FLOW:  94
+  PROFIT:     10
+  UNASSIGNED: 158
+
+Top 5 by commercial priority:
+  1. B09MTS97QP - Wilson US Open Extra Duty Official Tennis Balls -  - BALANCED - MAYBE - GBP797.80/mo
+  2. B09TG4W776 - Yonex Arcsaber 11 Play Badminton Pre-Strung Racket - BALANCED - MAYBE-ROI - GBP706.70/mo
+  3. B0CYMS1TKX - FORB Chip and Stick Golf Game | Indoor and Outdoor - BALANCED - MAYBE - GBP414.20/mo
+  4. B07T98XV91 - STIGA Prestige 5-Star Table Tennis Racket – Profes - BALANCED - MAYBE - GBP341.30/mo
+  5. B0DYVQC2V2 - FORZA Sport Umbrellas | 60" Double Layered Canopy  - BALANCED - YES - GBP294.30/mo
