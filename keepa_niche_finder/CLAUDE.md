@@ -2,17 +2,10 @@
 FBA SOURCING SYSTEM -- PROJECT CONTEXT
 ================================================================
 
-## CREDENTIALS
+## Credentials
 
-Keepa:
-  Website: https://keepa.com
-  Email:    JustThis
-  Password: Polopolo121
-
-SellerAmp:
-  Website: https://sas.selleramp.com
-  Email:    hello@justthisretail.co.uk
-  Password: Polopolo1212
+All credentials are centralized at: F:\My Drive\workspace\credentials.env
+Run sync script after changes: powershell "F:\My Drive\workspace\sync-credentials.ps1"
 
 ## PATHS
 
