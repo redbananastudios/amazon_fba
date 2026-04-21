@@ -1,5 +1,16 @@
 # Amazon FBA Product Sourcing System
 
+## Current State
+**Last updated:** 2026-04-18
+**Currently working on:** Testing supplier pipelines on connect-beauty niche, building repeatable product discovery and profit analysis
+**Next steps:** Find profitable products with consistent sales (target 2-3 GBP profit per item), get SP-API credentials for Amazon FBA Fees MCP
+**Blockers:** SP-API credentials awaited (code complete); need to find higher velocity products meeting ROI targets
+
+## Session Protocol
+- At the end of each session, update the "Current State" section above
+- If you learned something about how this project works that would help next time, add it to this file
+- Commit CLAUDE.md changes as part of your work
+
 This workspace contains two independent pipelines for Amazon FBA product sourcing. Both are designed to be portable — all paths are relative to their project root. Clone or install them anywhere.
 
 ---
@@ -87,3 +98,15 @@ Configured niches (in `keepa_niche_finder/config/niche-configs/`):
 - stationery
 - sports-goods
 - pet-care
+
+## Available Services
+This project has access to the following MCP servers:
+- Amazon FBA Fees (custom SP-API fee calculator — awaiting SP-API credentials)
+- Chrome DevTools (browser inspection)
+- Playwright (browser automation)
+- NotebookLM (research)
+
+Global services also available: Notion, Context7, Google Workspace, Zapier
+
+Credentials are centralized at: F:\My Drive\workspace\credentials.env
+Never hardcode keys — use ${VAR_NAME} references in .mcp.json
