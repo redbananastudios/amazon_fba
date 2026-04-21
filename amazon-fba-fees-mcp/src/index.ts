@@ -20,23 +20,35 @@ function getEnvOrThrow(name: string): string {
   return value;
 }
 
-// Initialize services
-const spApi = new SpApiService({
-  clientId: getEnvOrThrow("SP_API_CLIENT_ID"),
-  clientSecret: getEnvOrThrow("SP_API_CLIENT_SECRET"),
-  refreshToken: getEnvOrThrow("SP_API_REFRESH_TOKEN"),
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+  process.exit(1);
 });
 
-const sheetsCredentials = process.env.GOOGLE_SHEETS_CREDENTIALS;
-const sheetId = process.env.GOOGLE_SHEET_ID;
-const sheets =
-  sheetsCredentials && sheetId
-    ? new SheetsService(sheetId, sheetsCredentials)
-    : null;
+let spApi: SpApiService;
+let sheets: SheetsService | null;
+let cache: Cache<FeeEstimate>;
 
-const cache = new Cache<FeeEstimate>(TWENTY_FOUR_HOURS);
+try {
+  spApi = new SpApiService({
+    clientId: getEnvOrThrow("SP_API_CLIENT_ID"),
+    clientSecret: getEnvOrThrow("SP_API_CLIENT_SECRET"),
+    refreshToken: getEnvOrThrow("SP_API_REFRESH_TOKEN"),
+  });
 
-// Create MCP server
+  const sheetsCredentials = process.env.GOOGLE_SHEETS_CREDENTIALS;
+  const sheetId = process.env.GOOGLE_SHEET_ID;
+  sheets =
+    sheetsCredentials && sheetId
+      ? new SheetsService(sheetId, sheetsCredentials)
+      : null;
+
+  cache = new Cache<FeeEstimate>(TWENTY_FOUR_HOURS);
+} catch (error: any) {
+  console.error(`Startup failed: ${error.message}`);
+  process.exit(1);
+}
+
 const server = new McpServer({
   name: "amazon-fba-fees",
   version: "1.0.0",
@@ -173,8 +185,12 @@ server.tool(
 );
 
 // Start server
-const transport = new StdioServerTransport();
-await server.connect(transport);
-
-// Log to stderr (stdout is reserved for MCP JSON-RPC)
-console.error("amazon-fba-fees MCP server started");
+try {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  // Log to stderr (stdout is reserved for MCP JSON-RPC)
+  console.error("amazon-fba-fees MCP server started");
+} catch (error: any) {
+  console.error(`Failed to start MCP transport: ${error.message}`);
+  process.exit(1);
+}
