@@ -3,17 +3,23 @@
 This file is read by Claude Code at the start of every session.
 Read it fully before touching any code.
 
+> **Step 1 update (2026-04-28):** Thresholds now live in `shared/config/`
+> (single source of truth across the whole repo). The decision engine uses
+> ROI as the SHORTLIST gate, not margin. `config.py` is now a shim importing
+> from `shared/lib/python/fba_config_loader.py`. See "Domain Rules → Decision
+> Engine" below.
+
 ---
 
 ## What This Project Is
 
 A Python pipeline that processes supplier price lists and finds profitable products to sell on Amazon via FBA or FBM. It is used with **real money**. Accuracy is not negotiable. Conservative assumptions always win over optimistic ones.
 
-The two authoritative documents are in the project root:
-- `PRD_Amazon_FBA_Sourcing_Engine_v5.md` — business logic, all decisions, all rules
-- `BUILD_PROMPT_Sourcing_Engine_v5.md` — implementation structure, function signatures, test names
-
-When behaviour is ambiguous, the PRD is the source of truth.
+The legacy specification documents in the project root —
+`PRD_Amazon_FBA_Sourcing_Engine_v5.md` and `BUILD_PROMPT_Sourcing_Engine_v5.md` —
+were never fully implemented. They are kept for historical context but are
+**not authoritative**. The actual code is the source of truth. Where docs
+disagree with code, the code wins.
 
 ---
 
@@ -21,7 +27,7 @@ When behaviour is ambiguous, the PRD is the source of truth.
 
 ```
 sourcing_engine/
-├── config.py                  # All thresholds and constants — never hardcode values in logic
+├── config.py                  # SHIM — re-exports from shared/lib/python/fba_config_loader
 ├── main.py                    # Entry point
 ├── pipeline/
 │   ├── ingest.py              # File reading (CSV / XLSX / PDF / HTML)
@@ -31,8 +37,8 @@ sourcing_engine/
 │   ├── market_data.py         # Keepa data extraction
 │   ├── fees.py                # Fee calculation — FBA path and FBM path are separate
 │   ├── conservative_price.py  # 15th percentile historical pricing
-│   ├── profit.py              # Profit + margin engine
-│   └── decision.py            # SHORTLIST / REVIEW / REJECT logic
+│   ├── profit.py              # Profit + margin + ROI engine
+│   └── decision.py            # SHORTLIST / REVIEW / REJECT logic — uses ROI gate
 ├── output/
 │   ├── csv_writer.py
 │   ├── excel_writer.py        # Green = SHORTLIST, amber = REVIEW, red = REJECT
@@ -42,6 +48,8 @@ sourcing_engine/
 │   └── flags.py               # Risk flag constants
 └── tests/
     ├── test_case_detection.py
+    ├── test_ingest.py
+    ├── test_normalise.py
     ├── test_profit.py
     ├── test_decision.py
     └── fixtures/
@@ -52,17 +60,15 @@ sourcing_engine/
 ## How to Run
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies (PyYAML added in step 1 for config loader)
+pip install pandas openpyxl pdfplumber beautifulsoup4 pyyaml pytest
 
 # Run pipeline against a supplier file or directory
-python main.py --input ./price_lists/ --output ./results/
+python -m sourcing_engine.main --input ./raw/ --output ./results/ \
+    --market-data ./raw/keepa_<supplier>.csv
 
 # Run tests
-pytest tests/ -v
-
-# Run a single test module
-pytest tests/test_decision.py -v
+pytest sourcing_engine/tests/ -v
 ```
 
 ---
@@ -104,17 +110,26 @@ These are the rules that protect real money. Do not deviate from them.
 
 ### Decision Engine
 
+**SHORTLIST gate is ROI-based**, not margin-based. The previous `MIN_MARGIN`
+threshold was replaced because ROI (`profit/buy_cost`) is the truer measure
+of capital efficiency for a reseller. Margin is still computed and shown in
+output for human reference but does not gate decisions.
+
 SHORTLIST requires **all** of:
 ```
-profit_conservative >= MIN_PROFIT (£2.50)
-margin_conservative >= MIN_MARGIN (10%)
-sales_estimate >= MIN_SALES_SHORTLIST (20/month)
-"PRICE_FLOOR_HIT" not in risk_flags
-"VAT_FIELD_MISMATCH" not in risk_flags
-"VAT_UNCLEAR" not in risk_flags
+profit_conservative >= MIN_PROFIT_ABSOLUTE     (£2.50 default)
+roi_conservative    >= TARGET_ROI              (30% default)
+sales_estimate      >= MIN_SALES_SHORTLIST     (20/month)
+"PRICE_FLOOR_HIT"      not in risk_flags
+"VAT_FIELD_MISMATCH"   not in risk_flags
+"VAT_UNCLEAR"          not in risk_flags
 ```
 
-**Gated products are NOT rejected.** They flow through to SHORTLIST/REVIEW with a gating indicator in the `decision_reason` field:
+The ROI gate logic lives in `shared/lib/python/fba_roi_gate.py`. The decision
+engine calls `passes_decision_gates()` which returns `passes/reason/roi`.
+
+**Gated products are NOT rejected.** They flow through to SHORTLIST/REVIEW
+with a gating indicator in the `decision_reason` field:
 - `gated == "Y"` → shortlisted with "GATED — requires ungating"
 - `gated == "UNKNOWN"` → shortlisted with "Gated status unknown — check before buying"
 
@@ -132,7 +147,7 @@ PRICE_BASIS_AMBIGUOUS, CASE_MATCH_SKIPPED, CASE_QTY_UNKNOWN
 
 REJECT if:
 ```
-Both profit_current AND profit_conservative < MIN_PROFIT (£2.50)
+Both profit_current AND profit_conservative < MIN_PROFIT_ABSOLUTE
 EAN invalid or no Amazon match
 VAT_UNCLEAR with no valid buy_cost
 sales_estimate < MIN_SALES_REVIEW (10/month)
@@ -144,25 +159,34 @@ sales_estimate < MIN_SALES_REVIEW (10/month)
 
 ## Configuration
 
-All thresholds live in `config.py`. Never hardcode a number in pipeline logic.
+All thresholds live in `shared/config/decision_thresholds.yaml`. The single
+tunable knob is `target_roi`. Other values are absolute floors or pipeline
+mechanics. Cross-pipeline business rules (VAT, marketplace, price range)
+live in `shared/config/business_rules.yaml`.
 
-Key values:
+`sourcing_engine/config.py` is a backward-compat shim that re-exports the
+legacy constant names from `shared/lib/python/fba_config_loader.py`.
 
-| Constant | Default | Meaning |
-|---|---|---|
-| `MIN_PROFIT` | £2.50 | Minimum profit at conservative price |
-| `MIN_MARGIN` | 10% | Minimum margin at conservative price |
-| `MIN_SALES_SHORTLIST` | 20/month | Auto-shortlist sales threshold |
-| `MIN_SALES_REVIEW` | 10/month | Minimum sales to enter REVIEW |
-| `VAT_RATE` | 0.20 | Fixed — never changes |
-| `FBM_SHIPPING_ESTIMATE` | £3.50 | User must set to their real cost |
-| `FBM_PACKAGING_ESTIMATE` | £0.50 | User must set to their real cost |
-| `FBA_FEE_CONSERVATIVE_FALLBACK` | £4.50 | Used when size_tier is UNKNOWN |
-| `LOWER_BAND_PERCENTILE` | 15 | Percentile used for conservative price |
-| `HISTORY_WINDOW_DAYS` | 90 | Lookback window for price history |
-| `HISTORY_MINIMUM_DAYS` | 30 | Minimum qualifying days required |
-| `MIN_PLAUSIBLE_UNIT_PRICE` | £0.50 | Heuristic floor for case detection |
-| `CAPITAL_EXPOSURE_LIMIT` | £200 | MOQ × buy_cost above this → HIGH_MOQ |
+**Never hardcode a threshold in pipeline logic.** Add to YAML and import
+through the shim.
+
+| Constant (legacy name) | YAML key | Default | Meaning |
+|---|---|---|---|
+| `MIN_PROFIT` / `MIN_PROFIT_ABSOLUTE` | `min_profit_absolute` | £2.50 | Minimum profit at conservative price |
+| `TARGET_ROI` | `target_roi` | 30% | ROI gate for SHORTLIST |
+| `MIN_SALES_SHORTLIST` | `min_sales_shortlist` | 20/month | Auto-shortlist sales threshold |
+| `MIN_SALES_REVIEW` | `min_sales_review` | 10/month | Minimum sales to enter REVIEW |
+| `VAT_RATE` | `vat_rate` (business_rules) | 0.20 | Fixed — never changes |
+| `FBM_SHIPPING_ESTIMATE` | `fbm_shipping_estimate` | £3.50 | User must set to their real cost |
+| `FBM_PACKAGING_ESTIMATE` | `fbm_packaging_estimate` | £0.50 | User must set to their real cost |
+| `FBA_FEE_CONSERVATIVE_FALLBACK` | `fba_fee_conservative_fallback` | £4.50 | Used when size_tier is UNKNOWN |
+| `LOWER_BAND_PERCENTILE` | `lower_band_percentile` | 15 | Percentile used for conservative price |
+| `HISTORY_WINDOW_DAYS` | `history_window_days` | 90 | Lookback window for price history |
+| `HISTORY_MINIMUM_DAYS` | `history_minimum_days` | 30 | Minimum qualifying days required |
+| `MIN_PLAUSIBLE_UNIT_PRICE` | `min_plausible_unit_price` | £0.50 | Heuristic floor for case detection |
+| `CAPITAL_EXPOSURE_LIMIT` | `capital_exposure_limit` | £200 | MOQ × buy_cost above this → HIGH_MOQ |
+
+`MIN_MARGIN` was removed. Decisions now use `TARGET_ROI` via `fba_roi_gate`.
 
 ---
 
@@ -178,10 +202,29 @@ Key values:
 
 ## Testing
 
-22 tests across three files. All must pass before any PR or deployment.
+Test counts vary by supplier (per-supplier ingest/normalise tests). Baseline
+as of 2026-04-28 step-1 verification:
+
+| Supplier | Tests | Pass | Fail (pre-existing) |
+|---|---|---|---|
+| abgee | 35 | 35 | 0 |
+| connect-beauty | 38 | 38 | 0 |
+| shure | 35 | 32 | 3 |
+| zappies | 35 | 32 | 3 |
+
+The pre-existing shure/zappies failures are in `test_ingest.py` files copied
+from abgee but never adapted to those suppliers' file formats. They will be
+addressed in step 2 of the reorganisation (engine deduplication).
 
 ```bash
-pytest tests/ -v --tb=short
+cd supplier_pricelist_finder/pricelists/<supplier>
+pytest sourcing_engine/tests/ -v --tb=short
+```
+
+The shared library has its own tests:
+```bash
+cd shared/lib/python
+pytest tests/ -v
 ```
 
 Critical tests — if any of these fail, stop and fix before continuing:
@@ -195,7 +238,7 @@ test_fba_fee_path_no_shipping_cost              # FBA rows must not have shippin
 test_case_qty_1_no_duplicate_row                # case_qty=1 must not produce two rows
 test_single_supplier_row_produces_two_output_rows_when_both_match
 test_vat_unclear_blocks_shortlist
-test_gated_y_rejects
+test_gated_y_shortlists_with_indicator          # gated == Y goes to SHORTLIST with indicator
 ```
 
 ---
@@ -208,12 +251,13 @@ Do not do any of the following. These are the most common ways to introduce sile
 - ❌ Strip VAT from the Amazon sell price
 - ❌ Apply FBA fees to an FBM row
 - ❌ Apply FBM shipping/packaging to an FBA row
-- ❌ Use `floored_conservative_price` in any profit or margin calculation
+- ❌ Use `floored_conservative_price` in any profit, margin, or ROI calculation
 - ❌ Produce a second output row when `case_qty == 1`
 - ❌ Assume `price_basis` when it is ambiguous — flag it
-- ❌ Hardcode any number that exists in `config.py`
+- ❌ Hardcode any threshold value — add to `shared/config/*.yaml` instead
 - ❌ Silently swallow an exception — log everything
 - ❌ Default a missing `size_tier` to small parcel — use `FBA_FEE_CONSERVATIVE_FALLBACK` and flag
+- ❌ Add a margin gate back into the decision engine — ROI replaced margin deliberately
 
 ---
 
@@ -227,7 +271,9 @@ Each pipeline run produces three files in `./results/<run_timestamp>/`:
 | `shortlist_<timestamp>.xlsx` | Styled workbook — SHORTLIST + REVIEW only (no REJECT rows) |
 | `report_<timestamp>.md` | Human-readable report with per-supplier tables |
 
-**Excel format:** Styled with title bar, frozen panes, auto-filter. SHORTLIST rows green, REVIEW rows amber. No REJECT rows — those are in the CSV only. Key columns first: Product Name, Amazon URL (clickable), ASIN, Supplier, Decision, Gated, Cost inc VAT, Buy Box, Profit, Margin, FBA Sellers, Amazon On Listing, Amazon Share %. All monetary values formatted as `£0.00`, margins as `0.0%`. Gated cells highlighted purple (Y) or orange (UNKNOWN). Enriched with Keepa data: rating, reviews, BSR, bought/month, 90d price avg.
+The CSV schema includes `roi_current` and `roi_conservative` alongside the existing `margin_current` and `margin_conservative` columns (added in step 1).
+
+**Excel format:** Styled with title bar, frozen panes, auto-filter. SHORTLIST rows green, REVIEW rows amber. No REJECT rows — those are in the CSV only. Key columns first: Product Name, Amazon URL (clickable), ASIN, Supplier, Decision, Gated, Cost inc VAT, Buy Box, Profit, Margin, ROI, FBA Sellers, Amazon On Listing, Amazon Share %. All monetary values formatted as `£0.00`, margins/ROI as `0.0%`. Gated cells highlighted purple (Y) or orange (UNKNOWN). Enriched with Keepa data: rating, reviews, BSR, bought/month, 90d price avg.
 
 Markdown report structure per supplier:
 - Shortlist — FBA Unit Matches
@@ -254,6 +300,10 @@ Markdown report structure per supplier:
 - Case match: sells the whole box. Buy cost = case price. Match against multipack ASIN.
 
 **Three decision outcomes:**
-- `SHORTLIST` — profitable at conservative price, act on this.
+- `SHORTLIST` — profitable at conservative price (ROI ≥ 30%, profit ≥ £2.50), act on this.
 - `REVIEW` — potentially profitable but has a flag that needs human eyes before buying.
 - `REJECT` — does not meet thresholds or has a hard block (invalid EAN, no match).
+
+**Two profitability metrics, one decision metric:**
+- `margin_conservative` — profit ÷ sell_price. Shown for reference. Does NOT gate decisions.
+- `roi_conservative` — profit ÷ buy_cost. The decision gate. Truer measure of capital efficiency.

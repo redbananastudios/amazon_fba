@@ -1,37 +1,54 @@
-# config.py — All thresholds and constants for the sourcing engine.
-# Never hardcode these values in pipeline logic. Always import from here.
+"""
+config.py — Supplier engine config (now a shim).
 
-# Profit thresholds
-MIN_PROFIT = 2.50           # GBP — minimum profit at conservative price
-MIN_MARGIN = 0.10           # 10% — minimum margin at conservative price
-MIN_SALES_SHORTLIST = 20    # units/month — auto-shortlist threshold
-MIN_SALES_REVIEW = 10       # units/month — minimum to appear in REVIEW
+Real values live in shared/config/business_rules.yaml and decision_thresholds.yaml.
+This file re-exports them under the legacy constant names so existing pipeline
+code continues to work unchanged.
 
-# Capital exposure
-CAPITAL_EXPOSURE_LIMIT = 200.00  # GBP — MOQ x buy_cost above this -> HIGH_MOQ
+Step 2 of the reorganisation will eliminate this shim by moving the supplier
+sourcing engine into shared/lib/python/, at which point all suppliers will
+import directly from fba_config_loader.
 
-# History
-HISTORY_MINIMUM_DAYS = 30   # minimum qualifying days of FBA price history
-HISTORY_WINDOW_DAYS = 90    # lookback window for conservative price calculation
-LOWER_BAND_PERCENTILE = 15  # 15th percentile for conservative pricing
+NOTE: MIN_MARGIN is intentionally NOT exported. The decision engine now uses
+an ROI-based gate (TARGET_ROI) — see pipeline/decision.py and the shared
+fba_roi_gate module.
+"""
+import sys
+from pathlib import Path
 
-# Size tier
-SIZE_TIER_BOUNDARY_PCT = 0.10           # 10% of next tier boundary
-FBA_FEE_CONSERVATIVE_FALLBACK = 4.50    # GBP — used when size_tier is UNKNOWN
+# Resolve the repo root from this file's path:
+#   .../<repo>/supplier_pricelist_finder/pricelists/<supplier>/sourcing_engine/config.py
+#   parents: [0]=sourcing_engine, [1]=<supplier>, [2]=pricelists, [3]=supplier_pricelist_finder, [4]=<repo>
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_SHARED_LIB = _REPO_ROOT / "shared" / "lib" / "python"
 
-# Storage
-STORAGE_RISK_THRESHOLD = 20  # sales/month below which storage fee risk is flagged
+if str(_SHARED_LIB) not in sys.path:
+    sys.path.insert(0, str(_SHARED_LIB))
 
-# FBM fulfilment estimates — SET THESE TO YOUR REAL COSTS
-FBM_SHIPPING_ESTIMATE = 3.50   # GBP — default Royal Mail 2nd class up to 1kg
-FBM_PACKAGING_ESTIMATE = 0.50  # GBP — default poly bag / small box
-
-# VAT
-VAT_RATE = 0.20                 # fixed UK standard rate — non-VAT registered seller
-VAT_MISMATCH_TOLERANCE = 0.02   # GBP — rounding tolerance for VAT field validation
-
-# Case/unit detection
-MIN_PLAUSIBLE_UNIT_PRICE = 0.50  # GBP — implied unit price below this -> assume price is per case
-
-# Referral fee — default rate when category is unknown
-DEFAULT_REFERRAL_FEE_PCT = 0.15  # 15%
+# Re-export legacy constants. fba_config_loader exposes:
+#   MIN_PROFIT, MIN_PROFIT_ABSOLUTE, MIN_SALES_SHORTLIST, MIN_SALES_REVIEW,
+#   CAPITAL_EXPOSURE_LIMIT, HISTORY_MINIMUM_DAYS, HISTORY_WINDOW_DAYS,
+#   LOWER_BAND_PERCENTILE, SIZE_TIER_BOUNDARY_PCT, FBA_FEE_CONSERVATIVE_FALLBACK,
+#   STORAGE_RISK_THRESHOLD, FBM_SHIPPING_ESTIMATE, FBM_PACKAGING_ESTIMATE,
+#   VAT_RATE, VAT_MISMATCH_TOLERANCE, MIN_PLAUSIBLE_UNIT_PRICE,
+#   DEFAULT_REFERRAL_FEE_PCT, TARGET_ROI
+from fba_config_loader import (  # noqa: E402, F401
+    MIN_PROFIT,
+    MIN_PROFIT_ABSOLUTE,
+    MIN_SALES_SHORTLIST,
+    MIN_SALES_REVIEW,
+    CAPITAL_EXPOSURE_LIMIT,
+    HISTORY_MINIMUM_DAYS,
+    HISTORY_WINDOW_DAYS,
+    LOWER_BAND_PERCENTILE,
+    SIZE_TIER_BOUNDARY_PCT,
+    FBA_FEE_CONSERVATIVE_FALLBACK,
+    STORAGE_RISK_THRESHOLD,
+    FBM_SHIPPING_ESTIMATE,
+    FBM_PACKAGING_ESTIMATE,
+    VAT_RATE,
+    VAT_MISMATCH_TOLERANCE,
+    MIN_PLAUSIBLE_UNIT_PRICE,
+    DEFAULT_REFERRAL_FEE_PCT,
+    TARGET_ROI,
+)
