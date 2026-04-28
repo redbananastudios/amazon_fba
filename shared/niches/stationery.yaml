@@ -1,0 +1,100 @@
+niche_id: stationery
+sheet_tab: Stationery
+
+keepa_filters:
+  bsr_min: 5000
+  bsr_max: 50000
+  velocity_min: 100
+  root_category: Stationery & Office Supplies
+  exclude_subcategory:
+    - Printer Paper
+    - Copy & Multipurpose Paper
+    - Printer Ink Cartridges
+    - Printer Toner Cartridges
+    - Typewriter Ribbons
+
+exclusion_keywords:
+  heavy:
+    [paper ream, ream, printer paper, copy paper, 500 sheets,
+     large format, A0, A1, A2, plotter]
+
+focus_products:
+  good:
+    - Premium pens and pen sets
+    - Fountain pens
+    - Mechanical pencils
+    - Notebooks and journals
+    - Planners and diaries
+    - Bullet journals
+    - Highlighter sets
+    - Marker sets
+    - Coloured pencil sets
+    - Desk organisers and accessories
+    - Washi tape sets
+    - Sticky notes (premium branded)
+    - Revision cards, index cards
+    - Calligraphy sets
+    - Watercolour sets and art supplies
+    - Sketchbooks
+    - Stationery gift sets
+  avoid:
+    - Paper reams
+    - Printer consumables
+    - Large format paper
+    - Office furniture
+    - Heavy filing equipment
+    - Aerosol art supplies (spray fixatives, spray paint)
+
+focus_brands:
+  - Stabilo
+  - Pilot
+  - Pentel
+  - Leuchtturm1917
+  - Moleskine
+  - Rhodia
+  - Clairefontaine
+  - Faber-Castell
+  - Staedtler
+  - Zebra
+  - Uniball
+  - Tombow
+  - Caran d Ache
+  - Daler-Rowney
+  - Winsor and Newton
+  - Arteza
+
+suppliers:
+  - name: Gem Direct
+    url: gemdirect.co.uk
+    type: trade
+  - name: VOW Wholesale
+    url: vowwholesale.co.uk
+    type: trade
+  - name: Superstat
+    url: superstat.co.uk
+    type: trade
+  - name: Premier Paper Group
+    url: ppgco.co.uk
+    type: trade
+  - name: Pentel UK
+    url: pentel.co.uk
+    type: trade
+    notes: trade enquiries
+  - name: Pilot Pen UK
+    url: pilotpen.co.uk
+    type: trade
+  - name: Stabilo UK
+    type: search
+    notes: distributor search online
+  - name: Faber-Castell UK
+    url: fabercastell.co.uk
+    type: trade
+
+notes: |
+  BSR range is tighter (5k-50k) than other niches because:
+  1. Amazon Basics dominates the top of Stationery — 5k floor avoids them
+  2. Good branded stationery moves fast — 50k ceiling is sufficient
+
+  Hazmat check: some art supplies contain solvents.
+  SellerAmp confirmation handles this.
+  Watch for: spray fixatives, solvent-based markers, aerosol adhesives.
