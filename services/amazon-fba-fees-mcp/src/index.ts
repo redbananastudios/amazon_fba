@@ -10,7 +10,12 @@ import { estimateFees } from "./tools/estimate-fees.js";
 import { calculateProfitability } from "./tools/profitability.js";
 import { saveToSheet } from "./tools/save-to-sheet.js";
 import { checkListingRestrictions } from "./tools/check-listing-restrictions.js";
-import type { FeeEstimate, ListingRestrictionsResult } from "./types.js";
+import { checkFbaEligibility } from "./tools/check-fba-eligibility.js";
+import type {
+  FeeEstimate,
+  FbaEligibilityResult,
+  ListingRestrictionsResult,
+} from "./types.js";
 
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 
@@ -32,6 +37,7 @@ let sheets: SheetsService | null;
 let cache: Cache<FeeEstimate>;
 let sellerId: string | undefined;
 let restrictionsCache: DiskCache<ListingRestrictionsResult>;
+let fbaEligibilityCache: DiskCache<FbaEligibilityResult>;
 
 try {
   spApi = new SpApiService({
@@ -54,6 +60,10 @@ try {
   restrictionsCache = new DiskCache<ListingRestrictionsResult>({
     resource: "restrictions",
     defaultTtlSeconds: ttls.restrictions,
+  });
+  fbaEligibilityCache = new DiskCache<FbaEligibilityResult>({
+    resource: "fba_eligibility",
+    defaultTtlSeconds: ttls.fbaEligibility,
   });
 } catch (error: any) {
   console.error(`Startup failed: ${error.message}`);
@@ -208,6 +218,49 @@ server.tool(
         },
         spApi,
         restrictionsCache
+      );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register check_fba_eligibility tool
+server.tool(
+  "check_fba_eligibility",
+  "Check whether an ASIN is eligible for FBA inbound (or another program). Distinct from listing restrictions: an ASIN can be listable but FBA-ineligible (hazmat, oversized, missing dimensions). Informational only.",
+  {
+    asin: z.string().describe("Amazon ASIN"),
+    marketplace_id: z
+      .string()
+      .optional()
+      .describe("Marketplace ID (default: A1F83G8C2ARO7P for UK)"),
+    program: z
+      .string()
+      .optional()
+      .describe("FBA program: INBOUND or COMMINGLED (default: INBOUND)"),
+    refresh_cache: z
+      .boolean()
+      .optional()
+      .describe("Force a fresh SP-API call, bypassing the disk cache"),
+  },
+  async ({ asin, marketplace_id, program, refresh_cache }) => {
+    try {
+      const result = await checkFbaEligibility(
+        { asin, marketplace_id, program, refresh_cache },
+        spApi,
+        fbaEligibilityCache
       );
       return {
         content: [

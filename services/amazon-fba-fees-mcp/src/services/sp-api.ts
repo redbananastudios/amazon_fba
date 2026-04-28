@@ -147,4 +147,22 @@ export class SpApiService {
       })
     );
   }
+
+  async getItemEligibilityPreview(params: {
+    asin: string;
+    marketplaceId: string;
+    program?: string;
+  }): Promise<unknown> {
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getItemEligibilityPreview",
+        endpoint: "fbaInboundEligibility",
+        query: {
+          asin: params.asin,
+          marketplaceIds: [params.marketplaceId],
+          program: params.program ?? "INBOUND",
+        },
+      })
+    );
+  }
 }
