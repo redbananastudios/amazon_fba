@@ -212,4 +212,32 @@ export class SpApiService {
       })
     );
   }
+
+  async getCatalogItemFull(params: {
+    asin: string;
+    marketplaceId: string;
+    includedData?: string[];
+  }): Promise<unknown> {
+    const includedData = params.includedData ?? [
+      "summaries",
+      "attributes",
+      "dimensions",
+      "images",
+      "classifications",
+      "salesRanks",
+      "identifiers",
+    ];
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getCatalogItem",
+        endpoint: "catalogItems",
+        path: { asin: params.asin },
+        query: {
+          marketplaceIds: [params.marketplaceId],
+          includedData,
+        },
+        options: { version: "2022-04-01" },
+      })
+    );
+  }
 }

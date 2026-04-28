@@ -12,7 +12,9 @@ import { saveToSheet } from "./tools/save-to-sheet.js";
 import { checkListingRestrictions } from "./tools/check-listing-restrictions.js";
 import { checkFbaEligibility } from "./tools/check-fba-eligibility.js";
 import { estimateFeesBatch } from "./tools/estimate-fees-batch.js";
+import { getCatalogItem } from "./tools/get-catalog-item.js";
 import type {
+  CatalogItemResult,
   FeeEstimate,
   FbaEligibilityResult,
   ListingRestrictionsResult,
@@ -40,6 +42,7 @@ let sellerId: string | undefined;
 let restrictionsCache: DiskCache<ListingRestrictionsResult>;
 let fbaEligibilityCache: DiskCache<FbaEligibilityResult>;
 let feesCache: DiskCache<FeeEstimate>;
+let catalogCache: DiskCache<CatalogItemResult>;
 
 try {
   spApi = new SpApiService({
@@ -70,6 +73,10 @@ try {
   feesCache = new DiskCache<FeeEstimate>({
     resource: "fees",
     defaultTtlSeconds: ttls.fees,
+  });
+  catalogCache = new DiskCache<CatalogItemResult>({
+    resource: "catalog",
+    defaultTtlSeconds: ttls.catalog,
   });
 } catch (error: any) {
   console.error(`Startup failed: ${error.message}`);
@@ -324,6 +331,45 @@ server.tool(
           {
             type: "text" as const,
             text: JSON.stringify({ results: result }, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register get_catalog_item tool
+server.tool(
+  "get_catalog_item",
+  "Fetch first-party Amazon catalog data for an ASIN: title, brand (SP-API wins over Keepa per spec), manufacturer, dimensions, hazmat hint, classifications, images.",
+  {
+    asin: z.string().describe("Amazon ASIN"),
+    marketplace_id: z
+      .string()
+      .optional()
+      .describe("Marketplace ID (default: A1F83G8C2ARO7P for UK)"),
+    refresh_cache: z
+      .boolean()
+      .optional()
+      .describe("Force a fresh SP-API call, bypassing the disk cache"),
+  },
+  async ({ asin, marketplace_id, refresh_cache }) => {
+    try {
+      const result = await getCatalogItem(
+        { asin, marketplace_id, refresh_cache },
+        spApi,
+        catalogCache
+      );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
           },
         ],
       };
