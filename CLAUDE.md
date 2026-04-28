@@ -1,112 +1,125 @@
-# Amazon FBA Product Sourcing System
+# Amazon FBA Sourcing System
+
+> **Step 3 update (2026-04-28):** Repo restructured. One engine, named
+> strategies, ordered steps. The two former pipelines (`keepa_niche_finder/`,
+> `supplier_pricelist_finder/`) no longer exist as separate top-level trees.
+> See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-04-18
-**Currently working on:** Testing supplier pipelines on connect-beauty niche, building repeatable product discovery and profit analysis
-**Next steps:** Find profitable products with consistent sales (target 2-3 GBP profit per item), get SP-API credentials for Amazon FBA Fees MCP
-**Blockers:** SP-API credentials awaited (code complete); need to find higher velocity products meeting ROI targets
+**Last updated:** 2026-04-28
+**Currently working on:** Reorganisation steps 1-3 complete (config centralisation, engine deduplication, repo restructuring). Next: step 4 (extract steps catalogue from legacy Keepa pipeline).
+**Next steps:** Step 4 — port Keepa phases to Python, integrate with shared engine. Then step 5 (strategies as YAML) and step 6 (Skill 99 / new strategies).
+**Blockers:** SP-API credentials still awaited; doesn't block reorganisation but blocks `services/amazon-fba-fees-mcp/` from being usable.
 
 ## Session Protocol
 - At the end of each session, update the "Current State" section above
 - If you learned something about how this project works that would help next time, add it to this file
 - Commit CLAUDE.md changes as part of your work
 
-This workspace contains two independent pipelines for Amazon FBA product sourcing. Both are designed to be portable — all paths are relative to their project root. Clone or install them anywhere.
+---
+
+## Read these first
+
+For any work in this repo, read in this order:
+
+1. **`docs/SPEC.md`** — business logic, decision rules, the truth (supersedes the v5 PRD)
+2. **`docs/architecture.md`** — how the system is laid out
+3. **`AGENTS.md`** — agent behaviour rules, what not to do
+
+For specific work:
+
+- **Strategy work** → `docs/strategies/<strategy>.md` for that strategy
+- **Adapter work** (adding/fixing a supplier) → `fba_engine/adapters/<supplier>/` and look at sibling adapters as templates
+- **Threshold tuning** → `shared/config/decision_thresholds.yaml` (the single tunable knob is `target_roi`)
 
 ---
 
-## Projects
+## Top-level layout
 
-### 1. Keepa Niche Finder (`keepa_niche_finder/`)
+```
+amazon_fba/
+├── README.md                # human-facing
+├── CLAUDE.md                # this file
+├── AGENTS.md                # agent behaviour rules
+├── run.py                   # launcher
+├── docs/                    # SPEC.md, architecture.md, strategies/, archive/
+├── shared/                  # config/, niches/, lib/python/ (engine + libs)
+├── fba_engine/              # adapters/, data/ (gitignored), _legacy_keepa/ (temporary)
+├── services/                # amazon-fba-fees-mcp/
+└── orchestration/           # Cowork-facing run definitions
+```
 
-A Node.js pipeline that uses Keepa and SellerAmp to find profitable products within a given niche.
-
-**6-Phase Pipeline:**
-
-| Phase | Purpose | Tool |
-|-------|---------|------|
-| 1 — Keepa Finder | Export ~1000 products per niche from Keepa | Browser / Keepa API |
-| 2 — SellerAmp Enrichment | Confirm gating, hazmat, FBA fees, seller counts | Browser (sas.selleramp.com) |
-| 3 — Scoring & Shortlist | Composite scoring, cut to 50-100 products | Logic only |
-| 4 — IP Risk Analysis | Brand control, seller structure, compliance flags | Logic only |
-| 5 — Build Final Output | Styled Excel workbook + Google Sheets upload | Node.js (ExcelJS) |
-| 6 — Decision Engine | BUY / NEGOTIATE / WATCH / KILL verdicts | Logic only |
-
-**Stack:** Node.js, ExcelJS, Google Sheets API, Playwright (browser automation)
-
-**Run:** `cd keepa_niche_finder && claude`
-
-See `keepa_niche_finder/CLAUDE.md` for credentials, niche configs, and full pipeline docs.
+For details on each, see `docs/architecture.md`.
 
 ---
 
-### 2. Supplier Pricelist Finder (`supplier_pricelist_finder/`)
+## Common operations
 
-A Python pipeline that processes supplier price lists and identifies profitable products to sell on Amazon via FBA or FBM.
+### Run the supplier pricelist strategy
+```bash
+python run.py --supplier connect-beauty
+# or with explicit market data
+python run.py --supplier abgee --market-data fba_engine/data/pricelists/abgee/raw/keepa_combined.csv
+```
 
-**Pipeline Stages:** Ingest → Normalise → Case Detection → Match (EAN→ASIN) → Market Data (Keepa) → Fees → Conservative Price → Profit → Decision
+### Run all tests
+```bash
+# Shared library + canonical engine
+cd shared/lib/python && pytest tests/ sourcing_engine/tests/ && cd ../../..
 
-**Decisions:** SHORTLIST (profitable, act on it) / REVIEW (flagged, needs human eyes) / REJECT (below thresholds)
+# Per-supplier adapter tests (run from supplier folder so relative paths resolve)
+for s in abgee connect-beauty shure zappies; do
+  cd fba_engine/data/pricelists/$s && pytest ../../../adapters/$s/tests/ && cd ../../../..
+done
+```
 
-**Stack:** Python, pandas, pytest
+Note: the supplier adapter tests use relative paths like `raw/some_file.pdf`,
+so they must be invoked from the supplier's data folder.
 
-**Run:** `cd supplier_pricelist_finder/pricelists/abgee && python -m sourcing_engine.main --input ./raw/ --output ./results/`
+### Add a new supplier
+1. Create `fba_engine/adapters/<new-supplier>/` (use `_template/` as starting point)
+2. Implement `ingest.py` and `normalise.py` for that supplier's file format
+3. Create `fba_engine/data/pricelists/<new-supplier>/raw/` and drop in price lists
+4. Run `python run.py --supplier <new-supplier>`
 
-See `supplier_pricelist_finder/CLAUDE.md` for domain rules, thresholds, and testing.
-
----
-
-## Portability
-
-All paths in both projects are relative to their own root directory. No hardcoded drive letters or absolute paths. Users can clone this repo anywhere and it will work.
-
-- **JS scripts** resolve paths via `path.resolve(__dirname, ...)` relative to the script location
-- **Python pipeline** uses `--input` and `--output` CLI arguments
-- **SKILL.md files** reference paths as `./data/{niche}/...`
-
----
-
-## Credentials
-
-Credentials are stored in `keepa_niche_finder/CLAUDE.md` (Keepa, SellerAmp logins). These should **not** be committed to a public repo. Add them to `.gitignore` or use environment variables before sharing.
-
----
-
-## Key Business Rules
-
-These rules apply across both pipelines. They protect real money.
-
-- **Sell price = Buy Box price.** Never use `lowest_fba_price`.
-- **Price range:** GBP 20–70
-- **Min FBA sellers:** 2 (single seller = private label risk)
-- **Max FBA sellers:** 20
-- **Velocity floor:** 100/month (50 for sports-goods)
-- **ROI floor:** 20% target
-- **Conservative price:** 15th percentile of 90-day FBA history (never use floored value in profit calc)
-- **FBA and FBM are separate fee paths.** Never mix them.
-- **Never crash on a single bad row.** Log, flag as REVIEW, continue.
+### Tune the ROI target
+Edit `shared/config/decision_thresholds.yaml`:
+```yaml
+target_roi: 0.30   # change to taste
+```
+That's it. All downstream gates derive from this.
 
 ---
 
-## Shared Niche Configs
+## What changed in steps 1-3 (recap)
 
-Configured niches (in `keepa_niche_finder/config/niche-configs/`):
+- **Step 1:** Centralised all thresholds into `shared/config/`. Replaced the
+  margin-based SHORTLIST gate with an ROI-based gate (single tunable: `target_roi`).
+  Doc drift fixed.
 
-- afro-hair
-- kids-toys
-- educational-toys
-- stationery
-- sports-goods
-- pet-care
+- **Step 2:** Deduplicated the sourcing engine — was 4× copied across
+  supplier folders, now one canonical copy at `shared/lib/python/sourcing_engine/`.
+  Per-supplier code reduced to just the legitimately-different
+  `ingest.py` and `normalise.py` files.
 
-## Available Services
-This project has access to the following MCP servers:
-- Amazon FBA Fees (custom SP-API fee calculator — awaiting SP-API credentials)
-- Chrome DevTools (browser inspection)
-- Playwright (browser automation)
-- NotebookLM (research)
+- **Step 3:** Restructured the repo. The two old top-level pipelines
+  (`keepa_niche_finder/`, `supplier_pricelist_finder/`) no longer exist as
+  separate trees. Engine code is in `shared/`, supplier adapters and data
+  are in `fba_engine/`, MCP is in `services/`. Vestigial files removed.
+  v5 PRD/BUILD_PROMPT moved to `docs/archive/`.
 
-Global services also available: Notion, Context7, Google Workspace, Zapier
+---
 
-Credentials are centralized at: F:\My Drive\workspace\credentials.env
-Never hardcode keys — use ${VAR_NAME} references in .mcp.json
+## What's coming in steps 4-6
+
+- **Step 4:** Extract the legacy Keepa phases (currently in `fba_engine/_legacy_keepa/`)
+  into composable steps at `fba_engine/steps/` (Python translation of the
+  Node.js implementation). After step 4, `_legacy_keepa/` is gone.
+
+- **Step 5:** Express both existing strategies as YAML compositions in
+  `fba_engine/strategies/`. A `runner.py` reads a strategy YAML and executes
+  its steps. Cowork orchestrates this.
+
+- **Step 6:** Implement Skill 99 (Find Suppliers For Keepa-Discovered ASINs)
+  as a new strategy composing existing steps + one new discovery step.
+  Future strategies (brand outreach, retail arbitrage) follow the same pattern.

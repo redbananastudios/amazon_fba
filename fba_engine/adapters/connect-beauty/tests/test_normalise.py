@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from adapters.normalise import resolve_buy_cost, normalise
+from normalise import resolve_buy_cost, normalise
 
 
 def test_resolve_ex_vat_only():

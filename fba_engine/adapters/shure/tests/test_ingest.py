@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from adapters.ingest import ingest_file, ingest_directory
+from ingest import ingest_file, ingest_directory
 
 
 def test_ingest_abgee_pdf_returns_dataframe():

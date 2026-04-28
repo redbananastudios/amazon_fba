@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from adapters.ingest import ingest_file, ingest_directory
+from ingest import ingest_file, ingest_directory
 
 
 def test_ingest_connect_beauty_csv_returns_dataframe():
