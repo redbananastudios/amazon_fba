@@ -11,6 +11,7 @@ import { calculateProfitability } from "./tools/profitability.js";
 import { saveToSheet } from "./tools/save-to-sheet.js";
 import { checkListingRestrictions } from "./tools/check-listing-restrictions.js";
 import { checkFbaEligibility } from "./tools/check-fba-eligibility.js";
+import { estimateFeesBatch } from "./tools/estimate-fees-batch.js";
 import type {
   FeeEstimate,
   FbaEligibilityResult,
@@ -38,6 +39,7 @@ let cache: Cache<FeeEstimate>;
 let sellerId: string | undefined;
 let restrictionsCache: DiskCache<ListingRestrictionsResult>;
 let fbaEligibilityCache: DiskCache<FbaEligibilityResult>;
+let feesCache: DiskCache<FeeEstimate>;
 
 try {
   spApi = new SpApiService({
@@ -64,6 +66,10 @@ try {
   fbaEligibilityCache = new DiskCache<FbaEligibilityResult>({
     resource: "fba_eligibility",
     defaultTtlSeconds: ttls.fbaEligibility,
+  });
+  feesCache = new DiskCache<FeeEstimate>({
+    resource: "fees",
+    defaultTtlSeconds: ttls.fees,
   });
 } catch (error: any) {
   console.error(`Startup failed: ${error.message}`);
@@ -267,6 +273,57 @@ server.tool(
           {
             type: "text" as const,
             text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register estimate_fees_batch tool
+server.tool(
+  "estimate_fees_batch",
+  "Get FBA fees for up to 20 ASINs in a single SP-API call (~20× faster than looping estimate_fees). Per-item errors don't fail the batch — each entry has ok:true/false.",
+  {
+    items: z
+      .array(
+        z.object({
+          asin: z.string(),
+          selling_price: z.number().positive(),
+          marketplace_id: z.string().optional(),
+          identifier: z
+            .string()
+            .optional()
+            .describe(
+              "Caller-supplied identifier echoed back in the response (default: derived from asin+price)"
+            ),
+        })
+      )
+      .min(0)
+      .max(20)
+      .describe("Up to 20 items to fee-estimate"),
+    refresh_cache: z
+      .boolean()
+      .optional()
+      .describe("Force fresh SP-API calls, bypassing the disk cache"),
+  },
+  async ({ items, refresh_cache }) => {
+    try {
+      const result = await estimateFeesBatch(
+        { items, refresh_cache },
+        spApi,
+        feesCache
+      );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ results: result }, null, 2),
           },
         ],
       };

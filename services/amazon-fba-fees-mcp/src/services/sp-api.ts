@@ -165,4 +165,51 @@ export class SpApiService {
       })
     );
   }
+
+  /**
+   * Batch fees estimate (up to 20 items). Each request body item carries its
+   * own MarketplaceId, so heterogeneous batches are allowed.
+   */
+  async getMyFeesEstimates(
+    items: Array<{
+      asin: string;
+      sellingPrice: number;
+      marketplaceId: string;
+      identifier: string;
+      currency?: string;
+    }>
+  ): Promise<unknown> {
+    if (items.length === 0) return [];
+    if (items.length > 20) {
+      throw new Error(
+        `getMyFeesEstimates: max 20 items per call, got ${items.length}`
+      );
+    }
+    const body = items.map((it) => ({
+      FeesEstimateRequest: {
+        MarketplaceId: it.marketplaceId,
+        IsAmazonFulfilled: true,
+        PriceToEstimateFees: {
+          ListingPrice: {
+            CurrencyCode: it.currency ?? "GBP",
+            Amount: it.sellingPrice,
+          },
+          Shipping: {
+            CurrencyCode: it.currency ?? "GBP",
+            Amount: 0,
+          },
+        },
+        Identifier: it.identifier,
+      },
+      IdType: "ASIN",
+      IdValue: it.asin,
+    }));
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getMyFeesEstimates",
+        endpoint: "productFees",
+        body,
+      })
+    );
+  }
 }
