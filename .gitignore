@@ -58,6 +58,9 @@ fba_engine/_legacy_keepa/data/
 *.log
 *.pid
 
+# MCP persistent cache (SP-API responses, ASIN→{restrictions,fees,catalog,...})
+.cache/
+
 # Credentials — must NEVER be committed
 # If you find any of these patterns already tracked in git history, you must rotate
 # the credential AND scrub from history (git filter-repo or BFG)
