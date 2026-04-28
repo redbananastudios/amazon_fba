@@ -240,4 +240,37 @@ export class SpApiService {
       })
     );
   }
+
+  /**
+   * Batch item-offers (Buy Box + offer summary per ASIN). Up to 20 ASINs per
+   * call. Each request inside the batch carries its own MarketplaceId, so
+   * heterogeneous batches are allowed.
+   */
+  async getItemOffersBatch(params: {
+    asins: string[];
+    marketplaceId: string;
+    itemCondition?: string;
+    customerType?: string;
+  }): Promise<unknown> {
+    if (params.asins.length === 0) return { responses: [] };
+    if (params.asins.length > 20) {
+      throw new Error(
+        `getItemOffersBatch: max 20 ASINs per call, got ${params.asins.length}`
+      );
+    }
+    const requests = params.asins.map((asin) => ({
+      uri: `/products/pricing/v0/items/${asin}/offers`,
+      method: "GET",
+      MarketplaceId: params.marketplaceId,
+      ItemCondition: params.itemCondition ?? "New",
+      CustomerType: params.customerType ?? "Consumer",
+    }));
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getItemOffersBatch",
+        endpoint: "productPricing",
+        body: { requests },
+      })
+    );
+  }
 }

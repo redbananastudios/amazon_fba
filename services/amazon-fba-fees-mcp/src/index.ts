@@ -13,11 +13,13 @@ import { checkListingRestrictions } from "./tools/check-listing-restrictions.js"
 import { checkFbaEligibility } from "./tools/check-fba-eligibility.js";
 import { estimateFeesBatch } from "./tools/estimate-fees-batch.js";
 import { getCatalogItem } from "./tools/get-catalog-item.js";
+import { getLivePricing } from "./tools/get-live-pricing.js";
 import type {
   CatalogItemResult,
   FeeEstimate,
   FbaEligibilityResult,
   ListingRestrictionsResult,
+  LivePricingResult,
 } from "./types.js";
 
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
@@ -43,6 +45,7 @@ let restrictionsCache: DiskCache<ListingRestrictionsResult>;
 let fbaEligibilityCache: DiskCache<FbaEligibilityResult>;
 let feesCache: DiskCache<FeeEstimate>;
 let catalogCache: DiskCache<CatalogItemResult>;
+let pricingCache: DiskCache<LivePricingResult>;
 
 try {
   spApi = new SpApiService({
@@ -77,6 +80,10 @@ try {
   catalogCache = new DiskCache<CatalogItemResult>({
     resource: "catalog",
     defaultTtlSeconds: ttls.catalog,
+  });
+  pricingCache = new DiskCache<LivePricingResult>({
+    resource: "pricing",
+    defaultTtlSeconds: ttls.pricing,
   });
 } catch (error: any) {
   console.error(`Startup failed: ${error.message}`);
@@ -370,6 +377,49 @@ server.tool(
           {
             type: "text" as const,
             text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register get_live_pricing tool
+server.tool(
+  "get_live_pricing",
+  "Fetch real-time Buy Box price + offer summary for up to 20 ASINs (SP-API getItemOffersBatch). Returns landed price, FBA/FBM seller class, total new offers, FBA offer count. For decision-time validation only — Keepa stays the source of truth for historical/aggregate data.",
+  {
+    asins: z.array(z.string()).min(0).max(20).describe("Up to 20 ASINs"),
+    marketplace_id: z
+      .string()
+      .optional()
+      .describe("Marketplace ID (default: A1F83G8C2ARO7P for UK)"),
+    item_condition: z
+      .string()
+      .optional()
+      .describe("New | Used (default: New)"),
+    refresh_cache: z
+      .boolean()
+      .optional()
+      .describe("Force a fresh SP-API call, bypassing the disk cache"),
+  },
+  async ({ asins, marketplace_id, item_condition, refresh_cache }) => {
+    try {
+      const results = await getLivePricing(
+        { asins, marketplace_id, item_condition, refresh_cache },
+        spApi,
+        pricingCache
+      );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ results }, null, 2),
           },
         ],
       };
