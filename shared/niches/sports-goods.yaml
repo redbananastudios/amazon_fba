@@ -1,0 +1,106 @@
+niche_id: sports-goods
+sheet_tab: Sports Goods
+
+# SCOPE: Tennis and Badminton ONLY. All other sports are out of scope.
+
+keepa_filters:
+  bsr_min: 5000
+  bsr_max: 60000
+  velocity_min: 50              # lower than the 100 default — see notes
+  root_category: Sports & Outdoors
+  include_subcategory:
+    - Tennis
+    - Badminton
+  title_keyword: tennis###badminton   # ### = OR logic in Keepa
+
+exclusion_keywords:
+  out_of_scope_note: |
+    Any product without tennis or badminton in the title that
+    somehow passes the keyword filter — reject immediately.
+  heavy:
+    [goal post, net post, court equipment, large, heavy]
+
+# Weight check — critical for this niche
+weight_notes:
+  rackets: check weight, most are fine (200-300g)
+  racket_bags: check dimensions, some trigger oversized FBA fees
+  badminton_nets: full-size nets can be heavy, verify FBA fee
+  shuttlecocks: always fine
+  strings: always fine
+  grips_overgrips: always fine
+  tennis_balls: fine unless buying very large multipacks
+
+# Seasonal flag — see scoring step
+seasonal_risk: high
+seasonal_notes: |
+  Peaks strongly in summer (April-August UK).
+  A product with BSR 10,000 in July may be 100,000+ in January.
+  Scoring step must check 12-month BSR trend, not just 90-day.
+
+focus_products:
+  good:
+    - Tennis rackets (all levels)
+    - Badminton rackets
+    - Tennis balls (3/4/6 packs)
+    - Shuttlecocks (tube packs)
+    - Racket grip tape, overgrips
+    - Replacement strings
+    - Racket bags and holdalls
+    - Tennis training aids
+    - Ball machines (check weight carefully)
+    - Court equipment accessories (towels, wristbands, dampeners)
+  avoid:
+    - All non-tennis/badminton sports products
+    - Heavy court equipment (net posts, fixed equipment)
+    - Very large racket bags that trigger oversized FBA fees
+
+focus_brands:
+  - Wilson
+  - Babolat
+  - Head
+  - Yonex
+  - Dunlop
+  - Prince
+  - Tecnifibre
+  - Talbot-Torro
+  - Victor Badminton
+  - Li-Ning
+  - Ashaway
+  - Tourna
+  - Gamma Sports
+  - Slazenger
+  - Carlton
+  - RSL
+
+suppliers:
+  - name: Newitts
+    url: newitts.com
+    type: wholesale
+  - name: Continental Sports
+    url: continentalsports.co.uk
+    type: trade
+  - name: Slazenger / Dunlop
+    type: search
+    notes: search for UK trade contact
+  - name: Talbot-Torro UK
+    url: talbottorro.com
+    type: trade
+  - name: Yonex UK
+    url: yonex.co.uk
+    type: trade
+    notes: trade enquiries
+  - name: Wilson UK
+    url: wilson.com/en-gb
+    type: trade
+  - name: Babolat UK
+    url: babolat.com
+    type: trade
+  - name: Head UK
+    url: head.com/en-GB
+    type: trade
+
+notes: |
+  Velocity floor is 50 (not 100) because off-season products genuinely
+  sell slower but are still worth stocking. The scoring step will flag
+  seasonal risk — the lower velocity floor just ensures we see them
+  in the first place.

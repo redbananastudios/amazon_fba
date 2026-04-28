@@ -1,0 +1,89 @@
+niche_id: educational-toys
+sheet_tab: Educational Toys
+
+keepa_filters:
+  bsr_min: 10000
+  bsr_max: 80000
+  velocity_min: 100
+  root_category: Toys & Games
+  include_subcategory:
+    - Learning & Education
+    - Learning Resources Educational Toys
+    - Learning Resources STEAM Toys
+    - Learning Resources--Numeracy
+    - Learning Systems
+    - Learning System Cartridges
+    - Learning Computers
+    - Learning Areas
+    - Educational Games
+  batteries: false
+  batteries_included: false
+
+exclusion_keywords:
+  heavy:
+    []
+  hazmat:
+    []
+
+focus_products:
+  good:
+    - STEM kits
+    - Coding toys
+    - Science experiment sets
+    - Maths games
+    - Reading aids
+    - Flash cards
+    - Phonics games
+    - Geography games
+    - Language learning tools
+    - Puzzles with educational angle
+    - Art and craft with structured learning
+    - Microscopes and science tools
+    - Electronics starter kits for kids
+    - Robotics kits
+  avoid:
+    - General toys with no learning angle (Kids Toys niche handles)
+    - Heavy items
+    - Battery-heavy items
+
+focus_brands:
+  - Orchard Toys
+  - Learning Resources
+  - Thames and Kosmos
+  - Osmo
+  - Clementoni
+  - Quercetti
+  - Primary Science
+  - Usborne
+  - Kano Computing
+  - Botley
+  - LittleBits
+  - GeoSafari
+  - Edu-Toys
+  - Galt Toys
+
+suppliers:
+  - name: Galt Toys
+    url: galttoys.com
+    type: trade
+  - name: Hope Education
+    url: hope-education.co.uk
+    type: trade
+  - name: TTS Group
+    url: tts-group.co.uk
+    type: trade
+  - name: NCI Toys
+    url: ncitoys.com
+    type: trade
+  - name: GLS Educational Supplies
+    url: glsed.co.uk
+    type: trade
+  - name: Philip Harris
+    url: philipharris.co.uk
+    type: trade
+    notes: science equipment
+
+notes: |
+  Runs parallel to Kids Toys niche — separate ASIN list, no overlap.
+  Include subcategory filter handles the separation from general toys.
+  BSR ceiling 80k same as Kids Toys — same broad category structure.

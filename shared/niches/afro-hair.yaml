@@ -1,0 +1,88 @@
+niche_id: afro-hair
+sheet_tab: Afro Hair
+
+keepa_filters:
+  bsr_min: 10000
+  bsr_max: 60000
+  velocity_min: 100
+  root_category: Beauty
+  include_subcategory:
+    - Hair Care
+  exclude_subcategory:
+    - Hair Styling Tools
+    - Electrical Hair Styling
+  exclude_item_form:
+    - Aerosol
+    - Spray
+  heat_sensitive: false
+
+exclusion_keywords:
+  hazmat_title:
+    [spray, aerosol, relaxer, perm, bleach, acetone, lye, flammable,
+     pressurised, pressurise]
+  apparel:
+    [shoe, boot, sock, clothing, shirt, dress, legging, trouser]
+
+focus_products:
+  good:
+    - Curl creams
+    - Leave-in conditioners
+    - Edge control
+    - Hair butters
+    - Hair oils (small bottles only)
+    - Shampoos
+    - Conditioners
+    - Hair masks
+    - Pump-spray detanglers (pump not aerosol)
+    - Styling gels
+    - Hair mousse (non-aerosol only)
+    - Scalp treatments
+    - Deep conditioners
+  avoid:
+    - Relaxer kits
+    - Perm kits
+    - Bleach kits
+    - Hair colour chemicals
+    - Large volume liquids (500ml+) in fragile glass packaging
+    - Electrical styling tools
+
+focus_brands:
+  - Shea Moisture
+  - Cantu
+  - Aunt Jackies
+  - Eco Styler
+  - ORS
+  - Dark and Lovely
+  - African Pride
+  - Mielle Organics
+  - As I Am
+  - Camille Rose
+  - Taliah Waajid
+  - SoftSheen-Carson
+  - Lusters
+  - Dr Miracle
+  - African Royale
+
+suppliers:
+  - name: AW Wholesale
+    url: awwholesale.co.uk
+    type: trade
+  - name: Pak Cosmetics
+    url: pakcosmetics.co.uk
+    type: trade
+  - name: Saks Hair & Beauty
+    url: sakshairandbeauty.co.uk
+    type: trade
+    notes: trade section
+  - name: TRS Wholesale
+    url: trswholesale.co.uk
+    type: trade
+  - name: Afrotherapy
+    type: search
+    notes: search Google for current distributor contact
+
+notes: |
+  Hazmat risk is high in this category — the Keepa HazMat=No filter
+  handles the obvious cases. SellerAmp confirmation is the final check.
+  Any product with aerosol, spray, or chemical processing ingredients
+  should be flagged regardless of filter outcome.

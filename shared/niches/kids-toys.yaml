@@ -1,0 +1,90 @@
+niche_id: kids-toys
+sheet_tab: Kids Toys
+
+# Keepa Product Finder filters (used by 01_discover/keepa_niche)
+keepa_filters:
+  bsr_min: 10000
+  bsr_max: 80000
+  velocity_min: 100
+  root_category: Toys & Games
+  exclude_subcategory:
+    - Learning & Education
+    - STEM Toys                  # Educational Toys niche handles these
+  batteries: false
+  batteries_included: false
+
+# Hard exclusion keywords applied during pre-filter
+exclusion_keywords:
+  heavy:
+    [ride-on, trampoline, climbing frame, swing set, playhouse,
+     tool bench, workbench, large, xl, giant]
+  hazmat:
+    [battery acid, chemical, flammable]
+  apparel:
+    [costume, dress up, fancy dress, clothing, shoe, boot]
+
+# Products we want to find
+focus_products:
+  good:
+    - Action figures
+    - Playsets
+    - Building blocks
+    - Board games
+    - Card games
+    - Outdoor games
+    - Arts and craft sets
+    - Puzzles
+    - Remote control toys
+    - Musical toys
+    - Bath toys
+    - Role play sets
+    - Construction toys
+    - Vehicles
+    - Dolls and accessories
+  avoid:
+    - Heavy ride-on toys
+    - Large play structures
+    - Anything requiring assembly tools or professional installation
+
+# Brands to prioritise (focus_brands input for ip_risk_enrich and 02_resolve/asin_to_supplier)
+focus_brands:
+  - Orchard Toys
+  - Schleich
+  - Ravensburger
+  - Melissa and Doug
+  - Playmobil
+  - VTech
+  - LeapFrog
+  - Thames and Kosmos
+  - Halilit
+  - Djeco
+  - Hape
+  - Janod
+  - Tomy
+  - Zuru
+
+# Supplier directories for this niche (used by Skill 99 / asin_to_supplier route 2)
+suppliers:
+  - name: Toymaster
+    url: toymaster.co.uk
+    type: trade
+  - name: Galt Toys
+    url: galttoys.com
+    type: trade
+    notes: trade enquiries
+  - name: NCI Toys
+    url: ncitoys.com
+    type: trade
+  - name: Toy Fair UK
+    url: toyfair.co.uk
+    type: directory
+    notes: exhibitor list
+  - name: Mojo Fun distributors
+    type: search
+    notes: search Google for current distributor
+
+notes: |
+  BSR ceiling is wider (80k) because Toys is a broad category.
+  Battery exclusion removes most hazmat risk.
+  Seasonal check is important — check 12-month BSR in scoring for
+  anything that looks suspiciously strong in a short window.

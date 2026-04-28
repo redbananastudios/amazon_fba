@@ -1,0 +1,26 @@
+# Cross-pipeline business constants for the FBA engine.
+#
+# These values rarely change. They describe the operating context of the
+# seller, not tunable strategy parameters. For decision thresholds (ROI,
+# profit floors, sales thresholds), see decision_thresholds.yaml.
+#
+# This is the canonical source. Do not duplicate these values in code,
+# documentation, or other configs.
+
+# Amazon marketplace
+marketplace_id: A1F83G8C2ARO7P    # amazon.co.uk
+currency: GBP
+
+# VAT — UK seller, NOT VAT-registered
+# Implications:
+#   - buy_cost = supplier price INCLUDING VAT (cannot reclaim)
+#   - sell_price on Amazon = full gross revenue (charges no VAT)
+#   - all profit calculations use inc-VAT supplier costs
+vat_rate: 0.20
+seller_vat_registered: false
+vat_mismatch_tolerance: 0.02      # GBP rounding tolerance when validating supplier VAT fields
+
+# Working price range for product candidates
+price_range:
+  min: 20                         # GBP — below this, FBA fees disproportionate
+  max: 70                         # GBP — above this, capital exposure risk

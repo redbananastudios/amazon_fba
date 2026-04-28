@@ -1,0 +1,115 @@
+niche_id: pet-care
+sheet_tab: Pet Care
+
+keepa_filters:
+  bsr_min: 10000
+  bsr_max: 60000
+  velocity_min: 100
+  root_category: Pet Supplies
+  root_category_id: 340840031
+  include_subcategory:
+    - Dog Supplies
+    - Cat Supplies
+    - Small Animal Supplies
+    - Bird Supplies
+    - Fish & Aquatic Pets
+  exclude_subcategory:
+    - Live Animals
+    - Veterinary Supplies
+  heat_sensitive: false
+
+exclusion_keywords:
+  hazmat:
+    [flea spray, tick spray, aerosol, pesticide, insecticide,
+     flammable, pressurised]
+  heavy:
+    [dog cage, crate, kennel, cat tree large, aquarium tank,
+     large bed, extra large]
+
+focus_products:
+  good:
+    - Dog leads, harnesses, collars
+    - Dog toys, cat toys
+    - Pet grooming brushes and combs
+    - Pet shampoo (non-aerosol)
+    - Pet supplements and vitamins
+    - Cat litter accessories
+    - Pet feeding bowls and mats
+    - Pet carriers (lightweight)
+    - Aquarium accessories
+    - Bird cage accessories
+    - Small animal bedding
+    - Pet dental care products
+    - Training aids
+    - Pet beds (standard size)
+    - Puzzle feeders and enrichment toys
+    - Flea and tick treatments (non-aerosol — spot-on or tablets)
+  avoid:
+    - Live animals
+    - Prescription medications
+    - Aerosol flea sprays
+    - Very large heavy items (large crates, large aquarium tanks)
+    - Raw pet food (requires special storage)
+
+focus_brands:
+  - Kong
+  - Nylabone
+  - Rogz
+  - Rosewood
+  - Ancol
+  - Mikki
+  - Trixie
+  - Ferplast
+  - Catit
+  - PetSafe
+  - Coachi
+  - Beaphar
+  - Bob Martin
+  - Johnsons Veterinary
+  - Chuckit
+  - Ruffwear
+  - Company of Animals
+  - Good Boy (Armitage)
+  - Armitage Pet Care
+
+suppliers:
+  - name: PetQuip
+    url: petquip.com
+    type: directory
+    notes: UK pet trade association directory
+  - name: Bestpets
+    url: bestpets.co.uk
+    type: wholesale
+  - name: NWF Pet
+    url: nwfpet.co.uk
+    type: trade
+  - name: Vital Pet Group
+    url: vitalpetgroup.co.uk
+    type: trade
+  - name: Pets at Home trade
+    type: search
+    notes: search for trade/wholesale contact
+  - name: Armitage Pet Care
+    url: armitage-pet.co.uk
+    type: trade
+  - name: Rosewood Pet
+    url: rosewoodpet.com
+    type: trade
+    notes: trade enquiries
+  - name: Company of Animals
+    url: companyofanimals.eu
+    type: trade
+
+notes: |
+  Pet Care is a strong niche for FBA — high repeat purchase, brand-loyal
+  buyers, and many small UK brands with weak Amazon presence making
+  BRAND APPROACH opportunities common.
+
+  Watch for:
+  - Flea/tick treatments — check if aerosol or spot-on/tablet
+    (spot-on and tablets are fine, aerosols are excluded)
+  - Pet food — excluded due to storage and weight requirements
+  - Prescription items — will be gated, flag accordingly
+
+  BSR note: 10k-60k is solid for Pet Supplies. The category average is
+  around £26 which sits in our price range. Category ID confirmed live: 340840031.

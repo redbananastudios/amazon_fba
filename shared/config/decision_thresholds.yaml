@@ -1,0 +1,45 @@
+# Decision thresholds for the FBA engine.
+#
+# THE single tunable knob is `target_roi`. Change that one number and the
+# whole system re-tunes. All other values are either absolute floors
+# (independent of ROI) or pipeline mechanics (history windows, percentiles).
+#
+# This replaces the previous MIN_MARGIN gate. ROI (profit / buy_cost) is the
+# truer measure of "is this worth my capital" than margin (profit / sell_price).
+# See docs/SPEC.md for the rationale.
+
+# === The tunable ===
+target_roi: 0.30                  # 30% — return on capital deployed
+
+# === Absolute floors (still required alongside ROI) ===
+# A 30% ROI on a £3 cost item is £0.90 profit — not worth handling regardless
+# of ROI. These floors handle the low-ticket case.
+min_profit_absolute: 2.50         # GBP — minimum profit at conservative price
+min_sales_shortlist: 20           # units/month — auto-shortlist threshold
+min_sales_review: 10              # units/month — minimum to appear in REVIEW at all
+
+# === Capital exposure ===
+capital_exposure_limit: 200.00    # GBP — MOQ × buy_cost above this -> HIGH_MOQ flag
+
+# === Price history (Keepa lookback for conservative price calculation) ===
+history_minimum_days: 30          # minimum qualifying FBA history days required
+history_window_days: 90           # lookback window in days
+lower_band_percentile: 15         # 15th percentile used for conservative price
+
+# === Size tier (FBA fee bucket) ===
+size_tier_boundary_pct: 0.10      # flag if within 10% of next size tier boundary
+fba_fee_conservative_fallback: 4.50   # GBP — used when size_tier is UNKNOWN
+
+# === Storage fee risk ===
+storage_risk_threshold_sales: 20  # sales/month below which STORAGE_FEE_RISK is flagged
+
+# === FBM (Fulfilled by Merchant) defaults ===
+# SET THESE TO YOUR REAL COSTS BEFORE TRUSTING FBM SHORTLIST RESULTS
+fbm_shipping_estimate: 3.50       # GBP — Royal Mail 2nd class up to 1kg default
+fbm_packaging_estimate: 0.50      # GBP — poly bag / small box default
+
+# === Case detection (supplier strategy) ===
+min_plausible_unit_price: 0.50    # GBP — implied unit price below this -> price is per case
+
+# === Referral fee fallback ===
+default_referral_fee_pct: 0.15    # 15% — when category-specific rate is unknown
