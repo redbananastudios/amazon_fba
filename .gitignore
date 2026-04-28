@@ -1,29 +1,79 @@
-# Claude Code local settings
-.claude/
-**/.claude/
-
-# Playwright MCP logs
-.playwright-mcp/
-**/.playwright-mcp/
-
 # Python
 __pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
+*.py[cod]
+*$py.class
 *.egg-info/
-dist/
-build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Node
+# Node (legacy keepa)
 node_modules/
+package-lock.json
+npm-debug.log*
 
-# Environment
-.env
-.env.*
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
 
 # OS
 .DS_Store
 Thumbs.db
 
-.mcp.json
+# Build artefacts
+dist/
+build/
+services/amazon-fba-fees-mcp/dist/
+services/amazon-fba-fees-mcp/build/
+
+# Data — gitignored except for the bits we want to track
+fba_engine/data/pricelists/*/raw/
+fba_engine/data/pricelists/*/results/
+fba_engine/data/niches/*/working/
+fba_engine/data/niches/*/*.xlsx
+fba_engine/data/niches/*/*.csv
+
+# Allow specific data files we DO want to track
+!fba_engine/data/pricelists/*/raw/.gitkeep
+!fba_engine/data/pricelists/*/results/.gitkeep
+!fba_engine/data/niches/*/.gitkeep
+
+# Exclusions list (applies across niches — DO track this)
+!fba_engine/data/exclusions.csv
+
+# Legacy keepa working data
+fba_engine/_legacy_keepa/data/
+
+# Runtime
+*.log
+*.pid
+
+# Credentials — must NEVER be committed
+# If you find any of these patterns already tracked in git history, you must rotate
+# the credential AND scrub from history (git filter-repo or BFG)
+.env
+.env.*
+!.env.example
+credentials/
+secrets/
+*credential*.json
+*secret*.json
+*service*account*.json
+*service_account*
+google-service-account*.json
+service_account.json
+*-key.json
+*.pem
+*.key
+id_rsa*
+.aws/

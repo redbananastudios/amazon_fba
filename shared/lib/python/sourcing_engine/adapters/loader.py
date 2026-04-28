@@ -7,7 +7,7 @@ that handle the supplier-specific bits of a pipeline run:
   - `normalise.py`: map supplier-specific column names to the canonical schema
 
 Each supplier's adapter lives in:
-  supplier_pricelist_finder/pricelists/<supplier>/adapters/
+  fba_engine/adapters/<supplier>/
 
 The adapter must expose:
   - `ingest_directory(path: str) -> pd.DataFrame`
@@ -48,17 +48,16 @@ def find_adapter_dir(supplier: str, repo_root: Path | None = None) -> Path:
 
     Resolution order:
       1. If repo_root is provided, look there
-      2. Walk up from this file looking for `supplier_pricelist_finder/pricelists/<supplier>/adapters`
+      2. Walk up from this file looking for `fba_engine/adapters/<supplier>`
     """
     candidates: list[Path] = []
     if repo_root is not None:
         candidates.append(
-            Path(repo_root)
-            / "supplier_pricelist_finder" / "pricelists" / supplier / "adapters"
+            Path(repo_root) / "fba_engine" / "adapters" / supplier
         )
     here = Path(__file__).resolve()
     for ancestor in [here, *here.parents]:
-        c = ancestor / "supplier_pricelist_finder" / "pricelists" / supplier / "adapters"
+        c = ancestor / "fba_engine" / "adapters" / supplier
         if c not in candidates:
             candidates.append(c)
 

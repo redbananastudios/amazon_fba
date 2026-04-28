@@ -6,7 +6,7 @@ Usage:
 
 This is a thin wrapper that adds shared/lib/python to PYTHONPATH so the
 canonical sourcing_engine package is importable, then forwards everything
-else to sourcing_engine.main.
+to sourcing_engine.main.
 
 You can also invoke the engine directly with:
     PYTHONPATH=shared/lib/python python -m sourcing_engine.main --supplier abgee

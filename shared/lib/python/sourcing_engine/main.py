@@ -9,9 +9,9 @@ and --output if you need to point elsewhere.
 Full form:
     python -m sourcing_engine.main \\
         --supplier abgee \\
-        --input  supplier_pricelist_finder/pricelists/abgee/raw/ \\
-        --output supplier_pricelist_finder/pricelists/abgee/results/ \\
-        --market-data supplier_pricelist_finder/pricelists/abgee/raw/keepa_combined_2026-03-25.csv
+        --input  fba_engine/data/pricelists/abgee/raw/ \\
+        --output fba_engine/data/pricelists/abgee/results/ \\
+        --market-data fba_engine/data/pricelists/abgee/raw/keepa_combined_2026-03-25.csv
 
 The PYTHONPATH must include shared/lib/python/. Use the launcher at the repo
 root (`run.py`) to handle this automatically:
@@ -49,19 +49,19 @@ logger = logging.getLogger("sourcing_engine")
 
 
 def _find_repo_root() -> Path:
-    """Walk up from this file looking for the repo root (has supplier_pricelist_finder/)."""
+    """Walk up from this file looking for the repo root (has fba_engine/)."""
     here = Path(__file__).resolve()
     for ancestor in [here, *here.parents]:
-        if (ancestor / "supplier_pricelist_finder").is_dir():
+        if (ancestor / "fba_engine").is_dir():
             return ancestor
     raise RuntimeError(
-        "Could not locate repo root (no supplier_pricelist_finder/ ancestor)."
+        "Could not locate repo root (no fba_engine/ ancestor)."
     )
 
 
 def _default_paths(supplier: str, repo_root: Path) -> tuple[Path, Path]:
     """Default input and output paths for a supplier."""
-    base = repo_root / "supplier_pricelist_finder" / "pricelists" / supplier
+    base = repo_root / "fba_engine" / "data" / "pricelists" / supplier
     return base / "raw", base / "results"
 
 
@@ -75,7 +75,7 @@ def run_pipeline(
 
     Args:
         supplier: supplier name matching the adapter folder under
-            supplier_pricelist_finder/pricelists/<supplier>/adapters/
+            fba_engine/adapters/<supplier>/
         input_path: directory or single file to ingest
         output_dir: where to write the timestamped run folder
         market_data_path: optional Keepa CSV
@@ -328,17 +328,17 @@ def main():
     parser = argparse.ArgumentParser(description="Amazon Supplier Shortlist Engine")
     parser.add_argument(
         "--supplier", required=True,
-        help="Supplier name (matches the folder name under supplier_pricelist_finder/pricelists/)",
+        help="Supplier name (matches the folder name under fba_engine/adapters/)",
     )
     parser.add_argument(
         "--input", default=None,
         help="Supplier file or directory. Defaults to "
-             "supplier_pricelist_finder/pricelists/<supplier>/raw/",
+             "fba_engine/data/pricelists/<supplier>/raw/",
     )
     parser.add_argument(
         "--output", default=None,
         help="Output directory. Defaults to "
-             "supplier_pricelist_finder/pricelists/<supplier>/results/",
+             "fba_engine/data/pricelists/<supplier>/results/",
     )
     parser.add_argument("--market-data", default=None, help="Market data CSV path")
     args = parser.parse_args()
