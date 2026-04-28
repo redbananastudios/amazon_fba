@@ -126,4 +126,25 @@ export class SpApiService {
       currency: totalFees?.CurrencyCode ?? "GBP",
     };
   }
+
+  async getListingsRestrictions(params: {
+    asin: string;
+    sellerId: string;
+    marketplaceId: string;
+    conditionType?: string;
+  }): Promise<unknown> {
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getListingsRestrictions",
+        endpoint: "listingsRestrictions",
+        query: {
+          asin: params.asin,
+          sellerId: params.sellerId,
+          marketplaceIds: [params.marketplaceId],
+          conditionType: params.conditionType ?? "new_new",
+        },
+        options: { version: "2021-08-01" },
+      })
+    );
+  }
 }

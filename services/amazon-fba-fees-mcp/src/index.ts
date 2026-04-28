@@ -5,10 +5,12 @@ import { z } from "zod";
 import { SpApiService } from "./services/sp-api.js";
 import { SheetsService } from "./services/sheets.js";
 import { Cache } from "./services/cache.js";
+import { DiskCache, loadTtls } from "./services/disk-cache.js";
 import { estimateFees } from "./tools/estimate-fees.js";
 import { calculateProfitability } from "./tools/profitability.js";
 import { saveToSheet } from "./tools/save-to-sheet.js";
-import type { FeeEstimate } from "./types.js";
+import { checkListingRestrictions } from "./tools/check-listing-restrictions.js";
+import type { FeeEstimate, ListingRestrictionsResult } from "./types.js";
 
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 
@@ -28,6 +30,8 @@ process.on("unhandledRejection", (reason) => {
 let spApi: SpApiService;
 let sheets: SheetsService | null;
 let cache: Cache<FeeEstimate>;
+let sellerId: string | undefined;
+let restrictionsCache: DiskCache<ListingRestrictionsResult>;
 
 try {
   spApi = new SpApiService({
@@ -44,6 +48,13 @@ try {
       : null;
 
   cache = new Cache<FeeEstimate>(TWENTY_FOUR_HOURS);
+
+  sellerId = process.env.SP_API_SELLER_ID;
+  const ttls = loadTtls();
+  restrictionsCache = new DiskCache<ListingRestrictionsResult>({
+    resource: "restrictions",
+    defaultTtlSeconds: ttls.restrictions,
+  });
 } catch (error: any) {
   console.error(`Startup failed: ${error.message}`);
   process.exit(1);
@@ -130,6 +141,74 @@ server.tool(
   async (args) => {
     try {
       const result = await calculateProfitability(args, spApi, cache);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register check_listing_restrictions tool
+server.tool(
+  "check_listing_restrictions",
+  "Check whether the configured seller can list an ASIN, and surface any brand/category gating reasons. Restriction status is INFORMATIONAL ONLY — does not auto-reject candidates.",
+  {
+    asin: z.string().describe("Amazon ASIN"),
+    marketplace_id: z
+      .string()
+      .optional()
+      .describe("Marketplace ID (default: A1F83G8C2ARO7P for UK)"),
+    condition_type: z
+      .string()
+      .optional()
+      .describe("Listing condition (default: new_new)"),
+    seller_id: z
+      .string()
+      .optional()
+      .describe(
+        "Seller ID to check restrictions against. Falls back to SP_API_SELLER_ID env var."
+      ),
+    refresh_cache: z
+      .boolean()
+      .optional()
+      .describe("Force a fresh SP-API call, bypassing the disk cache"),
+  },
+  async ({ asin, marketplace_id, condition_type, seller_id, refresh_cache }) => {
+    const effectiveSellerId = seller_id ?? sellerId;
+    if (!effectiveSellerId) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              "Error: seller_id is required. Pass it as an argument or set SP_API_SELLER_ID in the environment.",
+          },
+        ],
+        isError: true,
+      };
+    }
+    try {
+      const result = await checkListingRestrictions(
+        {
+          asin,
+          seller_id: effectiveSellerId,
+          marketplace_id,
+          condition_type,
+          refresh_cache,
+        },
+        spApi,
+        restrictionsCache
+      );
       return {
         content: [
           {
