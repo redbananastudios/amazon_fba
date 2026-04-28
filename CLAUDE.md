@@ -6,10 +6,24 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-04-28
-**Currently working on:** Reorganisation steps 1-3 complete (config centralisation, engine deduplication, repo restructuring). Next: step 4 (extract steps catalogue from legacy Keepa pipeline).
-**Next steps:** Step 4 — port Keepa phases to Python, integrate with shared engine. Then step 5 (strategies as YAML) and step 6 (Skill 99 / new strategies).
-**Blockers:** SP-API credentials still awaited; doesn't block reorganisation but blocks `services/amazon-fba-fees-mcp/` from being usable.
+**Last updated:** 2026-04-28 (end of session)
+**Currently working on:** MCP sourcing-tools expansion — adding 7 new tools to `services/amazon-fba-fees-mcp/` (ungating, FBA eligibility, batch fees, catalog, live pricing, composite preflight + persistent cache). Branch: `feat/mcp-sourcing-tools` ([PR draft URL](https://github.com/redbananastudios/amazon_fba/pull/new/feat/mcp-sourcing-tools)).
+**Status:** Reorganisation steps 1-3 ✅ merged into main. SP-API credentials acquired and verified live (`getMarketplaceParticipations` works). Scaffold for sourcing-tools committed (`15f6311`): SPEC.md, DiskCache, types, .gitignore. **Note:** UK marketplace shows `hasSuspendedListings: true` — check Account Health when convenient (informational only, not blocking).
+**Next steps:** Pick up `feat/mcp-sourcing-tools` branch in a fresh session. Read `services/amazon-fba-fees-mcp/SPEC.md` for full design, then implement Tier 1 (3 tools), Tier 2 (2 tools), Tier 3 (composite + CLI), pipeline integration, real-API integration tests, PR. ~5h focused implementation work remaining. **Decision-gate is NOT changed**: ungating data is informational only — surfaces in output, never auto-rejects.
+**Blockers:** None. All credentials in place, scaffold tested (25 vitest tests passing).
+
+### To resume next session
+1. `cd O:/fba/.claude/worktrees/upbeat-brattain-8a0646` (or recreate the worktree off `feat/mcp-sourcing-tools`)
+2. Read `services/amazon-fba-fees-mcp/SPEC.md` (the source of truth for this feature)
+3. Read this section + `git log feat/mcp-sourcing-tools` to see what's committed
+4. Continue with Tier 1: implement `check_listing_restrictions`, `check_fba_eligibility`, `estimate_fees_batch` in that order
+
+### Workflow notes (learned this session)
+- **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.
+- **TS imports:** This project uses ESM/nodenext — relative imports MUST end in `.js` even when source is `.ts` (e.g., `import {X} from "./foo.js"`). Otherwise `npm run build` fails (vitest is more lenient).
+- **MCP test path:** Always run `npm` commands inside the actual worktree's `services/amazon-fba-fees-mcp/`, not `O:/fba/services/amazon-fba-fees-mcp/`. They're separate copies.
+- **Credential sync:** After editing `F:\My Drive\workspace\credentials.env`, run `& 'F:\My Drive\workspace\sync-credentials.ps1'` (PowerShell — bash quoting breaks on the space in "My Drive"). Then verify with `grep '"SP_API_' "C:/Users/peter/.claude/settings.json"`.
+- **MCP `.mcp.json` path** at repo root references the MCP at `services/amazon-fba-fees-mcp/dist/index.js` (corrected from old root-level path during cleanup).
 
 ## Session Protocol
 - At the end of each session, update the "Current State" section above
