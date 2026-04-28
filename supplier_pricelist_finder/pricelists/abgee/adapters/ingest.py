@@ -1,0 +1,119 @@
+"""Abgee PDF price list extraction.
+
+All Abgee PDFs share a uniform table format:
+  Part Code | Description | Pack Size | Trade Price | Retail Price | Carton Size | Barcode | [Comments]
+
+Trade Price is ex-VAT. Retail Price is RRP inc-VAT.
+"""
+import logging
+import os
+import re
+
+import pandas as pd
+import pdfplumber
+
+logger = logging.getLogger(__name__)
+
+_ABGEE_COLUMNS = [
+    "part_code",
+    "description",
+    "pack_size",
+    "trade_price",
+    "retail_price",
+    "carton_size",
+    "barcode",
+    "comments",
+]
+
+
+def ingest_file(file_path: str) -> pd.DataFrame:
+    """Extract product rows from a single Abgee PDF price list.
+    Returns a DataFrame with normalised column names and source_file set.
+    Returns an empty DataFrame on failure (never crashes).
+    """
+    if not os.path.isfile(file_path):
+        logger.error("File not found: %s", file_path)
+        return pd.DataFrame()
+
+    try:
+        rows = _extract_rows_from_pdf(file_path)
+    except Exception:
+        logger.exception("Failed to extract tables from %s", file_path)
+        return pd.DataFrame()
+
+    if not rows:
+        logger.warning("No product rows extracted from %s", file_path)
+        return pd.DataFrame()
+
+    ncols = len(rows[0])
+    col_names = _ABGEE_COLUMNS[:ncols]
+    df = pd.DataFrame(rows, columns=col_names)
+    df["source_file"] = os.path.basename(file_path)
+    supplier = os.path.basename(file_path).split("_Spring")[0].replace("_", " ")
+    df["supplier"] = supplier
+    return df
+
+
+def ingest_directory(directory: str, limit: int | None = None) -> pd.DataFrame:
+    """Ingest all PDF files in a directory. Returns combined DataFrame."""
+    if not os.path.isdir(directory):
+        logger.error("Directory not found: %s", directory)
+        return pd.DataFrame()
+
+    pdf_files = sorted(f for f in os.listdir(directory) if f.lower().endswith(".pdf"))
+    if limit:
+        pdf_files = pdf_files[:limit]
+
+    frames = []
+    for fname in pdf_files:
+        fpath = os.path.join(directory, fname)
+        logger.info("Ingesting %s", fname)
+        df = ingest_file(fpath)
+        if not df.empty:
+            frames.append(df)
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _extract_rows_from_pdf(file_path: str) -> list[list[str]]:
+    """Extract all product rows from all pages of an Abgee PDF."""
+    product_rows = []
+    with pdfplumber.open(file_path) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables()
+            for table in tables:
+                for row in table:
+                    if _is_product_row(row):
+                        cleaned = _clean_row(row)
+                        product_rows.append(cleaned)
+    return product_rows
+
+
+def _is_product_row(row: list) -> bool:
+    """Return True if this row contains product data (not a header or category)."""
+    if not row or len(row) < 7:
+        return False
+    trade_price = row[3]
+    if not trade_price or not str(trade_price).strip():
+        return False
+    if not any(c.isdigit() for c in str(trade_price)):
+        return False
+    if str(row[0]).strip().lower() == "part code":
+        return False
+    return True
+
+
+def _clean_row(row: list) -> list[str]:
+    """Clean a single row: strip whitespace, normalise price strings."""
+    cleaned = []
+    for i, cell in enumerate(row):
+        if cell is None:
+            cleaned.append(None)
+        else:
+            val = str(cell).strip()
+            if i in (3, 4) and val:
+                val = re.sub(r"[^\d.]", "", val) if val else None
+            cleaned.append(val if val else None)
+    return cleaned
