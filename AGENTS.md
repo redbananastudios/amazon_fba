@@ -100,6 +100,9 @@ The full test suite must pass before any code change is deployed.
 # Shared library + canonical engine (68 tests total)
 cd shared/lib/python && pytest tests/ sourcing_engine/tests/ -v
 
+# Pipeline steps (run from repo root for fba_engine package import)
+pytest fba_engine/steps/tests/
+
 # Per-supplier adapter tests (run from supplier data folder so relative paths resolve)
 for s in abgee connect-beauty shure zappies; do
   cd fba_engine/data/pricelists/$s
@@ -114,11 +117,12 @@ Baseline counts as of step 3:
 |---|---|---|---|
 | shared lib (config_loader, roi_gate) | 26 | 0 | clean |
 | canonical engine | 42 | 0 | clean (was 23 pre-MCP; +19 preflight tests) |
+| pipeline steps (`fba_engine/steps/`) | 53 | 0 | step 4a — IP risk port from legacy Keepa skill 4 |
 | abgee adapter | 12 | 0 | clean |
 | connect-beauty adapter | 15 | 0 | clean |
 | shure adapter | 9 | 3 | pre-existing — `test_ingest.py` expects abgee PDF format |
 | zappies adapter | 9 | 3 | pre-existing — same as shure |
-| MCP server (vitest) | 100 | 0 | clean — `services/amazon-fba-fees-mcp/`, `npm test` |
+| MCP server (vitest) | 110 | 0 | clean — `services/amazon-fba-fees-mcp/`, `npm test` |
 | MCP server (live SP-API) | 5 | 0 | `npm run test:integration` — auto-skipped without creds |
 
 The 6 pre-existing failures are NOT regressions; they exist because two
