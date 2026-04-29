@@ -332,11 +332,29 @@ export async function preflightAsin(
   await Promise.all([restrictionsP, fbaP, catalogP, feesP, pricingP]);
 
   if (!input.include_raw) {
+    // Shallow-clone each sub-result before stripping `raw`. The strip
+    // is otherwise mutating objects the sub-tools just returned —
+    // safe today because each tool returns a fresh object, but a
+    // future in-process consumer of those tool results (e.g. a
+    // metrics observer wired in alongside preflight) would observe
+    // `raw` getting yanked out from under it.
     for (const r of results) {
-      if (r.restrictions) delete r.restrictions.raw;
-      if (r.fba) delete r.fba.raw;
-      if (r.catalog) delete r.catalog.raw;
-      if (r.pricing) delete r.pricing.raw;
+      if (r.restrictions) {
+        const { raw: _r, ...rest } = r.restrictions;
+        r.restrictions = rest as typeof r.restrictions;
+      }
+      if (r.fba) {
+        const { raw: _r, ...rest } = r.fba;
+        r.fba = rest as typeof r.fba;
+      }
+      if (r.catalog) {
+        const { raw: _r, ...rest } = r.catalog;
+        r.catalog = rest as typeof r.catalog;
+      }
+      if (r.pricing) {
+        const { raw: _r, ...rest } = r.pricing;
+        r.pricing = rest as typeof r.pricing;
+      }
     }
   }
 

@@ -131,7 +131,9 @@ const HAZMAT_NEGATIVE_TOKENS = new Set([
   "non_dangerous",
   "non_dangerous_goods",
   "not_applicable",
+  "not_provided",
   "storage_non_dangerous_goods",
+  "unknown",
 ]);
 
 function isHazmatToken(t: string): boolean {

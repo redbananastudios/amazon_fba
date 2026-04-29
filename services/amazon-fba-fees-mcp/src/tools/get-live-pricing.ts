@@ -68,8 +68,11 @@ function asinFromUri(uri?: string): string | undefined {
 
 // Amazon Retail seller IDs keyed by marketplace ID. UK is the only one
 // verified for this single-marketplace deployment (AGENTS.md: "single
-// Amazon marketplace"). Add others only after verifying the seller ID
-// against a known Amazon-Retail-on-listing ASIN.
+// Amazon marketplace"). Source: Amazon UK Services Ltd. seller ID,
+// observed consistently in Keepa / SellerAmp on Amazon-Retail-held
+// listings. Wrong-or-stale ID just degrades to "FBA" classification —
+// no crash. Add other marketplaces only after verifying against a
+// known Amazon-on-listing ASIN.
 const AMZN_SELLER_IDS: Record<string, string> = {
   A1F83G8C2ARO7P: "A3P5ROKL5A1OLE", // UK
 };
