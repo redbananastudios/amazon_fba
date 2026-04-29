@@ -41,14 +41,33 @@ interface SpApiRestrictionsResponse {
 const BRAND_HINTS = /\bbrand\b/i;
 const CATEGORY_HINTS = /\bcateg(ory|ories)\b|\bsubcategory\b/i;
 
+// Classify a single SP-API reason. Prefers structured `reasonCode` over
+// free-text matching. CATEGORY checked before BRAND in the message
+// fallback because if both keywords appear in one reason, category
+// framing typically dominates ("approval required for brand X in
+// category Y" describes a category gate the seller must clear).
+function classifyReason(r: RestrictionReason): RestrictionStatus | "UNKNOWN" {
+  if (r.reasonCode === "ASIN_NOT_IN_PRODUCT_GROUP") return "CATEGORY_GATED";
+  const msg = r.message ?? "";
+  if (CATEGORY_HINTS.test(msg)) return "CATEGORY_GATED";
+  if (BRAND_HINTS.test(msg)) return "BRAND_GATED";
+  return "UNKNOWN";
+}
+
 function classify(reasons: RestrictionReason[]): RestrictionStatus {
   if (reasons.length === 0) return "UNRESTRICTED";
-  const blob = reasons
-    .map((r) => `${r.message ?? ""} ${r.reasonCode ?? ""}`)
-    .join(" ");
-  if (BRAND_HINTS.test(blob)) return "BRAND_GATED";
-  if (CATEGORY_HINTS.test(blob)) return "CATEGORY_GATED";
-  return "RESTRICTED";
+  // Per-reason classification, then aggregate. Each SP-API reason
+  // typically describes ONE gate type — the previous blob-join approach
+  // let a "brand" word in one reason mis-tag a category-gated ASIN.
+  // Aggregation rule: any CATEGORY signal wins; otherwise BRAND if
+  // any reason flagged it; otherwise generic RESTRICTED.
+  let result: RestrictionStatus = "RESTRICTED";
+  for (const r of reasons) {
+    const c = classifyReason(r);
+    if (c === "CATEGORY_GATED") return "CATEGORY_GATED";
+    if (c === "BRAND_GATED") result = "BRAND_GATED";
+  }
+  return result;
 }
 
 function normalise(
@@ -115,7 +134,7 @@ export async function checkListingRestrictions(
     const { result, wellFormed } = normalise(input.asin, marketplaceId, raw);
     // Skip cache write if SP-API returned a malformed/empty response, so a
     // transient upstream issue isn't pinned at UNRESTRICTED for 7 days.
-    if (wellFormed) cache?.set(cacheKey, result);
+    if (wellFormed) cache?.set(cacheKey, { data: result });
     return result;
   } catch (err) {
     if (cache) {

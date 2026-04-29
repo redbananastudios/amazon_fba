@@ -49,6 +49,11 @@ export interface DiskCacheOptions {
   cacheRoot?: string;        // override for tests; defaults to repo .cache/fba-mcp/
 }
 
+export interface DiskCacheSetOptions<T> {
+  data: T;
+  ttlSeconds?: number;
+}
+
 /**
  * Persistent disk cache. Layout:
  *   <cacheRoot>/<resource>/<keyParts...>.json
@@ -108,13 +113,20 @@ export class DiskCache<T> {
     return { hit: true, stale: false, fetched_at: entry.fetched_at, data: entry.data };
   }
 
-  set(keyParts: string[], data: T, ttlSeconds?: number): void {
+  /**
+   * Write an entry. keyParts is an array (matches the way callers
+   * already build cache keys); the second arg is an options object so
+   * data and ttl are named at the call site:
+   *   cache.set(cacheKey, { data: result });
+   *   cache.set(["k1", "k2"], { data: result, ttlSeconds: 60 });
+   */
+  set(keyParts: string[], opts: DiskCacheSetOptions<T>): void {
     const path = this.keyToPath(keyParts);
     this.ensureDir(path);
     const entry: DiskCacheEntry<T> = {
       fetched_at: new Date().toISOString(),
-      ttl_seconds: ttlSeconds ?? this.defaultTtlSeconds,
-      data,
+      ttl_seconds: opts.ttlSeconds ?? this.defaultTtlSeconds,
+      data: opts.data,
     };
     writeFileSync(path, JSON.stringify(entry, null, 2), "utf8");
   }

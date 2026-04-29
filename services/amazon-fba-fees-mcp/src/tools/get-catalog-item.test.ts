@@ -136,6 +136,24 @@ describe("getCatalogItem", () => {
     expect(result.hazmat).toBeUndefined();
   });
 
+  it("treats 'none' / 'non_dangerous' / 'non_dangerous_goods' as NOT hazmat", async () => {
+    // Regression: previously the deny-list missed these tokens and
+    // any non-empty value (including these explicit negatives) flagged
+    // as hazmat — a false positive that steers the seller away from
+    // safe products.
+    for (const negative of ["none", "non_dangerous", "non_dangerous_goods"]) {
+      const spApi = mockSpApi({
+        attributes: {
+          supplier_declared_dg_hz_regulation: [
+            { value: negative, marketplace_id: UK },
+          ],
+        },
+      });
+      const result = await getCatalogItem({ asin: `B0${negative}` }, spApi);
+      expect(result.hazmat, `value=${negative}`).toBeUndefined();
+    }
+  });
+
   it("hazmat is undefined (not false) when no relevant attributes are present", async () => {
     const spApi = mockSpApi({
       attributes: { color: [{ value: "red" }] },

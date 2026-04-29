@@ -47,9 +47,28 @@ interface ParsedArgs {
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
+  let stopParsing = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (stopParsing) {
+      positional.push(arg);
+      continue;
+    }
+    // `--` stop token: everything after is positional. Standard POSIX
+    // convention, lets callers force a positional after a boolean flag
+    // (e.g. `--refresh-cache -- some-positional`) without ambiguity.
+    if (arg === "--") {
+      stopParsing = true;
+      continue;
+    }
     if (arg.startsWith("--")) {
+      // `--key=value` form: explicit value, no greedy lookahead.
+      // Use this when a positional follows a boolean flag.
+      const eq = arg.indexOf("=");
+      if (eq !== -1) {
+        flags[arg.slice(2, eq)] = arg.slice(eq + 1);
+        continue;
+      }
       const key = arg.slice(2);
       const next = argv[i + 1];
       if (next === undefined || next.startsWith("--")) {
@@ -107,6 +126,19 @@ function buildSpApi(): SpApiService {
     clientSecret: getEnvOrThrow("SP_API_CLIENT_SECRET"),
     refreshToken: getEnvOrThrow("SP_API_REFRESH_TOKEN"),
   });
+}
+
+// Resolve a seller_id from precedence: --seller-id flag > payload field
+// > SP_API_SELLER_ID env. Used by every subcommand that needs a seller
+// context (restrictions, preflight). `fromPayload` is optional because
+// only the preflight subcommand reads it from a JSON input file.
+function resolveSellerId(
+  flags: Record<string, string | boolean>,
+  fromPayload?: string
+): string | undefined {
+  const fromFlag =
+    typeof flags["seller-id"] === "string" ? flags["seller-id"] : undefined;
+  return fromFlag ?? fromPayload ?? process.env.SP_API_SELLER_ID;
 }
 
 function buildCaches() {
@@ -188,15 +220,13 @@ async function runPreflight(flags: Record<string, string | boolean>): Promise<un
     typeof flags["include"] === "string"
       ? (splitList(flags["include"]) as PreflightSource[])
       : payload.include;
-  const sellerId =
-    (typeof flags["seller-id"] === "string" ? flags["seller-id"] : undefined) ??
-    payload.seller_id ??
-    process.env.SP_API_SELLER_ID;
+  const sellerId = resolveSellerId(flags, payload.seller_id);
   const marketplaceId =
     (typeof flags["marketplace-id"] === "string"
       ? flags["marketplace-id"]
       : undefined) ?? payload.marketplace_id;
   const refreshCache = bool(flags["refresh-cache"]) || payload.refresh_cache;
+  const includeRaw = bool(flags["include-raw"]) || payload.include_raw;
 
   const spApi = buildSpApi();
   const caches = buildCaches();
@@ -208,6 +238,7 @@ async function runPreflight(flags: Record<string, string | boolean>): Promise<un
       marketplace_id: marketplaceId,
       include,
       refresh_cache: refreshCache,
+      include_raw: includeRaw,
     } as PreflightInput,
     { spApi, caches, defaultSellerId: sellerId }
   );
@@ -217,9 +248,7 @@ async function runPreflight(flags: Record<string, string | boolean>): Promise<un
 async function runRestrictions(flags: Record<string, string | boolean>): Promise<unknown> {
   const asins = splitList(flags["asins"]);
   if (asins.length === 0) throw new Error("--asins required");
-  const sellerId =
-    (typeof flags["seller-id"] === "string" ? flags["seller-id"] : undefined) ??
-    process.env.SP_API_SELLER_ID;
+  const sellerId = resolveSellerId(flags);
   if (!sellerId) {
     throw new Error("--seller-id (or SP_API_SELLER_ID env) required for restrictions");
   }
@@ -281,10 +310,22 @@ async function runFees(flags: Record<string, string | boolean>): Promise<unknown
     throw new Error("fees input must contain an items[] array");
   }
   const refresh = bool(flags["refresh-cache"]);
+  // --marketplace-id sets a per-item default. Items that already specify
+  // their own marketplace_id win, so a heterogeneous batch still works.
+  const marketplaceDefault =
+    typeof flags["marketplace-id"] === "string"
+      ? flags["marketplace-id"]
+      : undefined;
+  const items = marketplaceDefault
+    ? payload.items.map((it) => ({
+        ...it,
+        marketplace_id: it.marketplace_id ?? marketplaceDefault,
+      }))
+    : payload.items;
   const spApi = buildSpApi();
   const cache = buildCaches().fees;
   const results = await estimateFeesBatch(
-    { items: payload.items, refresh_cache: refresh },
+    { items, refresh_cache: refresh },
     spApi,
     cache
   );

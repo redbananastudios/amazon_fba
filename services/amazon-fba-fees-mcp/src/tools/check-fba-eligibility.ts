@@ -108,7 +108,7 @@ export async function checkFbaEligibility(
     // Only persist a "trusted" answer. A malformed/empty SP-API response
     // would otherwise be cached as eligible=false for 7 days, masking a
     // transient upstream issue. Skipping the write lets the next call retry.
-    if (wellFormed) cache?.set(cacheKey, result);
+    if (wellFormed) cache?.set(cacheKey, { data: result });
     return result;
   } catch (err) {
     if (cache) {

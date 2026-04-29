@@ -146,6 +146,46 @@ describe("getLivePricing", () => {
     expect(result.offer_count_new).toBe(1);
   });
 
+  it("classifies AMZN when Buy Box winner is Amazon Retail (UK seller ID)", async () => {
+    // UK Amazon Retail seller ID. When this seller holds the Buy Box,
+    // it materially changes sourcing math (Amazon won't share Buy Box
+    // long-term), so we want to flag it distinctly from generic FBA.
+    const spApi = mockSpApi({
+      responses: [
+        {
+          body: {
+            payload: {
+              ASIN: "B0AMZN",
+              MarketplaceID: UK,
+              Status: "Success",
+              Summary: {
+                NumberOfOffers: [
+                  { condition: "new", fulfillmentChannel: "Amazon", OfferCount: 1 },
+                ],
+                BuyBoxPrices: [
+                  {
+                    condition: "New",
+                    LandedPrice: { Amount: 14.99, CurrencyCode: "GBP" },
+                  },
+                ],
+              },
+              Offers: [
+                {
+                  SellerId: "A3P5ROKL5A1OLE",
+                  IsBuyBoxWinner: true,
+                  IsFulfilledByAmazon: true,
+                },
+              ],
+            },
+          },
+          request: { uri: "/products/pricing/v0/items/B0AMZN/offers" },
+        },
+      ],
+    });
+    const [result] = await getLivePricing({ asins: ["B0AMZN"] }, spApi);
+    expect(result.buy_box_seller).toBe("AMZN");
+  });
+
   it("sums NumberOfOffers across new offer entries", async () => {
     const spApi = mockSpApi({
       responses: [
@@ -197,6 +237,40 @@ describe("getLivePricing", () => {
     const [result] = await getLivePricing({ asins: ["B0NOWIN"] }, spApi);
     expect(result.buy_box_price).toBeUndefined();
     expect(result.buy_box_seller).toBeUndefined();
+  });
+
+  it("picks BuyBoxPrice matching the requested condition (not [0])", async () => {
+    // Defensive: SP-API ordering is undocumented. If a future quirk
+    // lands a Used entry at index 0 when we asked for New, [0] would
+    // silently return Used pricing. Filter on condition explicitly.
+    const spApi = mockSpApi({
+      responses: [
+        {
+          body: {
+            payload: {
+              ASIN: "B0COND",
+              Status: "Success",
+              Summary: {
+                NumberOfOffers: [
+                  { condition: "new", fulfillmentChannel: "Amazon", OfferCount: 1 },
+                ],
+                BuyBoxPrices: [
+                  { condition: "Used", LandedPrice: { Amount: 5.0, CurrencyCode: "GBP" } },
+                  { condition: "New", LandedPrice: { Amount: 19.99, CurrencyCode: "GBP" } },
+                ],
+              },
+              Offers: [{ SellerId: "S1", IsBuyBoxWinner: true, IsFulfilledByAmazon: true }],
+            },
+          },
+          request: { uri: "/products/pricing/v0/items/B0COND/offers" },
+        },
+      ],
+    });
+    const [result] = await getLivePricing(
+      { asins: ["B0COND"], item_condition: "New" },
+      spApi
+    );
+    expect(result.buy_box_price).toBe(19.99);
   });
 
   it("aligns out-of-order responses by ASIN", async () => {

@@ -44,6 +44,10 @@ export interface PreflightInput {
   vat_registered?: boolean;
   vat_rate?: number;
   shipping_cost?: number;
+  // Default false. SP-API responses are large (~250KB/ASIN); a 20-ASIN batch
+  // serialises ~5MB through stdout that the Python pipeline ignores entirely.
+  // Opt in for direct debugging via the MCP tool surface.
+  include_raw?: boolean;
 }
 
 export interface PreflightDeps {
@@ -326,6 +330,33 @@ export async function preflightAsin(
     : Promise.resolve();
 
   await Promise.all([restrictionsP, fbaP, catalogP, feesP, pricingP]);
+
+  if (!input.include_raw) {
+    // Shallow-clone each sub-result before stripping `raw`. The strip
+    // is otherwise mutating objects the sub-tools just returned —
+    // safe today because each tool returns a fresh object, but a
+    // future in-process consumer of those tool results (e.g. a
+    // metrics observer wired in alongside preflight) would observe
+    // `raw` getting yanked out from under it.
+    for (const r of results) {
+      if (r.restrictions) {
+        const { raw: _r, ...rest } = r.restrictions;
+        r.restrictions = rest as typeof r.restrictions;
+      }
+      if (r.fba) {
+        const { raw: _r, ...rest } = r.fba;
+        r.fba = rest as typeof r.fba;
+      }
+      if (r.catalog) {
+        const { raw: _r, ...rest } = r.catalog;
+        r.catalog = rest as typeof r.catalog;
+      }
+      if (r.pricing) {
+        const { raw: _r, ...rest } = r.pricing;
+        r.pricing = rest as typeof r.pricing;
+      }
+    }
+  }
 
   return results;
 }

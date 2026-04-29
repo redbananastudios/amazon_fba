@@ -66,7 +66,21 @@ function asinFromUri(uri?: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
-function classifyBuyBoxSeller(payload: SpApiPayload): string | undefined {
+// Amazon Retail seller IDs keyed by marketplace ID. UK is the only one
+// verified for this single-marketplace deployment (AGENTS.md: "single
+// Amazon marketplace"). Source: Amazon UK Services Ltd. seller ID,
+// observed consistently in Keepa / SellerAmp on Amazon-Retail-held
+// listings. Wrong-or-stale ID just degrades to "FBA" classification —
+// no crash. Add other marketplaces only after verifying against a
+// known Amazon-on-listing ASIN.
+const AMZN_SELLER_IDS: Record<string, string> = {
+  A1F83G8C2ARO7P: "A3P5ROKL5A1OLE", // UK
+};
+
+function classifyBuyBoxSeller(
+  payload: SpApiPayload,
+  marketplaceId: string
+): string | undefined {
   // Only classify when there's an actual Buy Box winner. Falling back to
   // offers[0] would silently mislabel any ASIN where no offer holds the
   // Buy Box (suppressed listing, no qualifying offer, etc.) — the
@@ -75,6 +89,8 @@ function classifyBuyBoxSeller(payload: SpApiPayload): string | undefined {
   const offers = payload.Offers ?? [];
   const winner = offers.find((o) => o.IsBuyBoxWinner);
   if (!winner) return undefined;
+  const amznId = AMZN_SELLER_IDS[marketplaceId];
+  if (amznId && winner.SellerId === amznId) return "AMZN";
   if (winner.IsFulfilledByAmazon) return "FBA";
   return "FBM";
 }
@@ -82,12 +98,21 @@ function classifyBuyBoxSeller(payload: SpApiPayload): string | undefined {
 function buildResult(
   asin: string,
   marketplaceId: string,
+  condition: string,
   payload: SpApiPayload | undefined
 ): LivePricingResult {
   if (!payload) {
     return { asin, marketplace_id: marketplaceId, raw: payload };
   }
-  const buyBox = payload.Summary?.BuyBoxPrices?.[0];
+  // Pick the Buy Box entry matching the requested condition. SP-API
+  // normally orders New first when "New" is requested, but the order
+  // is not contractually guaranteed — picking [0] blindly would land
+  // a Used price as the Buy Box on any future ordering change.
+  const buyBoxes = payload.Summary?.BuyBoxPrices ?? [];
+  const conditionLower = condition.toLowerCase();
+  const buyBox =
+    buyBoxes.find((bb) => bb.condition?.toLowerCase() === conditionLower) ??
+    buyBoxes[0];
   const newOffers = (payload.Summary?.NumberOfOffers ?? []).filter(
     (o) => o.condition?.toLowerCase() === "new"
   );
@@ -101,7 +126,7 @@ function buildResult(
   return {
     asin,
     buy_box_price: buyBox?.LandedPrice?.Amount,
-    buy_box_seller: classifyBuyBoxSeller(payload),
+    buy_box_seller: classifyBuyBoxSeller(payload, marketplaceId),
     listing_price: buyBox?.ListingPrice?.Amount,
     shipping: buyBox?.Shipping?.Amount,
     offer_count_new: newOffers.length > 0 ? offer_count_new : undefined,
@@ -185,11 +210,11 @@ export async function getLivePricing(
   toFetch.forEach(({ idx, asin }, posInFetch) => {
     const entry = byAsin.get(asin) ?? responses[posInFetch];
     const payload = entry?.body?.payload;
-    const result = buildResult(asin, marketplaceId, payload);
+    const result = buildResult(asin, marketplaceId, condition, payload);
     // Skip cache write when SP-API returned no payload for this ASIN —
     // pinning a stub-with-no-Buy-Box for 5 minutes would mask transient
     // upstream issues. Only cache when the payload was structurally present.
-    if (payload) cache?.set([marketplaceId, condition, asin], result);
+    if (payload) cache?.set([marketplaceId, condition, asin], { data: result });
     results[idx] = result;
   });
 

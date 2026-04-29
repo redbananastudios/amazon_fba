@@ -294,6 +294,37 @@ describe("preflightAsin", () => {
     expect(spApi.getMyFeesEstimates).toHaveBeenCalledTimes(1);
   });
 
+  it("strips raw payloads from sub-results by default", async () => {
+    const spApi = makeSpApi();
+    const [r] = await preflightAsin(
+      {
+        items: [{ asin: "B0NORAW", selling_price: 9.99, cost_price: 3 }],
+        seller_id: "S1",
+      },
+      { spApi, caches: mkCaches(tmp) }
+    );
+    expect(r.restrictions?.raw).toBeUndefined();
+    expect(r.fba?.raw).toBeUndefined();
+    expect(r.catalog?.raw).toBeUndefined();
+    expect(r.pricing?.raw).toBeUndefined();
+  });
+
+  it("preserves raw payloads when include_raw=true", async () => {
+    const spApi = makeSpApi();
+    const [r] = await preflightAsin(
+      {
+        items: [{ asin: "B0WITHRAW", selling_price: 9.99, cost_price: 3 }],
+        seller_id: "S1",
+        include_raw: true,
+      },
+      { spApi, caches: mkCaches(tmp) }
+    );
+    expect(r.restrictions?.raw).toBeDefined();
+    expect(r.fba?.raw).toBeDefined();
+    expect(r.catalog?.raw).toBeDefined();
+    expect(r.pricing?.raw).toBeDefined();
+  });
+
   it("propagates per-item fees error without breaking other sources", async () => {
     const spApi = makeSpApi({
       getMyFeesEstimates: vi.fn().mockResolvedValue([

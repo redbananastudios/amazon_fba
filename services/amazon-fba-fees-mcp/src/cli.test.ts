@@ -49,4 +49,30 @@ describe("parseArgs", () => {
     expect(r.flags["help"]).toBe(true);
     expect(r.positional).toEqual([]);
   });
+
+  it("treats `--` as a stop token; everything after is positional", () => {
+    const r = parseArgs([
+      "preflight",
+      "--refresh-cache",
+      "--",
+      "--not-a-flag",
+      "literal-arg",
+    ]);
+    expect(r.flags["refresh-cache"]).toBe(true);
+    expect(r.positional).toEqual(["preflight", "--not-a-flag", "literal-arg"]);
+  });
+
+  it("supports --key=value form without greedy lookahead", () => {
+    const r = parseArgs(["preflight", "--input=items.json", "--refresh-cache=true"]);
+    expect(r.flags["input"]).toBe("items.json");
+    expect(r.flags["refresh-cache"]).toBe("true");
+  });
+
+  it("--key=value lets a boolean flag precede a positional safely", () => {
+    // The greedy lookahead form would consume "extra" as the value of
+    // --refresh-cache; --refresh-cache=true is the unambiguous escape.
+    const r = parseArgs(["fees", "--refresh-cache=true", "extra"]);
+    expect(r.flags["refresh-cache"]).toBe("true");
+    expect(r.positional).toEqual(["fees", "extra"]);
+  });
 });

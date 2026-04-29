@@ -113,6 +113,53 @@ function extractDimensions(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+// Tokens that explicitly negate hazmat. Inside an attribute already
+// keyed for hazmat regulation (HAZMAT_HINT_KEYS), any value NOT in
+// this set is treated as a hazmat declaration. False negatives here
+// are worse than false positives: a missed real hazmat flag means
+// Amazon rejects the FBA shipment after the seller has already
+// committed funds. Keep this list expanded as new SP-API negative
+// tokens surface.
+const HAZMAT_NEGATIVE_TOKENS = new Set([
+  "",
+  "0",
+  "n",
+  "no",
+  "false",
+  "off",
+  "none",
+  "non_dangerous",
+  "non_dangerous_goods",
+  "not_applicable",
+  "not_provided",
+  "storage_non_dangerous_goods",
+  "unknown",
+]);
+
+function isHazmatToken(t: string): boolean {
+  return t.length > 0 && !HAZMAT_NEGATIVE_TOKENS.has(t);
+}
+
+function isHazmatValue(v: unknown): boolean {
+  if (v === true) return true;
+  if (typeof v === "string") return isHazmatToken(v.toLowerCase().trim());
+  if (Array.isArray(v)) {
+    // Attributes are usually arrays of {value, marketplace_id, language_tag}.
+    return v.some((entry) => {
+      if (typeof entry === "string")
+        return isHazmatToken(entry.toLowerCase().trim());
+      if (entry && typeof entry === "object") {
+        const value = (entry as { value?: unknown }).value;
+        if (value === true) return true;
+        if (typeof value === "string")
+          return isHazmatToken(value.toLowerCase().trim());
+      }
+      return false;
+    });
+  }
+  return false;
+}
+
 function detectHazmat(
   attributes: Record<string, unknown> | undefined
 ): boolean | undefined {
@@ -123,43 +170,7 @@ function detectHazmat(
       HAZMAT_HINT_KEYS.includes(lower) ||
       /hazmat|dangerous_goods|hazardous/.test(lower);
     if (!matches) continue;
-    const v = attributes[key];
-    if (v === true) return true;
-    if (typeof v === "string") {
-      const norm = v.toLowerCase().trim();
-      if (
-        norm &&
-        norm !== "no" &&
-        norm !== "false" &&
-        norm !== "n" &&
-        norm !== "not_applicable" &&
-        norm !== "storage_non_dangerous_goods"
-      ) {
-        return true;
-      }
-    }
-    if (Array.isArray(v) && v.length > 0) {
-      // attributes are usually arrays of {value, marketplace_id, language_tag}.
-      const hasMeaningfulValue = v.some((entry) => {
-        if (typeof entry === "string") return entry.trim().length > 0;
-        if (entry && typeof entry === "object") {
-          const value = (entry as { value?: unknown }).value;
-          if (typeof value === "string") {
-            const lv = value.toLowerCase().trim();
-            return (
-              lv.length > 0 &&
-              lv !== "no" &&
-              lv !== "false" &&
-              lv !== "not_applicable" &&
-              lv !== "storage_non_dangerous_goods"
-            );
-          }
-          return value !== undefined && value !== null && value !== false;
-        }
-        return false;
-      });
-      if (hasMeaningfulValue) return true;
-    }
+    if (isHazmatValue(attributes[key])) return true;
   }
   return undefined;
 }
@@ -231,7 +242,7 @@ export async function getCatalogItem(
       marketplaceId,
     })) as SpApiCatalogResponse;
     const result = normalise(input.asin, marketplaceId, raw);
-    cache?.set(cacheKey, result);
+    cache?.set(cacheKey, { data: result });
     return result;
   } catch (err) {
     if (cache) {
