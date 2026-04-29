@@ -14,6 +14,7 @@ import { checkFbaEligibility } from "./tools/check-fba-eligibility.js";
 import { estimateFeesBatch } from "./tools/estimate-fees-batch.js";
 import { getCatalogItem } from "./tools/get-catalog-item.js";
 import { getLivePricing } from "./tools/get-live-pricing.js";
+import { preflightAsin } from "./tools/preflight-asin.js";
 import type {
   CatalogItemResult,
   FeeEstimate,
@@ -415,6 +416,97 @@ server.tool(
         spApi,
         pricingCache
       );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ results }, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register preflight_asin tool
+server.tool(
+  "preflight_asin",
+  "Composite sourcing-decision check: fans out to listing restrictions, FBA eligibility, fee estimate, catalog lookup, live pricing and profitability for up to 20 ASINs in parallel. Per-source errors are isolated in errors[] — they don't fail the batch. cached[source] reports whether each source was served from disk cache. Restriction/eligibility data is INFORMATIONAL ONLY — does not change SHORTLIST/REVIEW/REJECT logic.",
+  {
+    items: z
+      .array(
+        z.object({
+          asin: z.string(),
+          selling_price: z.number().positive(),
+          cost_price: z.number().nonnegative(),
+        })
+      )
+      .min(0)
+      .max(20)
+      .describe("Up to 20 items, each with asin + selling_price + cost_price"),
+    marketplace_id: z
+      .string()
+      .optional()
+      .describe("Marketplace ID (default: A1F83G8C2ARO7P for UK)"),
+    seller_id: z
+      .string()
+      .optional()
+      .describe(
+        "Seller ID for restrictions (falls back to SP_API_SELLER_ID env var)"
+      ),
+    include: z
+      .array(
+        z.enum([
+          "restrictions",
+          "fba",
+          "fees",
+          "catalog",
+          "pricing",
+          "profitability",
+        ])
+      )
+      .optional()
+      .describe(
+        "Which sources to fetch (default: all six). Pass a subset to skip slower calls."
+      ),
+    refresh_cache: z
+      .boolean()
+      .optional()
+      .describe("Force fresh SP-API calls across every source"),
+    vat_registered: z
+      .boolean()
+      .optional()
+      .describe("VAT-registered seller? (default: true)"),
+    vat_rate: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe("VAT rate as decimal (default: 0.20)"),
+    shipping_cost: z
+      .number()
+      .nonnegative()
+      .optional()
+      .describe("Shipping/sourcing cost in GBP per item (default: 0)"),
+  },
+  async (args) => {
+    try {
+      const results = await preflightAsin(args, {
+        spApi,
+        caches: {
+          restrictions: restrictionsCache,
+          fbaEligibility: fbaEligibilityCache,
+          fees: feesCache,
+          catalog: catalogCache,
+          pricing: pricingCache,
+        },
+        defaultSellerId: sellerId,
+      });
       return {
         content: [
           {
