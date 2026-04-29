@@ -59,7 +59,7 @@ for s in abgee connect-beauty shure zappies; do
 done
 ```
 
-Expected: all canonical and adapter tests pass for abgee/connect-beauty (49 + 12 + 15 = 76 tests). Shure and zappies have 6 pre-existing test failures from copy-pasted abgee tests — not regressions, see `docs/SPEC.md` for context.
+Expected: all canonical and adapter tests pass for abgee/connect-beauty (68 + 12 + 15 = 95 tests). Shure and zappies have 6 pre-existing test failures from copy-pasted abgee tests — not regressions, see `docs/SPEC.md` for context.
 
 ## Configuration
 
