@@ -6,56 +6,57 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-04-29 (end of long session)
-**Currently working on:** Step 4 in flight — porting legacy Node.js Keepa pipeline to Python composable steps under `fba_engine/steps/`. Step 4a (IP Risk) is open as **PR #8** awaiting merge.
-**Status:** Two PRs merged this session (#6 doc-drift, #7 M1-M4 + L1-L7 MCP follow-ups). One PR open (#8 step 4a IP Risk port). Credentials file fixed for bash-source compatibility.
+**Last updated:** 2026-04-29 (continuing same session)
+**Currently working on:** Step 4 in flight — porting legacy Node.js Keepa pipeline to Python composable steps under `fba_engine/steps/`. Step 4b (Decision Engine) just landed; next is step 4c (Skill 5 Build Output).
+**Status:** Five PRs merged in the prior session (#6 doc-drift, #7 MCP follow-ups, #8 step 4a, #9 handoff doc). Step 4b (Decision Engine port) shipped this session.
 
 **Latest tests baseline:**
 ```bash
-cd services/amazon-fba-fees-mcp && npm test                  # 110/110 unit (was 100; +10 from #7)
+cd services/amazon-fba-fees-mcp && npm test                  # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live SP-API
 cd shared/lib/python && pytest tests/ sourcing_engine/tests/ # 68/68
-pytest fba_engine/steps/tests/                               # 67/67 (NEW — when #8 lands)
+pytest fba_engine/steps/tests/                               # 222/222 (67 ip_risk + 155 decision_engine)
 ```
 
 ### What landed this session
 
-**PR #6** (`docs: fix test-count and line-cite drift`) — merged.
-- AGENTS.md baseline counts (34→42 engine, 99→100 vitest, 49→68 total)
-- README.md test count
-- CLAUDE.md M1 line cite (:85 → :90), L5 line cite (:128-135 → :164-177)
-- Found while running documented test baselines clean during a fresh QA review
+**Step 4b — Decision Engine port** (this session, PR open):
+- New module `fba_engine/steps/decision_engine.py` (~620 LOC including docstrings + tests).
+  1:1 port of legacy `phase6_decision.js` (651 LOC). Same elif-chain order, same
+  thresholds, same JS `Math.round` half-rounding fixed with `math.floor(x + 0.5)`.
+- 155 pytest cases at `fba_engine/steps/tests/test_decision_engine.py` covering:
+  every helper (parse_money/pct, gbp formatting, lane/priority/etc.),
+  every decision-rule branch including the `pl_risk == "-"` WATCH branch,
+  BUY post-checks (lane demotion + buy-readiness demotion), NaN safety, run_step
+  contract, sort tiebreakers, XLSX shortlist + summary structure, Unicode.
+- Two-sheet Excel shortlist workbook via openpyxl (already in deps).
+  Shortlist sheet = BUY+NEGOTIATE rows; Summary sheet = counts by Decision /
+  Lane / IP Risk / PL Risk.
+- Pre-PR code-reviewer agent: 5 must-fix items (1 MEDIUM coverage gap, 4 LOW
+  test/CLI tightening) all addressed.
 
-**PR #7** (`fix(mcp): resolve M1-M4 + L1-L7 follow-ups`) — merged. 10 atomic commits + cleanup:
-- M1 BuyBoxPrices condition filter, M2 reasonCode classifier, M3 strip raw payloads from preflight (closes L5), M4 hazmat deny-list extended
-- L1 marketplace-id through fees, L2 parseArgs stop-token + key=value, L3 DRY resolveSellerId, L4 DiskCache.set options object
-- L7 AMZN buy_box_seller detection (UK only)
-- Pre-PR code-reviewer agent surfaced one MEDIUM (mutation in M3 strip) + 3 LOW; all addressed before merge
+### Prior session highlights (kept for context)
 
-**Credentials infrastructure fix:**
-- `F:/My Drive/workspace/credentials.env` now quotes values containing bash special chars (lines 27 EBAY_CLIENT_TOKEN with `#`, line 33 SP_API_REFRESH_TOKEN with `|`). Bash `source` of the file would previously truncate those values; sync to settings.json was working only because Claude Code's harness pre-injects from settings.json.
-- `F:/My Drive/workspace/sync-credentials.ps1` updated to strip surrounding quotes when parsing, so settings.json contains the unquoted values (verified — no spurious quote chars in the JSON).
+**PRs #6–#9** (prior session): doc-drift fixes, MCP M1-M4 + L1-L7 follow-ups
+(110/110 vitest), step 4a IP Risk port (67 pytest), handoff doc. All merged.
 
-**PR #8 OPEN** (`feat(steps): port IP risk phase to Python (step 4a)`):
-- New package `fba_engine/steps/` with `__init__.py` + first step `ip_risk.py`
-- 1:1 port of legacy `phase4_ip_risk.js` (351 LOC JS → ~350 LOC Python including docstrings)
-- Caught one porting bug: JS `Math.round(6.5) === 7` vs Python `round(6.5) === 6` — fixed with `math.floor(score + 0.5)`
-- 67 pytest cases (boundary cases at half-rounding, NaN safety, run_step contract, Unicode, edge inputs)
-- Establishes the **`run_step(df, config) -> df`** contract for step 5's YAML runner
-- Pre-PR code-reviewer surfaced HIGH NaN coercion bug + MEDIUM run_step shape + LOW BOM strip — all addressed in second commit
+**Credentials infrastructure** (prior session): `F:/My Drive/workspace/credentials.env`
+now quotes values containing bash special chars; `sync-credentials.ps1` strips
+those quotes when writing to `settings.json`. Bash `source` now works on the file.
 
 ### Step 4 roadmap status
 
 | Skill | LOC (JS) | Status |
 |---|---|---|
-| 4 — IP Risk | 351 | **PR #8 open** (this session) |
-| 6 — Decision Engine | 651 | **NEXT** — pure logic, follows the same pattern. Smallest remaining real-code skill. |
-| 5 — Build Output | 840 | After 6. XLSX (openpyxl is already in use) + GSheets (pulls in google-api-python-client, **decision needed**) |
+| 4 — IP Risk | 351 | **MERGED PR #8** |
+| 6 — Decision Engine | 651 | **PR open** (this session) |
+| 5 — Build Output | 840 | **NEXT (step 4c)** — XLSX (openpyxl already in use) + GSheets (pulls in google-api-python-client, **decision needed**) |
 | 3 — Scoring | 0 (SKILL.md) | **Scope decision needed**: extract a canonical scoring step, or keep agent-driven? Per-niche scripts get generated under `data/{niche}/working/`. |
 | 1 — Keepa Finder | 0 (browser) | **Separate scoping**: Keepa API integration vs Playwright vs keep as Claude Code skill |
 | 2 — SellerAmp | 0 (browser) | Same scoping question as Skill 1 |
 
-**Blockers:** None for step 4b (Decision Engine).
+**Blockers:** None for step 4c. Need decision on `google-api-python-client` dep
+before starting step 4c (Skill 5 Build Output) since GSheets push is part of it.
 
 ### Workflow notes (cumulative across sessions)
 - **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.
