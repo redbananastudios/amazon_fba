@@ -6,47 +6,56 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-04-29 (end of session)
-**Currently working on:** Nothing in flight. **MCP sourcing-tools expansion (PR #5) is merged into main.**
-**Status:** Feature complete and live. Pipeline now auto-annotates matched rows with SP-API data (restrictions, FBA eligibility, live Buy Box, catalog brand, hazmat). Markdown report has a "🚫 Restriction notes" section listing gated SHORTLIST items.
+**Last updated:** 2026-04-29 (end of long session)
+**Currently working on:** Step 4 in flight — porting legacy Node.js Keepa pipeline to Python composable steps under `fba_engine/steps/`. Step 4a (IP Risk) is open as **PR #8** awaiting merge.
+**Status:** Two PRs merged this session (#6 doc-drift, #7 M1-M4 + L1-L7 MCP follow-ups). One PR open (#8 step 4a IP Risk port). Credentials file fixed for bash-source compatibility.
 
-**What was delivered (15 commits merged via PR #5, `f8dfe64`):**
-- 7 MCP tools (`check_listing_restrictions`, `check_fba_eligibility`, `estimate_fees_batch`, `get_catalog_item`, `get_live_pricing`, `preflight_asin` composite, plus CLI mode)
-- Python pipeline integration (`shared/lib/python/sourcing_engine/pipeline/preflight.py`)
-- Persistent disk cache at `<repo>/.cache/fba-mcp/` (gitignored, TTLs configurable per resource via env vars)
-- 100 vitest unit + 5 live SP-API integration + 42 pytest tests, all green
-- Code reviewed (4 review findings landed in the PR), QA'd end-to-end on real connect-beauty data (3 production bugs found and fixed before merge)
-
-**Tests baseline going forward:**
+**Latest tests baseline:**
 ```bash
-cd services/amazon-fba-fees-mcp && npm test                  # 100/100 unit
-cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live (requires SP_API creds)
-cd shared/lib/python && pytest sourcing_engine/tests/        # 42/42
+cd services/amazon-fba-fees-mcp && npm test                  # 110/110 unit (was 100; +10 from #7)
+cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live SP-API
+cd shared/lib/python && pytest tests/ sourcing_engine/tests/ # 68/68
+pytest fba_engine/steps/tests/                               # 67/67 (NEW — when #8 lands)
 ```
 
-**Possible follow-up tickets** (from pre-PR code review; none are blocking, all green-tested):
+### What landed this session
 
-Medium-priority (real defects, low blast radius):
+**PR #6** (`docs: fix test-count and line-cite drift`) — merged.
+- AGENTS.md baseline counts (34→42 engine, 99→100 vitest, 49→68 total)
+- README.md test count
+- CLAUDE.md M1 line cite (:85 → :90), L5 line cite (:128-135 → :164-177)
+- Found while running documented test baselines clean during a fresh QA review
 
-- **M1** `services/amazon-fba-fees-mcp/src/tools/get-live-pricing.ts:90`. `buy_box_price` reads `BuyBoxPrices[0]` without a condition filter. SP-API ordering is currently fine because the request always asks for `New`, but a future API quirk could land Used at index 0 silently. Fix: filter by requested condition explicitly, fall back to `[0]`.
-- **M2** `services/amazon-fba-fees-mcp/src/tools/check-listing-restrictions.ts:44-52`. BRAND_GATED beats CATEGORY_GATED when both keywords appear in the message blob. SP-API actually returns structured `reasonCode` values (e.g. `APPROVAL_REQUIRED`, `ASIN_NOT_IN_PRODUCT_GROUP`) which are more reliable than message regex. Fix: prefer reasonCode discrimination, fall back to message hints.
-- **M3** `services/amazon-fba-fees-mcp/src/types.ts:65,79,126,138`. Tools embed full SP-API `raw` payloads in every result. A 20-ASIN preflight serialises ~5MB through stdout; the Python side ignores `raw` entirely. Fix: add `include_raw?: boolean` (default false) to `PreflightInput`, propagate through to the sub-tools; keep `raw` for individual tool calls.
-- **M4** `services/amazon-fba-fees-mcp/src/tools/get-catalog-item.ts:128-156`. Hazmat detection deny-lists `"no"`, `"false"`, `"not_applicable"` etc. but a value like `"none"`/`"non_dangerous"` would still flag as hazmat. Fix: add to deny-list, or switch to allow-list of known hazmat indicators (`un_*`, `class_*`, `true`, `yes`, `hazmat`).
+**PR #7** (`fix(mcp): resolve M1-M4 + L1-L7 follow-ups`) — merged. 10 atomic commits + cleanup:
+- M1 BuyBoxPrices condition filter, M2 reasonCode classifier, M3 strip raw payloads from preflight (closes L5), M4 hazmat deny-list extended
+- L1 marketplace-id through fees, L2 parseArgs stop-token + key=value, L3 DRY resolveSellerId, L4 DiskCache.set options object
+- L7 AMZN buy_box_seller detection (UK only)
+- Pre-PR code-reviewer agent surfaced one MEDIUM (mutation in M3 strip) + 3 LOW; all addressed before merge
 
-Low-priority (cosmetic / future-proofing):
+**Credentials infrastructure fix:**
+- `F:/My Drive/workspace/credentials.env` now quotes values containing bash special chars (lines 27 EBAY_CLIENT_TOKEN with `#`, line 33 SP_API_REFRESH_TOKEN with `|`). Bash `source` of the file would previously truncate those values; sync to settings.json was working only because Claude Code's harness pre-injects from settings.json.
+- `F:/My Drive/workspace/sync-credentials.ps1` updated to strip surrounding quotes when parsing, so settings.json contains the unquoted values (verified — no spurious quote chars in the JSON).
 
-- **L1** `services/amazon-fba-fees-mcp/src/cli.ts:272-292`. `fees` subcommand ignores `--marketplace-id`. Thread it through as a per-item default.
-- **L2** `services/amazon-fba-fees-mcp/src/cli.ts:50-65`. `parseArgs` treats a positional arg as a boolean-flag value if it follows `--<flag>`. No current bug because no subcommand has post-flag positionals; future footgun.
-- **L3** `services/amazon-fba-fees-mcp/src/cli.ts:194,222-224`. `runPreflight` and `runRestrictions` resolve `seller_id` independently. Extract to `resolveSellerId(flags)`.
-- **L4** `services/amazon-fba-fees-mcp/src/services/disk-cache.ts:91,111`. `get(...keyParts)` is spread, `set(keyParts, ...)` is array. Asymmetric. Pick one (recommend spread + options object).
-- **L5** `shared/lib/python/sourcing_engine/pipeline/preflight.py:164-177`. Subprocess `text=True` + large `raw` payloads on Windows could approach pipe-buffer limits for very large batches. Mitigated if M3 lands.
-- **L7** `services/amazon-fba-fees-mcp/src/types.ts:132`. `buy_box_seller` documents `"AMZN"` but the classifier never returns it (Amazon Retail gets bucketed as `"FBA"`). Either remove from the type union or implement marketplace-keyed seller-ID detection.
+**PR #8 OPEN** (`feat(steps): port IP risk phase to Python (step 4a)`):
+- New package `fba_engine/steps/` with `__init__.py` + first step `ip_risk.py`
+- 1:1 port of legacy `phase4_ip_risk.js` (351 LOC JS → ~350 LOC Python including docstrings)
+- Caught one porting bug: JS `Math.round(6.5) === 7` vs Python `round(6.5) === 6` — fixed with `math.floor(score + 0.5)`
+- 67 pytest cases (boundary cases at half-rounding, NaN safety, run_step contract, Unicode, edge inputs)
+- Establishes the **`run_step(df, config) -> df`** contract for step 5's YAML runner
+- Pre-PR code-reviewer surfaced HIGH NaN coercion bug + MEDIUM run_step shape + LOW BOM strip — all addressed in second commit
 
-(M5 and L6 from the original review were resolved before the PR landed — see commit `2a513d9`.)
+### Step 4 roadmap status
 
-**Next steps:** None pending. User can pick from the M-series follow-ups or move to other work (e.g., reorganisation step 4: extract Keepa phases from `_legacy_keepa/`).
+| Skill | LOC (JS) | Status |
+|---|---|---|
+| 4 — IP Risk | 351 | **PR #8 open** (this session) |
+| 6 — Decision Engine | 651 | **NEXT** — pure logic, follows the same pattern. Smallest remaining real-code skill. |
+| 5 — Build Output | 840 | After 6. XLSX (openpyxl is already in use) + GSheets (pulls in google-api-python-client, **decision needed**) |
+| 3 — Scoring | 0 (SKILL.md) | **Scope decision needed**: extract a canonical scoring step, or keep agent-driven? Per-niche scripts get generated under `data/{niche}/working/`. |
+| 1 — Keepa Finder | 0 (browser) | **Separate scoping**: Keepa API integration vs Playwright vs keep as Claude Code skill |
+| 2 — SellerAmp | 0 (browser) | Same scoping question as Skill 1 |
 
-**Blockers:** None.
+**Blockers:** None for step 4b (Decision Engine).
 
 ### Workflow notes (cumulative across sessions)
 - **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.
