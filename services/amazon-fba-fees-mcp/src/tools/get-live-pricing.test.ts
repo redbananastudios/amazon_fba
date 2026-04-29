@@ -239,6 +239,40 @@ describe("getLivePricing", () => {
     expect(result.buy_box_seller).toBeUndefined();
   });
 
+  it("picks BuyBoxPrice matching the requested condition (not [0])", async () => {
+    // Defensive: SP-API ordering is undocumented. If a future quirk
+    // lands a Used entry at index 0 when we asked for New, [0] would
+    // silently return Used pricing. Filter on condition explicitly.
+    const spApi = mockSpApi({
+      responses: [
+        {
+          body: {
+            payload: {
+              ASIN: "B0COND",
+              Status: "Success",
+              Summary: {
+                NumberOfOffers: [
+                  { condition: "new", fulfillmentChannel: "Amazon", OfferCount: 1 },
+                ],
+                BuyBoxPrices: [
+                  { condition: "Used", LandedPrice: { Amount: 5.0, CurrencyCode: "GBP" } },
+                  { condition: "New", LandedPrice: { Amount: 19.99, CurrencyCode: "GBP" } },
+                ],
+              },
+              Offers: [{ SellerId: "S1", IsBuyBoxWinner: true, IsFulfilledByAmazon: true }],
+            },
+          },
+          request: { uri: "/products/pricing/v0/items/B0COND/offers" },
+        },
+      ],
+    });
+    const [result] = await getLivePricing(
+      { asins: ["B0COND"], item_condition: "New" },
+      spApi
+    );
+    expect(result.buy_box_price).toBe(19.99);
+  });
+
   it("aligns out-of-order responses by ASIN", async () => {
     const spApi = mockSpApi({
       responses: [

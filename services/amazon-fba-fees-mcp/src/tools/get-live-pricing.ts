@@ -95,12 +95,21 @@ function classifyBuyBoxSeller(
 function buildResult(
   asin: string,
   marketplaceId: string,
+  condition: string,
   payload: SpApiPayload | undefined
 ): LivePricingResult {
   if (!payload) {
     return { asin, marketplace_id: marketplaceId, raw: payload };
   }
-  const buyBox = payload.Summary?.BuyBoxPrices?.[0];
+  // Pick the Buy Box entry matching the requested condition. SP-API
+  // normally orders New first when "New" is requested, but the order
+  // is not contractually guaranteed — picking [0] blindly would land
+  // a Used price as the Buy Box on any future ordering change.
+  const buyBoxes = payload.Summary?.BuyBoxPrices ?? [];
+  const conditionLower = condition.toLowerCase();
+  const buyBox =
+    buyBoxes.find((bb) => bb.condition?.toLowerCase() === conditionLower) ??
+    buyBoxes[0];
   const newOffers = (payload.Summary?.NumberOfOffers ?? []).filter(
     (o) => o.condition?.toLowerCase() === "new"
   );
@@ -198,7 +207,7 @@ export async function getLivePricing(
   toFetch.forEach(({ idx, asin }, posInFetch) => {
     const entry = byAsin.get(asin) ?? responses[posInFetch];
     const payload = entry?.body?.payload;
-    const result = buildResult(asin, marketplaceId, payload);
+    const result = buildResult(asin, marketplaceId, condition, payload);
     // Skip cache write when SP-API returned no payload for this ASIN —
     // pinning a stub-with-no-Buy-Box for 5 minutes would mask transient
     // upstream issues. Only cache when the payload was structurally present.
