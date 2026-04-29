@@ -117,7 +117,7 @@ Baseline counts as of step 4b:
 |---|---|---|---|
 | shared lib (config_loader, roi_gate) | 26 | 0 | clean |
 | canonical engine | 42 | 0 | clean (was 23 pre-MCP; +19 preflight tests) |
-| pipeline steps (`fba_engine/steps/`) | 282 | 0 | step 4a IP risk (67) + step 4b decision engine (155) + step 4c.1 build output (60) |
+| pipeline steps (`fba_engine/steps/`) | 347 | 0 | 4a IP risk (67) + 4b decision engine (155) + 4c.1 build output (60) + 4c.2 build xlsx (65) |
 | abgee adapter | 12 | 0 | clean |
 | connect-beauty adapter | 15 | 0 | clean |
 | shure adapter | 9 | 3 | pre-existing — `test_ingest.py` expects abgee PDF format |
