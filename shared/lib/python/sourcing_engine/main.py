@@ -34,6 +34,7 @@ from sourcing_engine.pipeline.fees import calculate_fees_fba, calculate_fees_fbm
 from sourcing_engine.pipeline.conservative_price import calculate_conservative_price
 from sourcing_engine.pipeline.profit import calculate_profit
 from sourcing_engine.pipeline.decision import decide
+from sourcing_engine.pipeline.preflight import annotate_with_preflight
 from sourcing_engine.config import CAPITAL_EXPOSURE_LIMIT
 from sourcing_engine.utils.flags import (
     AMAZON_ON_LISTING, AMAZON_STATUS_UNKNOWN, SINGLE_FBA_SELLER,
@@ -70,6 +71,7 @@ def run_pipeline(
     input_path: str,
     output_dir: str,
     market_data_path: str | None = None,
+    preflight_enabled: bool = True,
 ):
     """Run the full pipeline for one supplier.
 
@@ -170,6 +172,13 @@ def run_pipeline(
                 row.get("supplier"), idx, row.get("ean"),
             )
             stats["errors"] += 1
+
+    # Step 4.5: Preflight annotation (informational only — does NOT affect
+    # SHORTLIST/REVIEW/REJECT decisions). Adds restriction status, FBA
+    # eligibility, live Buy Box, catalog brand, etc. as new columns. Skips
+    # silently if the MCP CLI isn't built or SP-API creds aren't set.
+    if preflight_enabled and output_rows:
+        annotate_with_preflight(output_rows)
 
     # Step 5: Output
     output_df = pd.DataFrame(output_rows)
@@ -341,6 +350,13 @@ def main():
              "fba_engine/data/pricelists/<supplier>/results/",
     )
     parser.add_argument("--market-data", default=None, help="Market data CSV path")
+    parser.add_argument(
+        "--no-preflight", action="store_true",
+        help="Skip the SP-API preflight annotation step "
+             "(restrictions, FBA eligibility, live Buy Box, catalog brand). "
+             "Default: enabled when MCP CLI is built and SP_API creds are set; "
+             "no-ops silently otherwise.",
+    )
     args = parser.parse_args()
 
     repo_root = _find_repo_root()
@@ -348,7 +364,13 @@ def main():
     input_path = args.input if args.input else str(default_in)
     output_dir = args.output if args.output else str(default_out)
 
-    run_pipeline(args.supplier, input_path, output_dir, args.market_data)
+    run_pipeline(
+        args.supplier,
+        input_path,
+        output_dir,
+        args.market_data,
+        preflight_enabled=not args.no_preflight,
+    )
 
 
 if __name__ == "__main__":

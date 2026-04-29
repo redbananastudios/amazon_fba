@@ -13,6 +13,11 @@ def write_report(df: pd.DataFrame, path: str):
             sdf = df[df["supplier"] == supplier]
             lines.append(f"\n## Supplier: {supplier}\n")
             lines.extend(_supplier_sections(sdf))
+        # Cross-supplier restriction notes section (only when SP-API
+        # preflight ran and surfaced restricted shortlist items).
+        notes = _restriction_notes_section(df)
+        if notes:
+            lines.append(notes)
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
         logger.info("Report written: %s", path)
@@ -64,6 +69,38 @@ def _supplier_sections(sdf):
     lines.append("\n### Rejected\n")
     lines.append("_None_\n" if rejected.empty else _make_table(rejected, reject_cols))
     return lines
+
+
+def _restriction_notes_section(df: pd.DataFrame) -> str:
+    """Build the cross-supplier "Restriction notes" section listing
+    SHORTLIST rows that the SP-API preflight flagged as gated/restricted.
+    Returns "" when the preflight didn't run or no shortlisted items are
+    restricted, so we don't add an empty section.
+    """
+    if "restriction_status" not in df.columns:
+        return ""
+    if "decision" not in df.columns:
+        return ""
+    gated = df[
+        (df["decision"] == "SHORTLIST")
+        & df["restriction_status"].notna()
+        & (df["restriction_status"] != "UNRESTRICTED")
+    ]
+    if gated.empty:
+        return ""
+    cols = [
+        "supplier", "ean", "asin", "product_name", "restriction_status",
+        "restriction_reasons", "profit_conservative", "margin_conservative",
+    ]
+    lines = [
+        "\n## \U0001F6AB Restriction notes\n",
+        "These SHORTLIST items have a non-UNRESTRICTED status from SP-API. "
+        "Decision logic is unchanged — these items are still profitable "
+        "enough to shortlist; the engine flags them so you can decide "
+        "whether to apply for ungating.\n",
+    ]
+    lines.append(_make_table(gated, cols))
+    return "\n".join(lines)
 
 
 def _make_table(df, cols):
