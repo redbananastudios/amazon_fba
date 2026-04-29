@@ -283,10 +283,22 @@ async function runFees(flags: Record<string, string | boolean>): Promise<unknown
     throw new Error("fees input must contain an items[] array");
   }
   const refresh = bool(flags["refresh-cache"]);
+  // --marketplace-id sets a per-item default. Items that already specify
+  // their own marketplace_id win, so a heterogeneous batch still works.
+  const marketplaceDefault =
+    typeof flags["marketplace-id"] === "string"
+      ? flags["marketplace-id"]
+      : undefined;
+  const items = marketplaceDefault
+    ? payload.items.map((it) => ({
+        ...it,
+        marketplace_id: it.marketplace_id ?? marketplaceDefault,
+      }))
+    : payload.items;
   const spApi = buildSpApi();
   const cache = buildCaches().fees;
   const results = await estimateFeesBatch(
-    { items: payload.items, refresh_cache: refresh },
+    { items, refresh_cache: refresh },
     spApi,
     cache
   );
