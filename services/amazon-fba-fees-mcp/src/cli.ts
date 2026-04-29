@@ -109,6 +109,19 @@ function buildSpApi(): SpApiService {
   });
 }
 
+// Resolve a seller_id from precedence: --seller-id flag > payload field
+// > SP_API_SELLER_ID env. Used by every subcommand that needs a seller
+// context (restrictions, preflight). `fromPayload` is optional because
+// only the preflight subcommand reads it from a JSON input file.
+function resolveSellerId(
+  flags: Record<string, string | boolean>,
+  fromPayload?: string
+): string | undefined {
+  const fromFlag =
+    typeof flags["seller-id"] === "string" ? flags["seller-id"] : undefined;
+  return fromFlag ?? fromPayload ?? process.env.SP_API_SELLER_ID;
+}
+
 function buildCaches() {
   const ttls = loadTtls();
   return {
@@ -188,10 +201,7 @@ async function runPreflight(flags: Record<string, string | boolean>): Promise<un
     typeof flags["include"] === "string"
       ? (splitList(flags["include"]) as PreflightSource[])
       : payload.include;
-  const sellerId =
-    (typeof flags["seller-id"] === "string" ? flags["seller-id"] : undefined) ??
-    payload.seller_id ??
-    process.env.SP_API_SELLER_ID;
+  const sellerId = resolveSellerId(flags, payload.seller_id);
   const marketplaceId =
     (typeof flags["marketplace-id"] === "string"
       ? flags["marketplace-id"]
@@ -219,9 +229,7 @@ async function runPreflight(flags: Record<string, string | boolean>): Promise<un
 async function runRestrictions(flags: Record<string, string | boolean>): Promise<unknown> {
   const asins = splitList(flags["asins"]);
   if (asins.length === 0) throw new Error("--asins required");
-  const sellerId =
-    (typeof flags["seller-id"] === "string" ? flags["seller-id"] : undefined) ??
-    process.env.SP_API_SELLER_ID;
+  const sellerId = resolveSellerId(flags);
   if (!sellerId) {
     throw new Error("--seller-id (or SP_API_SELLER_ID env) required for restrictions");
   }
