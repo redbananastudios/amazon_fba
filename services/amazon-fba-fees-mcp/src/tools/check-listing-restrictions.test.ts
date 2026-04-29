@@ -98,6 +98,50 @@ describe("checkListingRestrictions", () => {
     expect(result.approval_required).toBe(true);
   });
 
+  it("classifies CATEGORY_GATED via structured reasonCode (ASIN_NOT_IN_PRODUCT_GROUP)", async () => {
+    // Structured reasonCode beats free-text — even when the message
+    // happens to contain "brand", the SP-API reasonCode tells us this
+    // is a product-group (category) gate.
+    const spApi = mockSpApi({
+      restrictions: [
+        {
+          reasons: [
+            {
+              message: "Cannot list this brand.",
+              reasonCode: "ASIN_NOT_IN_PRODUCT_GROUP",
+            },
+          ],
+        },
+      ],
+    });
+    const result = await checkListingRestrictions(
+      { asin: "B0PG", seller_id: "S1" },
+      spApi
+    );
+    expect(result.status).toBe("CATEGORY_GATED");
+  });
+
+  it("does not let a 'brand' mention in one reason override a CATEGORY reason", async () => {
+    // Regression: previously classify() joined all reason messages into
+    // one blob and tested BRAND first. A category-gated ASIN whose
+    // explanatory text mentioned the word "brand" got mis-tagged.
+    const spApi = mockSpApi({
+      restrictions: [
+        {
+          reasons: [
+            { message: "Brand authorisation may also be required.", reasonCode: "APPROVAL_REQUIRED" },
+            { message: "This category requires approval.", reasonCode: "APPROVAL_REQUIRED" },
+          ],
+        },
+      ],
+    });
+    const result = await checkListingRestrictions(
+      { asin: "B0BOTH", seller_id: "S1" },
+      spApi
+    );
+    expect(result.status).toBe("CATEGORY_GATED");
+  });
+
   it("falls back to RESTRICTED for generic approval-required reasons", async () => {
     const spApi = mockSpApi({
       restrictions: [
