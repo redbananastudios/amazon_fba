@@ -294,3 +294,121 @@ def test_restriction_notes_filters_to_shortlist_and_gated():
     notes = pf.restriction_notes_for_shortlist(rows)
     assert len(notes) == 1
     assert notes[0]["asin"] == "B002"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# NaN handling — regression tests for end-to-end pipeline crash
+# Found by /qa on 2026-04-29 running connect-beauty pipeline. Rows that
+# rejected early (no Amazon match) carried market_price=NaN. json.dumps
+# emitted the literal `NaN` token, the Node CLI rejected it as invalid
+# JSON, and the whole batch failed. Worse, on Windows the subprocess
+# stderr decoder crashed on a non-ASCII byte (cp1252 default), turning
+# the batch failure into a pipeline crash.
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_row_to_item_skips_nan_market_price():
+    row = _row("B001")
+    row["market_price"] = float("nan")
+    row["raw_conservative_price"] = float("nan")
+    assert pf._row_to_item(row) is None
+
+
+def test_row_to_item_skips_inf_market_price():
+    row = _row("B001")
+    row["market_price"] = float("inf")
+    row["raw_conservative_price"] = float("inf")
+    assert pf._row_to_item(row) is None
+
+
+def test_row_to_item_falls_back_to_conservative_when_market_is_nan():
+    row = _row("B001")
+    row["market_price"] = float("nan")
+    row["raw_conservative_price"] = 11.99
+    item = pf._row_to_item(row)
+    assert item is not None
+    assert item["selling_price"] == 11.99
+
+
+def test_row_to_item_coerces_nan_cost_to_zero():
+    row = _row("B001")
+    row["buy_cost"] = float("nan")
+    item = pf._row_to_item(row)
+    assert item is not None
+    assert item["cost_price"] == 0.0
+
+
+def test_annotate_with_nan_rows_does_not_crash(tmp_path, monkeypatch):
+    """Pipeline regression: end-to-end run fed rows with NaN market_price
+    into the preflight payload, json.dumps emitted invalid JSON ('NaN'
+    token), the Node CLI rejected the whole batch. Now those rows must
+    be filtered out silently and the rest of the batch must proceed."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    monkeypatch.setenv("SP_API_CLIENT_ID", "x")
+    good = _row("B0OK")
+    bad = _row("B0NAN")
+    bad["market_price"] = float("nan")
+    bad["raw_conservative_price"] = float("nan")
+    rows = [good, bad]
+    fake_proc = MagicMock(
+        returncode=0,
+        stdout=json.dumps(_fake_cli_response(["B0OK"])),
+        stderr="",
+    )
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch.object(pf, "_find_repo_root", return_value=tmp_path), \
+         patch("subprocess.run", return_value=fake_proc) as mock_run:
+        pf.annotate_with_preflight(rows, cli_path=cli)
+    # Only the good row was sent to the CLI
+    assert mock_run.call_count == 1
+    payload = json.loads(mock_run.call_args.kwargs["input"])
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["asin"] == "B0OK"
+    # Good row got annotated
+    assert rows[0]["restriction_status"] == "UNRESTRICTED"
+    # NaN row was seeded with None columns (no crash)
+    assert rows[1]["restriction_status"] is None
+    assert rows[1]["keepa_brand"] == "KeepaBrand"
+
+
+def test_call_cli_uses_utf8_encoding_with_replacement(tmp_path, monkeypatch):
+    """Windows regression: subprocess.run defaults to cp1252 on Windows.
+    A non-ASCII byte in the CLI's stderr crashed the decoder, leaving
+    proc.stdout as None and crashing the pipeline. The fix passes
+    encoding='utf-8', errors='replace' explicitly. This test verifies
+    the kwargs are passed correctly."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    fake_proc = MagicMock(returncode=0, stdout='{"results":[]}', stderr="")
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch("subprocess.run", return_value=fake_proc) as mock_run:
+        pf._call_cli(cli, {"items": []})
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "replace"
+
+
+def test_call_cli_returns_none_when_stdout_is_none(tmp_path):
+    """Defensive regression: if subprocess returns proc.stdout=None
+    (encoding crash, killed process, etc.), _call_cli must return None
+    rather than raising TypeError on json.loads(None)."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    fake_proc = MagicMock(returncode=0, stdout=None, stderr=None)
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch("subprocess.run", return_value=fake_proc):
+        result = pf._call_cli(cli, {"items": []})
+    assert result is None
+
+
+def test_call_cli_handles_payload_with_nan_gracefully(tmp_path):
+    """Defensive: if a NaN somehow slips past _row_to_item into the payload,
+    json.dumps(allow_nan=False) raises ValueError. _call_cli catches it
+    and returns None instead of crashing the caller."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    with patch.object(pf, "_node_executable", return_value="node"):
+        result = pf._call_cli(
+            cli, {"items": [{"asin": "B001", "selling_price": float("nan")}]}
+        )
+    assert result is None

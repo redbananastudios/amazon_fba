@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -95,18 +96,53 @@ def is_preflight_available(repo_root: Path | None = None) -> tuple[bool, str]:
     return _check_runtime_ready()
 
 
+def _is_finite_positive(v: Any) -> bool:
+    """True iff v is a finite number > 0. Rejects None, NaN, inf, negatives."""
+    if v is None:
+        return False
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f) and f > 0
+
+
+def _safe_float(v: Any, default: float = 0.0) -> float:
+    """Coerce v to a finite float; falls back to default for None/NaN/inf."""
+    if v is None:
+        return default
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(f):
+        return default
+    return f
+
+
 def _row_to_item(row: dict) -> dict | None:
     asin = row.get("asin")
-    selling_price = row.get("market_price") or row.get("raw_conservative_price")
-    cost_price = row.get("buy_cost")
-    if not asin or not selling_price or selling_price <= 0:
+    if not asin:
         return None
-    if cost_price is None or cost_price < 0:
+    # Pick the first finite, positive selling price candidate. Rows that
+    # rejected early (no Amazon match, invalid EAN) carry NaN here — must
+    # filter them out, otherwise json.dumps emits the literal `NaN` token,
+    # which the Node CLI rejects as invalid JSON, failing the whole batch.
+    candidates = [row.get("market_price"), row.get("raw_conservative_price")]
+    selling_price: float | None = None
+    for c in candidates:
+        if _is_finite_positive(c):
+            selling_price = float(c)
+            break
+    if selling_price is None:
+        return None
+    cost_price = _safe_float(row.get("buy_cost"), 0.0)
+    if cost_price < 0:
         cost_price = 0.0
     return {
         "asin": asin,
-        "selling_price": float(selling_price),
-        "cost_price": float(cost_price),
+        "selling_price": selling_price,
+        "cost_price": cost_price,
     }
 
 
@@ -127,17 +163,30 @@ def _call_cli(
     try:
         proc = subprocess.run(
             [node, str(cli_path), "preflight", "--input", "-"],
-            input=json.dumps(payload),
+            input=json.dumps(payload, allow_nan=False),
             capture_output=True,
+            # Force UTF-8 with replacement so a stray non-ASCII byte in the
+            # CLI's stderr doesn't crash subprocess on Windows (default
+            # encoding is cp1252 there, which fails on bytes > 0x7f).
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout_seconds,
             check=False,
         )
     except subprocess.TimeoutExpired:
         logger.warning("preflight: CLI timed out after %ss", timeout_seconds)
         return None
+    except ValueError as err:
+        # json.dumps with allow_nan=False raises if a NaN/inf slipped past
+        # _row_to_item. Log and skip rather than crashing.
+        logger.warning("preflight: payload contains non-finite values: %s", err)
+        return None
     except Exception:
         logger.exception("preflight: CLI invocation failed")
+        return None
+    if proc.stdout is None:
+        logger.warning("preflight: CLI produced no stdout")
         return None
     if proc.returncode != 0:
         stderr = proc.stderr.strip().splitlines()[-1] if proc.stderr else ""
