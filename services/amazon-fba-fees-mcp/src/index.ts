@@ -493,6 +493,12 @@ server.tool(
       .nonnegative()
       .optional()
       .describe("Shipping/sourcing cost in GBP per item (default: 0)"),
+    include_raw: z
+      .boolean()
+      .optional()
+      .describe(
+        "Include full SP-API response payloads in each sub-result (default: false). Adds ~250KB/ASIN — only enable for debugging."
+      ),
   },
   async (args) => {
     try {

@@ -197,6 +197,7 @@ async function runPreflight(flags: Record<string, string | boolean>): Promise<un
       ? flags["marketplace-id"]
       : undefined) ?? payload.marketplace_id;
   const refreshCache = bool(flags["refresh-cache"]) || payload.refresh_cache;
+  const includeRaw = bool(flags["include-raw"]) || payload.include_raw;
 
   const spApi = buildSpApi();
   const caches = buildCaches();
@@ -208,6 +209,7 @@ async function runPreflight(flags: Record<string, string | boolean>): Promise<un
       marketplace_id: marketplaceId,
       include,
       refresh_cache: refreshCache,
+      include_raw: includeRaw,
     } as PreflightInput,
     { spApi, caches, defaultSellerId: sellerId }
   );

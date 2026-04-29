@@ -44,6 +44,10 @@ export interface PreflightInput {
   vat_registered?: boolean;
   vat_rate?: number;
   shipping_cost?: number;
+  // Default false. SP-API responses are large (~250KB/ASIN); a 20-ASIN batch
+  // serialises ~5MB through stdout that the Python pipeline ignores entirely.
+  // Opt in for direct debugging via the MCP tool surface.
+  include_raw?: boolean;
 }
 
 export interface PreflightDeps {
@@ -326,6 +330,15 @@ export async function preflightAsin(
     : Promise.resolve();
 
   await Promise.all([restrictionsP, fbaP, catalogP, feesP, pricingP]);
+
+  if (!input.include_raw) {
+    for (const r of results) {
+      if (r.restrictions) delete r.restrictions.raw;
+      if (r.fba) delete r.fba.raw;
+      if (r.catalog) delete r.catalog.raw;
+      if (r.pricing) delete r.pricing.raw;
+    }
+  }
 
   return results;
 }
