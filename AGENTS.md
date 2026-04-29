@@ -113,11 +113,13 @@ Baseline counts as of step 3:
 | Suite | Pass | Fail | Notes |
 |---|---|---|---|
 | shared lib (config_loader, roi_gate) | 26 | 0 | clean |
-| canonical engine | 23 | 0 | clean |
+| canonical engine | 34 | 0 | clean (was 23 pre-MCP; +11 preflight tests) |
 | abgee adapter | 12 | 0 | clean |
 | connect-beauty adapter | 15 | 0 | clean |
 | shure adapter | 9 | 3 | pre-existing — `test_ingest.py` expects abgee PDF format |
 | zappies adapter | 9 | 3 | pre-existing — same as shure |
+| MCP server (vitest) | 99 | 0 | clean — `services/amazon-fba-fees-mcp/`, `npm test` |
+| MCP server (live SP-API) | 5 | 0 | `npm run test:integration` — auto-skipped without creds |
 
 The 6 pre-existing failures are NOT regressions; they exist because two
 suppliers' adapter tests were copy-pasted from abgee but never adapted to
@@ -168,6 +170,60 @@ Each agent operates on its own supplier's data folder, so there are no file conf
 - Stay within their assigned supplier's data directory
 - Not modify shared files (`shared/config/`, `shared/niches/`, the canonical engine) without coordination
 - Write handoff files where appropriate so the next phase or agent knows where to pick up
+
+### 10. MCP Preflight Annotation (informational)
+
+The supplier pipeline auto-calls `services/amazon-fba-fees-mcp/dist/cli.js` after
+the match loop to annotate each row with SP-API-derived informational columns:
+restriction status, FBA eligibility, live Buy Box, catalog brand, etc.
+
+**Auto-on requirements:**
+- `services/amazon-fba-fees-mcp/dist/cli.js` exists (run `npm run build` in that folder)
+- `node` is on `PATH`
+- `SP_API_CLIENT_ID` is set (creds live in `~/.claude/settings.json` env block)
+
+If any of these are missing, the step **skips silently** (logs "preflight: skipping (...)")
+and the rows get the new columns set to `None`. Existing pipeline behaviour is
+unchanged. Opt out explicitly with `python run.py --supplier <s> --no-preflight`.
+
+**The preflight is INFORMATIONAL ONLY. Decision logic is unchanged.**
+
+- `decision.py` does NOT consider any preflight column. SHORTLIST/REVIEW/REJECT
+  counts are identical with and without preflight running.
+- A SHORTLIST item that is `BRAND_GATED` or `RESTRICTED` still SHORTLISTs. The
+  user decides whether to apply for ungating; the engine doesn't auto-reject.
+- The markdown report adds a "🚫 Restriction notes" section listing
+  SHORTLIST rows with non-`UNRESTRICTED` status, so they surface visibly.
+
+**New columns appended to CSV/Excel/output_rows** (all default to `None` if
+the preflight didn't run or the source erred):
+
+| Column | Source |
+|---|---|
+| `restriction_status` | UNRESTRICTED / RESTRICTED / BRAND_GATED / CATEGORY_GATED |
+| `restriction_reasons` | comma-joined reason codes |
+| `fba_eligible` | True / False |
+| `fba_ineligibility` | comma-joined ineligibility codes |
+| `live_buy_box` | real-time Buy Box landed price (GBP) |
+| `live_buy_box_seller` | "FBA" / "FBM" |
+| `live_offer_count_new` | total new-condition offers |
+| `live_offer_count_fba` | FBA offers (subset) |
+| `catalog_brand` | SP-API canonical brand (per spec, wins over Keepa brand) |
+| `keepa_brand` | original Keepa brand string (for diff tracking) |
+| `catalog_hazmat` | True / None |
+| `preflight_errors` | comma-joined per-source error messages |
+
+**Disk cache:** lives at `<repo>/.cache/fba-mcp/` (gitignored). TTLs default to
+restrictions 7d, FBA 7d, catalog 30d, fees 24h, pricing 5min. Override via
+`MCP_CACHE_TTL_*_S` env vars. Wipe with `rm -rf .cache/fba-mcp/`.
+
+**Direct CLI access** (for ad-hoc debugging or other tools):
+
+```bash
+node services/amazon-fba-fees-mcp/dist/cli.js preflight --input -
+node services/amazon-fba-fees-mcp/dist/cli.js restrictions --asins B001,B002
+node services/amazon-fba-fees-mcp/dist/cli.js --help
+```
 
 ---
 

@@ -6,10 +6,33 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-04-28
-**Currently working on:** Reorganisation steps 1-3 complete (config centralisation, engine deduplication, repo restructuring). Next: step 4 (extract steps catalogue from legacy Keepa pipeline).
-**Next steps:** Step 4 — port Keepa phases to Python, integrate with shared engine. Then step 5 (strategies as YAML) and step 6 (Skill 99 / new strategies).
-**Blockers:** SP-API credentials still awaited; doesn't block reorganisation but blocks `services/amazon-fba-fees-mcp/` from being usable.
+**Last updated:** 2026-04-29 (end of session)
+**Currently working on:** MCP sourcing-tools expansion — branch `feat/mcp-sourcing-tools` is **feature-complete**. Awaiting code review and PR.
+**Status:** All 7 tools shipped end-to-end with tests, plus CLI mode, pipeline integration, and live-API integration smoke tests. Branch is 11 commits ahead of main, **not yet pushed**.
+- Tier 1 (3 commits): `check_listing_restrictions`, `check_fba_eligibility`, `estimate_fees_batch`
+- Tier 2 (2 commits): `get_catalog_item`, `get_live_pricing`
+- Tier 3 (2 commits): `preflight_asin` composite + CLI mode (`src/cli.ts`)
+- Pipeline integration (1 commit): `pipeline/preflight.py` annotates rows after the match loop with informational SP-API columns; markdown report adds "🚫 Restriction notes" section
+- Integration tests (1 commit): 5 read-only smoke tests against live SP-API
+- Tests: **99/99 vitest** + **34/34 sourcing_engine pytest** (11 new for preflight) + **5/5 live SP-API integration** all green
+- **Decision-gate untouched** per spec: SHORTLIST/REVIEW/REJECT counts unchanged. Restriction/eligibility data is informational only.
+
+**Next steps:**
+1. Run code-reviewer agent over the 11-commit diff (per global CLAUDE.md: "Before creating any PR, run a thorough code review")
+2. Resolve any review findings
+3. Push branch and open PR (don't merge — user reviews whole thing as one unit)
+
+**Blockers:** None.
+
+### Workflow notes (cumulative across sessions)
+- **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.
+- **TS imports:** This project uses ESM/nodenext — relative imports MUST end in `.js` even when source is `.ts` (e.g., `import {X} from "./foo.js"`). Otherwise `npm run build` fails (vitest is more lenient).
+- **MCP test path:** Always run `npm` commands inside the actual worktree's `services/amazon-fba-fees-mcp/`, not `O:/fba/services/amazon-fba-fees-mcp/`. They're separate copies.
+- **Credential sync:** After editing `F:\My Drive\workspace\credentials.env`, run `& 'F:\My Drive\workspace\sync-credentials.ps1'` (PowerShell — bash quoting breaks on the space in "My Drive"). Then verify with `grep '"SP_API_' "C:/Users/peter/.claude/settings.json"`.
+- **MCP `.mcp.json` path** at repo root references the MCP at `services/amazon-fba-fees-mcp/dist/index.js` (corrected from old root-level path during cleanup).
+- **SP-API endpoint group names** (amazon-sp-api lib): catalogItems, productFees, listingsRestrictions, fbaInboundEligibility, productPricing. Use `client.callAPI({ operation, endpoint, ... })`.
+- **Disk cache layout:** `<repo>/.cache/fba-mcp/<resource>/<key-parts>__joined.json` — gitignored. `DiskCache.get()` returns `{ hit, stale, data }` enabling stale-on-error fallback.
+- **Vitest integration tests:** Live in `src/__integration__/*.integration.test.ts`. Excluded from default `npm test` via `vitest.config.ts` exclude. Run with `npm run test:integration` (separate `vitest.integration.config.ts`).
 
 ## Session Protocol
 - At the end of each session, update the "Current State" section above

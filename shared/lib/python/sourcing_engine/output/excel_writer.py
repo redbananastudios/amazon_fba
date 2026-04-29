@@ -41,6 +41,20 @@ COLUMNS = [
     ("capital_exposure",        "Capital Exposure",     16, "gbp"),
     ("decision_reason",         "Decision Reason",      50, "text"),
     ("risk_flags",              "Risk Flags",           40, "text"),
+    # SP-API preflight columns (informational only — appended at end per spec).
+    # Populated when MCP CLI is built and SP_API creds are set; blank otherwise.
+    ("restriction_status",      "Restriction Status",   18, "text"),
+    ("restriction_reasons",     "Restriction Reasons",  30, "text"),
+    ("fba_eligible",            "FBA Eligible",         12, "text"),
+    ("fba_ineligibility",       "FBA Ineligibility",    24, "text"),
+    ("live_buy_box",            "Live Buy Box",         14, "gbp"),
+    ("live_buy_box_seller",     "Live BB Seller",       14, "text"),
+    ("live_offer_count_new",    "Offers (new)",         12, "int"),
+    ("live_offer_count_fba",    "Offers (FBA)",         12, "int"),
+    ("catalog_brand",           "Catalog Brand",        18, "text"),
+    ("keepa_brand",             "Keepa Brand",          18, "text"),
+    ("catalog_hazmat",          "Hazmat",               10, "text"),
+    ("preflight_errors",        "Preflight Errors",     40, "text"),
 ]
 
 

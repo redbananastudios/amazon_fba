@@ -39,3 +39,119 @@ export interface SheetRow {
   margin_pct?: number;
   roi_pct?: number;
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Sourcing-tools shared types (Tier 1 / 2 / 3)
+// ────────────────────────────────────────────────────────────────────────
+
+export type RestrictionStatus =
+  | "UNRESTRICTED"
+  | "RESTRICTED"
+  | "BRAND_GATED"
+  | "CATEGORY_GATED";
+
+export interface RestrictionReason {
+  message: string;
+  reasonCode?: string;
+  link?: string;
+}
+
+export interface ListingRestrictionsResult {
+  asin: string;
+  status: RestrictionStatus;
+  reasons: RestrictionReason[];
+  approval_required: boolean;
+  marketplace_id: string;
+  raw?: unknown;
+}
+
+export interface FbaEligibilityIneligibilityReason {
+  code: string;
+  description: string;
+}
+
+export interface FbaEligibilityResult {
+  asin: string;
+  eligible: boolean;
+  ineligibility_reasons: FbaEligibilityIneligibilityReason[];
+  marketplace_id: string;
+  program: string;
+  raw?: unknown;
+}
+
+export interface BatchFeeItem {
+  asin: string;
+  selling_price: number;
+  marketplace_id?: string;
+  identifier?: string;
+}
+
+export interface BatchFeeResultEntry {
+  asin: string;
+  identifier: string;
+  ok: boolean;
+  fees?: FeeEstimate;
+  error?: string;
+}
+
+export interface CatalogItemDimensions {
+  length?: number;
+  width?: number;
+  height?: number;
+  weight?: number;
+  unit?: string;
+}
+
+export interface CatalogItemImage {
+  link: string;
+  height?: number;
+  width?: number;
+}
+
+export interface CatalogItemClassification {
+  classificationId: string;
+  displayName: string;
+}
+
+export interface CatalogItemResult {
+  asin: string;
+  title?: string;
+  brand?: string;
+  manufacturer?: string;
+  dimensions?: CatalogItemDimensions;
+  hazmat?: boolean;
+  classifications?: CatalogItemClassification[];
+  images?: CatalogItemImage[];
+  marketplace_id: string;
+  raw?: unknown;
+}
+
+export interface LivePricingResult {
+  asin: string;
+  buy_box_price?: number;
+  buy_box_seller?: "AMZN" | "FBA" | "FBM" | string;
+  listing_price?: number;
+  shipping?: number;
+  offer_count_new?: number;
+  offer_count_fba?: number;
+  marketplace_id: string;
+  raw?: unknown;
+}
+
+export interface PreflightItem {
+  asin: string;
+  selling_price: number;
+  cost_price: number;
+}
+
+export interface PreflightResult {
+  asin: string;
+  restrictions?: ListingRestrictionsResult;
+  fba?: FbaEligibilityResult;
+  fees?: FeeEstimate;
+  catalog?: CatalogItemResult;
+  pricing?: LivePricingResult;
+  profitability?: ProfitabilityResult;
+  cached: Record<string, boolean>;
+  errors: Array<{ source: string; message: string }>;
+}

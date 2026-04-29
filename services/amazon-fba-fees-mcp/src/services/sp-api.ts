@@ -126,4 +126,151 @@ export class SpApiService {
       currency: totalFees?.CurrencyCode ?? "GBP",
     };
   }
+
+  async getListingsRestrictions(params: {
+    asin: string;
+    sellerId: string;
+    marketplaceId: string;
+    conditionType?: string;
+  }): Promise<unknown> {
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getListingsRestrictions",
+        endpoint: "listingsRestrictions",
+        query: {
+          asin: params.asin,
+          sellerId: params.sellerId,
+          marketplaceIds: [params.marketplaceId],
+          conditionType: params.conditionType ?? "new_new",
+        },
+        options: { version: "2021-08-01" },
+      })
+    );
+  }
+
+  async getItemEligibilityPreview(params: {
+    asin: string;
+    marketplaceId: string;
+    program?: string;
+  }): Promise<unknown> {
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getItemEligibilityPreview",
+        endpoint: "fbaInboundEligibility",
+        query: {
+          asin: params.asin,
+          marketplaceIds: [params.marketplaceId],
+          program: params.program ?? "INBOUND",
+        },
+      })
+    );
+  }
+
+  /**
+   * Batch fees estimate (up to 20 items). Each request body item carries its
+   * own MarketplaceId, so heterogeneous batches are allowed.
+   */
+  async getMyFeesEstimates(
+    items: Array<{
+      asin: string;
+      sellingPrice: number;
+      marketplaceId: string;
+      identifier: string;
+      currency?: string;
+    }>
+  ): Promise<unknown> {
+    if (items.length === 0) return [];
+    if (items.length > 20) {
+      throw new Error(
+        `getMyFeesEstimates: max 20 items per call, got ${items.length}`
+      );
+    }
+    const body = items.map((it) => ({
+      FeesEstimateRequest: {
+        MarketplaceId: it.marketplaceId,
+        IsAmazonFulfilled: true,
+        PriceToEstimateFees: {
+          ListingPrice: {
+            CurrencyCode: it.currency ?? "GBP",
+            Amount: it.sellingPrice,
+          },
+          Shipping: {
+            CurrencyCode: it.currency ?? "GBP",
+            Amount: 0,
+          },
+        },
+        Identifier: it.identifier,
+      },
+      IdType: "ASIN",
+      IdValue: it.asin,
+    }));
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getMyFeesEstimates",
+        endpoint: "productFees",
+        body,
+      })
+    );
+  }
+
+  async getCatalogItemFull(params: {
+    asin: string;
+    marketplaceId: string;
+    includedData?: string[];
+  }): Promise<unknown> {
+    const includedData = params.includedData ?? [
+      "summaries",
+      "attributes",
+      "dimensions",
+      "images",
+      "classifications",
+      "salesRanks",
+      "identifiers",
+    ];
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getCatalogItem",
+        endpoint: "catalogItems",
+        path: { asin: params.asin },
+        query: {
+          marketplaceIds: [params.marketplaceId],
+          includedData,
+        },
+        options: { version: "2022-04-01" },
+      })
+    );
+  }
+
+  /**
+   * Batch item-offers (Buy Box + offer summary per ASIN). Up to 20 ASINs per
+   * call. Each request inside the batch carries its own MarketplaceId, so
+   * heterogeneous batches are allowed.
+   */
+  async getItemOffersBatch(params: {
+    asins: string[];
+    marketplaceId: string;
+    itemCondition?: string;
+    customerType?: string;
+  }): Promise<unknown> {
+    if (params.asins.length === 0) return { responses: [] };
+    if (params.asins.length > 20) {
+      throw new Error(
+        `getItemOffersBatch: max 20 ASINs per call, got ${params.asins.length}`
+      );
+    }
+    const requests = params.asins.map((asin) => ({
+      uri: `/products/pricing/v0/items/${asin}/offers`,
+      method: "GET",
+      MarketplaceId: params.marketplaceId,
+      ItemCondition: params.itemCondition ?? "New",
+      CustomerType: params.customerType ?? "Consumer",
+    }));
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "getItemOffersBatch",
+        endpoint: "productPricing",
+        body: { requests },
+      })
+    );
+  }
 }

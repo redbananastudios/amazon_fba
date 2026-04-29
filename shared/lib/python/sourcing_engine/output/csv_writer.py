@@ -13,6 +13,14 @@ OUTPUT_COLUMNS = [
     "margin_current", "margin_conservative", "sales_estimate", "max_buy_price",
     "capital_exposure", "size_tier", "history_days", "gated",
     "decision", "decision_reason", "risk_flags",
+    # SP-API preflight columns (informational only — appended at end per spec).
+    # Populated when MCP CLI is built and SP_API creds are set; None otherwise.
+    "restriction_status", "restriction_reasons",
+    "fba_eligible", "fba_ineligibility",
+    "live_buy_box", "live_buy_box_seller",
+    "live_offer_count_new", "live_offer_count_fba",
+    "catalog_brand", "keepa_brand", "catalog_hazmat",
+    "preflight_errors",
 ]
 
 
