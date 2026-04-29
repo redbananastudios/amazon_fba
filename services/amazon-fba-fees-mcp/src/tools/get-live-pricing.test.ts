@@ -146,6 +146,46 @@ describe("getLivePricing", () => {
     expect(result.offer_count_new).toBe(1);
   });
 
+  it("classifies AMZN when Buy Box winner is Amazon Retail (UK seller ID)", async () => {
+    // UK Amazon Retail seller ID. When this seller holds the Buy Box,
+    // it materially changes sourcing math (Amazon won't share Buy Box
+    // long-term), so we want to flag it distinctly from generic FBA.
+    const spApi = mockSpApi({
+      responses: [
+        {
+          body: {
+            payload: {
+              ASIN: "B0AMZN",
+              MarketplaceID: UK,
+              Status: "Success",
+              Summary: {
+                NumberOfOffers: [
+                  { condition: "new", fulfillmentChannel: "Amazon", OfferCount: 1 },
+                ],
+                BuyBoxPrices: [
+                  {
+                    condition: "New",
+                    LandedPrice: { Amount: 14.99, CurrencyCode: "GBP" },
+                  },
+                ],
+              },
+              Offers: [
+                {
+                  SellerId: "A3P5ROKL5A1OLE",
+                  IsBuyBoxWinner: true,
+                  IsFulfilledByAmazon: true,
+                },
+              ],
+            },
+          },
+          request: { uri: "/products/pricing/v0/items/B0AMZN/offers" },
+        },
+      ],
+    });
+    const [result] = await getLivePricing({ asins: ["B0AMZN"] }, spApi);
+    expect(result.buy_box_seller).toBe("AMZN");
+  });
+
   it("sums NumberOfOffers across new offer entries", async () => {
     const spApi = mockSpApi({
       responses: [

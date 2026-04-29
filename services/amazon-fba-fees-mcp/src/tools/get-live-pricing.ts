@@ -66,7 +66,18 @@ function asinFromUri(uri?: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
-function classifyBuyBoxSeller(payload: SpApiPayload): string | undefined {
+// Amazon Retail seller IDs keyed by marketplace ID. UK is the only one
+// verified for this single-marketplace deployment (AGENTS.md: "single
+// Amazon marketplace"). Add others only after verifying the seller ID
+// against a known Amazon-Retail-on-listing ASIN.
+const AMZN_SELLER_IDS: Record<string, string> = {
+  A1F83G8C2ARO7P: "A3P5ROKL5A1OLE", // UK
+};
+
+function classifyBuyBoxSeller(
+  payload: SpApiPayload,
+  marketplaceId: string
+): string | undefined {
   // Only classify when there's an actual Buy Box winner. Falling back to
   // offers[0] would silently mislabel any ASIN where no offer holds the
   // Buy Box (suppressed listing, no qualifying offer, etc.) — the
@@ -75,6 +86,8 @@ function classifyBuyBoxSeller(payload: SpApiPayload): string | undefined {
   const offers = payload.Offers ?? [];
   const winner = offers.find((o) => o.IsBuyBoxWinner);
   if (!winner) return undefined;
+  const amznId = AMZN_SELLER_IDS[marketplaceId];
+  if (amznId && winner.SellerId === amznId) return "AMZN";
   if (winner.IsFulfilledByAmazon) return "FBA";
   return "FBM";
 }
@@ -101,7 +114,7 @@ function buildResult(
   return {
     asin,
     buy_box_price: buyBox?.LandedPrice?.Amount,
-    buy_box_seller: classifyBuyBoxSeller(payload),
+    buy_box_seller: classifyBuyBoxSeller(payload, marketplaceId),
     listing_price: buyBox?.ListingPrice?.Amount,
     shipping: buyBox?.Shipping?.Amount,
     offer_count_new: newOffers.length > 0 ? offer_count_new : undefined,
