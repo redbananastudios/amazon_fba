@@ -60,17 +60,22 @@ function normalise(
   marketplaceId: string,
   program: string,
   raw: SpApiEligibilityResponse
-): FbaEligibilityResult {
+): { result: FbaEligibilityResult; wellFormed: boolean } {
   const payload = raw?.payload ?? raw;
+  const wellFormed =
+    !!payload && typeof payload.isEligibleForProgram === "boolean";
   const eligible = payload?.isEligibleForProgram ?? false;
   const codes = payload?.ineligibilityReasonList ?? [];
   return {
-    asin,
-    eligible,
-    ineligibility_reasons: codes.map(describe),
-    marketplace_id: marketplaceId,
-    program,
-    raw,
+    result: {
+      asin,
+      eligible,
+      ineligibility_reasons: codes.map(describe),
+      marketplace_id: marketplaceId,
+      program,
+      raw,
+    },
+    wellFormed,
   };
 }
 
@@ -94,8 +99,16 @@ export async function checkFbaEligibility(
       marketplaceId,
       program,
     })) as SpApiEligibilityResponse;
-    const result = normalise(input.asin, marketplaceId, program, raw);
-    cache?.set(cacheKey, result);
+    const { result, wellFormed } = normalise(
+      input.asin,
+      marketplaceId,
+      program,
+      raw
+    );
+    // Only persist a "trusted" answer. A malformed/empty SP-API response
+    // would otherwise be cached as eligible=false for 7 days, masking a
+    // transient upstream issue. Skipping the write lets the next call retry.
+    if (wellFormed) cache?.set(cacheKey, result);
     return result;
   } catch (err) {
     if (cache) {

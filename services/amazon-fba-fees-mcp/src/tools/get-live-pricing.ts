@@ -67,8 +67,13 @@ function asinFromUri(uri?: string): string | undefined {
 }
 
 function classifyBuyBoxSeller(payload: SpApiPayload): string | undefined {
+  // Only classify when there's an actual Buy Box winner. Falling back to
+  // offers[0] would silently mislabel any ASIN where no offer holds the
+  // Buy Box (suppressed listing, no qualifying offer, etc.) — the
+  // buy_box_price stays undefined in those cases, so seller class must
+  // also be undefined to stay consistent.
   const offers = payload.Offers ?? [];
-  const winner = offers.find((o) => o.IsBuyBoxWinner) ?? offers[0];
+  const winner = offers.find((o) => o.IsBuyBoxWinner);
   if (!winner) return undefined;
   if (winner.IsFulfilledByAmazon) return "FBA";
   return "FBM";
@@ -181,7 +186,10 @@ export async function getLivePricing(
     const entry = byAsin.get(asin) ?? responses[posInFetch];
     const payload = entry?.body?.payload;
     const result = buildResult(asin, marketplaceId, payload);
-    cache?.set([marketplaceId, condition, asin], result);
+    // Skip cache write when SP-API returned no payload for this ASIN —
+    // pinning a stub-with-no-Buy-Box for 5 minutes would mask transient
+    // upstream issues. Only cache when the payload was structurally present.
+    if (payload) cache?.set([marketplaceId, condition, asin], result);
     results[idx] = result;
   });
 

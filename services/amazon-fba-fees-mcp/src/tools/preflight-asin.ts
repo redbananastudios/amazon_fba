@@ -277,6 +277,12 @@ export async function preflightAsin(
               }
             });
           } catch (err) {
+            // Defensive: estimateFeesBatch currently catches its own
+            // SP-API errors and emits per-item error entries — its only
+            // throw path is items.length > 20, which preflight pre-guards
+            // above. Keeping this catch matches the pricing branch below
+            // and ensures any future contract change surfaces as a
+            // batch-level error rather than crashing the whole composite.
             const message = (err as Error).message;
             results.forEach((r) =>
               r.errors.push({ source: "fees", message })

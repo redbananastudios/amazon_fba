@@ -154,7 +154,14 @@ def _coerce_result(result: dict, original_row: dict) -> dict:
     """Translate a single preflight result envelope into the flat column set
     we attach to the row. Missing/error sources resolve to None."""
     out: dict[str, Any] = {col: None for col in PREFLIGHT_COLUMNS}
-    out["keepa_brand"] = original_row.get("brand")
+    # Prefer an existing keepa_brand column if a prior pass set it — that's
+    # the original Keepa value. Falling back to original_row.get("brand")
+    # only on first-pass rows means re-running preflight (e.g. with refresh
+    # cache) doesn't clobber the historical brand if some upstream step
+    # has since merged the SP-API canonical brand into row["brand"].
+    out["keepa_brand"] = (
+        original_row.get("keepa_brand") or original_row.get("brand")
+    )
 
     restrictions = result.get("restrictions") or {}
     if restrictions:

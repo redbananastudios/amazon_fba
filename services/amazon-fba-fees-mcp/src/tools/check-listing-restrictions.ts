@@ -55,7 +55,8 @@ function normalise(
   asin: string,
   marketplaceId: string,
   raw: SpApiRestrictionsResponse
-): ListingRestrictionsResult {
+): { result: ListingRestrictionsResult; wellFormed: boolean } {
+  const wellFormed = !!raw && Array.isArray(raw.restrictions);
   const restrictions = raw?.restrictions ?? [];
   const reasons: RestrictionReason[] = restrictions.flatMap((r) =>
     (r.reasons ?? []).map((reason) => ({
@@ -72,12 +73,16 @@ function normalise(
         r.reasonCode === "APPROVAL_REQUIRED" || r.reasonCode === undefined
     );
   return {
-    asin,
-    status,
-    reasons,
-    approval_required: status === "UNRESTRICTED" ? false : approval_required,
-    marketplace_id: marketplaceId,
-    raw,
+    result: {
+      asin,
+      status,
+      reasons,
+      approval_required:
+        status === "UNRESTRICTED" ? false : approval_required,
+      marketplace_id: marketplaceId,
+      raw,
+    },
+    wellFormed,
   };
 }
 
@@ -107,8 +112,10 @@ export async function checkListingRestrictions(
       marketplaceId,
       conditionType,
     })) as SpApiRestrictionsResponse;
-    const result = normalise(input.asin, marketplaceId, raw);
-    cache?.set(cacheKey, result);
+    const { result, wellFormed } = normalise(input.asin, marketplaceId, raw);
+    // Skip cache write if SP-API returned a malformed/empty response, so a
+    // transient upstream issue isn't pinned at UNRESTRICTED for 7 days.
+    if (wellFormed) cache?.set(cacheKey, result);
     return result;
   } catch (err) {
     if (cache) {

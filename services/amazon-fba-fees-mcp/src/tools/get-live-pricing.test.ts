@@ -172,6 +172,33 @@ describe("getLivePricing", () => {
     expect(result.offer_count_new).toBeUndefined();
   });
 
+  it("returns undefined buy_box_seller when offers exist but none holds the Buy Box", async () => {
+    // Regression: previously classifyBuyBoxSeller fell back to offers[0]
+    // and returned FBA/FBM even though buy_box_price was undefined,
+    // silently misleading callers.
+    const spApi = mockSpApi({
+      responses: [
+        {
+          body: {
+            payload: {
+              ASIN: "B0NOWIN",
+              Status: "Success",
+              Summary: { NumberOfOffers: [], BuyBoxPrices: [] },
+              Offers: [
+                { SellerId: "S1", IsBuyBoxWinner: false, IsFulfilledByAmazon: true },
+                { SellerId: "S2", IsBuyBoxWinner: false, IsFulfilledByAmazon: false },
+              ],
+            },
+          },
+          request: { uri: "/products/pricing/v0/items/B0NOWIN/offers" },
+        },
+      ],
+    });
+    const [result] = await getLivePricing({ asins: ["B0NOWIN"] }, spApi);
+    expect(result.buy_box_price).toBeUndefined();
+    expect(result.buy_box_seller).toBeUndefined();
+  });
+
   it("aligns out-of-order responses by ASIN", async () => {
     const spApi = mockSpApi({
       responses: [
