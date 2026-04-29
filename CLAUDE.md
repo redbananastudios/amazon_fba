@@ -24,12 +24,25 @@ cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live (require
 cd shared/lib/python && pytest sourcing_engine/tests/        # 42/42
 ```
 
-**Possible follow-up tickets** (documented in PR #5 description, not blockers):
-- M1 `get-live-pricing.ts` — defensive condition-filter on `BuyBoxPrices[]`
-- M2 `check-listing-restrictions.ts` — switch to reasonCode-first BRAND/CATEGORY classification
-- M3 `types.ts` — `raw` payloads bloat composite output ~10×; consider `include_raw?: boolean` (default false)
-- M4 `get-catalog-item.ts` — hazmat false-positive on string values like "none"
-- L1-L7 — minor CLI consistency, type fix-ups
+**Possible follow-up tickets** (from pre-PR code review; none are blocking, all green-tested):
+
+Medium-priority (real defects, low blast radius):
+
+- **M1** `services/amazon-fba-fees-mcp/src/tools/get-live-pricing.ts:85`. `buy_box_price` reads `BuyBoxPrices[0]` without a condition filter. SP-API ordering is currently fine because the request always asks for `New`, but a future API quirk could land Used at index 0 silently. Fix: filter by requested condition explicitly, fall back to `[0]`.
+- **M2** `services/amazon-fba-fees-mcp/src/tools/check-listing-restrictions.ts:44-52`. BRAND_GATED beats CATEGORY_GATED when both keywords appear in the message blob. SP-API actually returns structured `reasonCode` values (e.g. `APPROVAL_REQUIRED`, `ASIN_NOT_IN_PRODUCT_GROUP`) which are more reliable than message regex. Fix: prefer reasonCode discrimination, fall back to message hints.
+- **M3** `services/amazon-fba-fees-mcp/src/types.ts:65,79,126,138`. Tools embed full SP-API `raw` payloads in every result. A 20-ASIN preflight serialises ~5MB through stdout; the Python side ignores `raw` entirely. Fix: add `include_raw?: boolean` (default false) to `PreflightInput`, propagate through to the sub-tools; keep `raw` for individual tool calls.
+- **M4** `services/amazon-fba-fees-mcp/src/tools/get-catalog-item.ts:128-156`. Hazmat detection deny-lists `"no"`, `"false"`, `"not_applicable"` etc. but a value like `"none"`/`"non_dangerous"` would still flag as hazmat. Fix: add to deny-list, or switch to allow-list of known hazmat indicators (`un_*`, `class_*`, `true`, `yes`, `hazmat`).
+
+Low-priority (cosmetic / future-proofing):
+
+- **L1** `services/amazon-fba-fees-mcp/src/cli.ts:272-292`. `fees` subcommand ignores `--marketplace-id`. Thread it through as a per-item default.
+- **L2** `services/amazon-fba-fees-mcp/src/cli.ts:50-65`. `parseArgs` treats a positional arg as a boolean-flag value if it follows `--<flag>`. No current bug because no subcommand has post-flag positionals; future footgun.
+- **L3** `services/amazon-fba-fees-mcp/src/cli.ts:194,222-224`. `runPreflight` and `runRestrictions` resolve `seller_id` independently. Extract to `resolveSellerId(flags)`.
+- **L4** `services/amazon-fba-fees-mcp/src/services/disk-cache.ts:91,111`. `get(...keyParts)` is spread, `set(keyParts, ...)` is array. Asymmetric. Pick one (recommend spread + options object).
+- **L5** `shared/lib/python/sourcing_engine/pipeline/preflight.py:128-135`. Subprocess `text=True` + large `raw` payloads on Windows could approach pipe-buffer limits for very large batches. Mitigated if M3 lands.
+- **L7** `services/amazon-fba-fees-mcp/src/types.ts:132`. `buy_box_seller` documents `"AMZN"` but the classifier never returns it (Amazon Retail gets bucketed as `"FBA"`). Either remove from the type union or implement marketplace-keyed seller-ID detection.
+
+(M5 and L6 from the original review were resolved before the PR landed — see commit `2a513d9`.)
 
 **Next steps:** None pending. User can pick from the M-series follow-ups or move to other work (e.g., reorganisation step 4: extract Keepa phases from `_legacy_keepa/`).
 
