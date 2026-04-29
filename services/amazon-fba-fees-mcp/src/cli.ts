@@ -47,9 +47,28 @@ interface ParsedArgs {
 function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
+  let stopParsing = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (stopParsing) {
+      positional.push(arg);
+      continue;
+    }
+    // `--` stop token: everything after is positional. Standard POSIX
+    // convention, lets callers force a positional after a boolean flag
+    // (e.g. `--refresh-cache -- some-positional`) without ambiguity.
+    if (arg === "--") {
+      stopParsing = true;
+      continue;
+    }
     if (arg.startsWith("--")) {
+      // `--key=value` form: explicit value, no greedy lookahead.
+      // Use this when a positional follows a boolean flag.
+      const eq = arg.indexOf("=");
+      if (eq !== -1) {
+        flags[arg.slice(2, eq)] = arg.slice(eq + 1);
+        continue;
+      }
       const key = arg.slice(2);
       const next = argv[i + 1];
       if (next === undefined || next.startsWith("--")) {
