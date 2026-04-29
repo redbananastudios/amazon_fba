@@ -7,51 +7,31 @@
 
 ## Current State
 **Last updated:** 2026-04-29 (continuing same session)
-**Currently working on:** Step 4 in flight — porting legacy Node.js Keepa pipeline to Python composable steps under `fba_engine/steps/`. Steps 4b + 4c.1 merged this session. Step 4c.2 (XLSX) is the open PR; step 4c.3 (GSheets) is queued.
-**Status:** PRs #10 (step 4b) and #12 (step 4c.1) merged into main. PR for step 4c.2 (build_xlsx) just opened. PR was originally #11 stacked on #10 but auto-closed when #10's branch was deleted; PR #12 is the rebased replacement.
+**Currently working on:** Step 4c (Skill 5 build output) is now FULLY ported to Python — all three sub-steps shipped this session. Step 4c.3 (GSheets push) is the open PR. Once it merges, the legacy Keepa pipeline at `fba_engine/_legacy_keepa/` has no remaining unported code paths used by the active strategies.
+**Status:** PRs #10 (4b decision), #12 (4c.1 merge), #13 (4c.2 xlsx) merged. PR open for 4c.3 (push_to_gsheets).
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                  # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live SP-API
 cd shared/lib/python && pytest tests/ sourcing_engine/tests/ # 68/68
-pytest fba_engine/steps/tests/                               # 347/347 (67 ip_risk + 155 decision_engine + 60 build_output + 65 build_xlsx)
+pytest fba_engine/steps/tests/                               # 384/384 (67 ip_risk + 155 decision + 60 build_output + 65 build_xlsx + 37 push_gsheets)
 ```
 
 ### What landed this session
 
-**Step 4b — Decision Engine port** (PR #10, MERGED):
-- 1:1 port of legacy `phase6_decision.js` (651 LOC) at `fba_engine/steps/decision_engine.py`.
-- 155 pytest cases. Two-sheet Excel shortlist via openpyxl.
+**Step 4b — Decision Engine port** (PR #10, MERGED): 1:1 port of `phase6_decision.js` (651 LOC) → 155 pytest cases. Two-sheet Excel shortlist via openpyxl.
 
-**Step 4c.1 — Build Output merge** (PR #12, MERGED):
-- 1:1 port of per-niche `phase5_build.js` (~330 LOC) to a generic
-  `fba_engine/steps/build_output.py`. 67-column `final_results.csv` +
-  reject + supplier skeleton + stats + handoff.
-- 60 pytest cases. Reviewer surfaced 2 MEDIUM porting bugs (sort key
-  divergences) + 1 latent pd.NA crash; all addressed.
+**Step 4c.1 — Build Output merge** (PR #12, MERGED): 1:1 port of `phase5_build.js` (~330 LOC) → 60 pytest cases. Reviewer surfaced 2 MEDIUM porting bugs (sort key divergences) + 1 latent pd.NA crash; all addressed.
 
-**Step 4c.2 — XLSX styling** (PR open):
-- Port of `build_final_xlsx.js` (529 LOC) to Python via openpyxl at
-  `fba_engine/steps/build_xlsx.py` (~520 LOC).
-- 11 conditional-formatting rules (verdict / lane / IP risk band /
-  Amazon-on-listing / gated / brand 1P / weight flag / listing quality /
-  price compression / ROI text colour / score band fill).
-- Two deliberate JS-vs-Python divergences, both flagged in PR description:
-  1. Extends styling to 67 columns (legacy hard-coded 64) with a new
-     "Product Codes" group for EAN/UPC/GTIN.
-  2. Adds Trade Price (col 61) to NUMERIC_COLS — legacy JS had it in
-     GBP_COLS but not NUMERIC_COLS, so the GBP format never applied.
-- 65 pytest cases. Reviewer surfaced 1 MEDIUM coverage gap (4
-  conditional-fill rules untested at cell level); all addressed via
-  9 new branch-specific tests.
+**Step 4c.2 — XLSX styling** (PR #13, MERGED): port of `build_final_xlsx.js` (529 LOC) via openpyxl → 65 pytest cases. Two deliberate JS divergences (64→67 column extension; Trade Price NUMERIC_COLS fix). Reviewer surfaced coverage gap; addressed with 9 extra branch-specific tests.
 
-### Step 4c follow-ups queued
-
-- **Step 4c.3** — port `push_to_gsheets.js` (311 LOC) to Python.
-  Adds `google-api-python-client` + `google-auth` deps. Three-strategy
-  fallback (xlsx-conversion → raw-xlsx → Sheets API create). Estimated ~250
-  LOC + 80 tests with mocked googleapis.
+**Step 4c.3 — Google Sheets push** (PR open):
+- Port of `push_to_gsheets.js` (311 LOC) at `fba_engine/steps/push_to_gsheets.py` (~440 LOC).
+- 3-strategy fallback chain: xlsx-conversion upload → raw-xlsx upload → Sheets API create+populate.
+- Uses `google-api-python-client` + `google-auth` (already installed in env; lazy-imported in `_build_clients` so the module loads cleanly on systems without the deps).
+- 37 pytest cases all using mocked googleapis (no network).
+- Reviewer flagged 1 HIGH (`_is_quota_error` would silently miss real `HttpError 403` because httplib2 may surface status as a string) + 3 MEDIUMs (full-chain test, `PushFailedError` test, sequencing test) + LOWs (em-dash in title, datetime import location). All addressed.
 
 ### Prior session highlights (kept for context)
 
@@ -69,15 +49,16 @@ those quotes when writing to `settings.json`. Bash `source` now works on the fil
 | 4 — IP Risk | 351 | **MERGED PR #8** |
 | 6 — Decision Engine | 651 | **MERGED PR #10** (step 4b) |
 | 5.1 — Build Output (merge logic) | ~330 | **MERGED PR #12** (step 4c.1) |
-| 5.2 — Build Output (XLSX styling) | 529 | **PR open** (step 4c.2, this session) |
-| 5.3 — Build Output (GSheets push) | 311 | **NEXT (step 4c.3)** — needs `google-api-python-client` dep |
+| 5.2 — Build Output (XLSX styling) | 529 | **MERGED PR #13** (step 4c.2) |
+| 5.3 — Build Output (GSheets push) | 311 | **PR open** (step 4c.3, this session) |
 | 3 — Scoring | 0 (SKILL.md) | **Scope decision needed**: extract a canonical scoring step, or keep agent-driven? Per-niche scripts get generated under `data/{niche}/working/`. |
 | 1 — Keepa Finder | 0 (browser) | **Separate scoping**: Keepa API integration vs Playwright vs keep as Claude Code skill |
 | 2 — SellerAmp | 0 (browser) | Same scoping question as Skill 1 |
 
-**Blockers:** None for step 4c.2. Step 4c.3 needs Peter's call on whether to
-add `google-api-python-client` (full Python port) vs keep `push_to_gsheets.js`
-as a Node shim invoked via subprocess vs defer GSheets entirely.
+**Blockers:** None remaining for step 4. Once 4c.3 merges, the only outstanding
+items are the (deferred) `_helpers.py` extraction across step files, Skill 3
+scope decision (extract canonical scoring step or keep agent-driven?), and
+the browser-vs-API scoping for Skills 1 + 2.
 
 ### Workflow notes (cumulative across sessions)
 - **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.
