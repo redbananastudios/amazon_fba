@@ -7,33 +7,46 @@
 
 ## Current State
 **Last updated:** 2026-04-29 (continuing same session)
-**Currently working on:** Step 4 in flight — porting legacy Node.js Keepa pipeline to Python composable steps under `fba_engine/steps/`. Step 4b (Decision Engine) just landed; next is step 4c (Skill 5 Build Output).
-**Status:** Five PRs merged in the prior session (#6 doc-drift, #7 MCP follow-ups, #8 step 4a, #9 handoff doc). Step 4b (Decision Engine port) shipped this session.
+**Currently working on:** Step 4 in flight — porting legacy Node.js Keepa pipeline to Python composable steps under `fba_engine/steps/`. Stacked PRs: 4b (decision engine, #10) → 4c.1 (build output merge, this session). Step 4c.2 (XLSX) and 4c.3 (GSheets) are queued.
+**Status:** PR #10 open (step 4b). PR #11 just opened (step 4c.1, stacked on #10). Both ready for review.
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                  # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live SP-API
 cd shared/lib/python && pytest tests/ sourcing_engine/tests/ # 68/68
-pytest fba_engine/steps/tests/                               # 222/222 (67 ip_risk + 155 decision_engine)
+pytest fba_engine/steps/tests/                               # 282/282 (67 ip_risk + 155 decision_engine + 60 build_output)
 ```
 
 ### What landed this session
 
-**Step 4b — Decision Engine port** (this session, PR open):
-- New module `fba_engine/steps/decision_engine.py` (~620 LOC including docstrings + tests).
-  1:1 port of legacy `phase6_decision.js` (651 LOC). Same elif-chain order, same
-  thresholds, same JS `Math.round` half-rounding fixed with `math.floor(x + 0.5)`.
-- 155 pytest cases at `fba_engine/steps/tests/test_decision_engine.py` covering:
-  every helper (parse_money/pct, gbp formatting, lane/priority/etc.),
-  every decision-rule branch including the `pl_risk == "-"` WATCH branch,
-  BUY post-checks (lane demotion + buy-readiness demotion), NaN safety, run_step
-  contract, sort tiebreakers, XLSX shortlist + summary structure, Unicode.
-- Two-sheet Excel shortlist workbook via openpyxl (already in deps).
-  Shortlist sheet = BUY+NEGOTIATE rows; Summary sheet = counts by Decision /
-  Lane / IP Risk / PL Risk.
-- Pre-PR code-reviewer agent: 5 must-fix items (1 MEDIUM coverage gap, 4 LOW
-  test/CLI tightening) all addressed.
+**Step 4b — Decision Engine port** (PR #10, open):
+- 1:1 port of legacy `phase6_decision.js` (651 LOC) at `fba_engine/steps/decision_engine.py`.
+- 155 pytest cases. Two-sheet Excel shortlist via openpyxl.
+- Pre-PR code-reviewer surfaced 5 must-fix items, all addressed.
+
+**Step 4c.1 — Build Output merge** (PR #11, open, stacked on #10):
+- 1:1 port of per-niche `phase5_build.js` (~330 LOC, the four niches' scripts
+  are 99% identical) to a generic `fba_engine/steps/build_output.py`.
+- Reads Phase 3 shortlist or Phase 4 IP-risk CSV, builds the canonical
+  67-column `final_results.csv`, splits confirmed private-label rows to a
+  reject CSV, emits a 22-column supplier-skeleton placeholder CSV + stats +
+  handoff. Note: legacy SKILL.md says 64 cols but JS produces 67 — JS is
+  authoritative; doc was stale.
+- 60 pytest cases. Pre-PR code-reviewer surfaced 2 MEDIUM porting bugs
+  (sort key divergences for Commercial Priority=0 and case-sensitive Verdict
+  lookup) + 1 latent pd.NA crash in `run_step` path; all addressed with
+  matching tests pinning the JS-faithful behaviour.
+
+### Step 4c follow-ups queued
+
+- **Step 4c.2** — port `build_final_xlsx.js` (529 LOC) to Python via openpyxl.
+  Lots of fiddly styling (verdict colour fills, score band conditional
+  formatting, merged group headers, freeze panes). Estimated ~500 LOC + 100 tests.
+- **Step 4c.3** — port `push_to_gsheets.js` (311 LOC) to Python.
+  Adds `google-api-python-client` + `google-auth` deps. Three-strategy
+  fallback (xlsx-conversion → raw-xlsx → Sheets API create). Estimated ~250
+  LOC + 80 tests with mocked googleapis.
 
 ### Prior session highlights (kept for context)
 
@@ -46,17 +59,20 @@ those quotes when writing to `settings.json`. Bash `source` now works on the fil
 
 ### Step 4 roadmap status
 
-| Skill | LOC (JS) | Status |
+| Skill / Sub-step | LOC (JS) | Status |
 |---|---|---|
 | 4 — IP Risk | 351 | **MERGED PR #8** |
-| 6 — Decision Engine | 651 | **PR open** (this session) |
-| 5 — Build Output | 840 | **NEXT (step 4c)** — XLSX (openpyxl already in use) + GSheets (pulls in google-api-python-client, **decision needed**) |
+| 6 — Decision Engine | 651 | **PR #10 open** (step 4b) |
+| 5.1 — Build Output (merge logic) | ~330 | **PR #11 open** (step 4c.1, stacked on #10) |
+| 5.2 — Build Output (XLSX styling) | 529 | **NEXT (step 4c.2)** — openpyxl, lots of styling fidelity work |
+| 5.3 — Build Output (GSheets push) | 311 | **NEXT (step 4c.3)** — needs `google-api-python-client` dep |
 | 3 — Scoring | 0 (SKILL.md) | **Scope decision needed**: extract a canonical scoring step, or keep agent-driven? Per-niche scripts get generated under `data/{niche}/working/`. |
 | 1 — Keepa Finder | 0 (browser) | **Separate scoping**: Keepa API integration vs Playwright vs keep as Claude Code skill |
 | 2 — SellerAmp | 0 (browser) | Same scoping question as Skill 1 |
 
-**Blockers:** None for step 4c. Need decision on `google-api-python-client` dep
-before starting step 4c (Skill 5 Build Output) since GSheets push is part of it.
+**Blockers:** None for step 4c.2. Step 4c.3 needs Peter's call on whether to
+add `google-api-python-client` (full Python port) vs keep `push_to_gsheets.js`
+as a Node shim invoked via subprocess vs defer GSheets entirely.
 
 ### Workflow notes (cumulative across sessions)
 - **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.
