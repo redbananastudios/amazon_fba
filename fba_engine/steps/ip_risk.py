@@ -35,6 +35,7 @@ import argparse
 import math
 import re
 import sys
+import warnings
 from datetime import date
 from pathlib import Path
 
@@ -174,8 +175,20 @@ def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def _coerce_str(raw: object) -> str:
+    """Coerce a cell value to a clean string. Treats None and pandas NaN
+    (a truthy float, so `raw or ""` doesn't catch it) as empty."""
+    if raw is None:
+        return ""
+    if isinstance(raw, float) and math.isnan(raw):
+        return ""
+    return str(raw).strip()
+
+
 def _coerce_num(raw: object) -> float:
     """Mirror the JS num() helper: strip GBP and non-numeric chars, parse float, NaN→0."""
+    if isinstance(raw, float) and math.isnan(raw):
+        return 0.0
     s = str(raw or "")
     s = re.sub(r"GBP", "", s, flags=re.IGNORECASE)
     s = re.sub(r"[^0-9.\-]", "", s).strip()
@@ -289,22 +302,43 @@ def _score_row(
 # ────────────────────────────────────────────────────────────────────────
 
 
+# Columns the scoring genuinely depends on. Missing any of these means the
+# row's score is built from defaults (0 / empty) and will be misleading —
+# warn loudly so a misshapen upstream isn't silent.
+_REQUIRED_INPUT_COLUMNS = (
+    "Brand",
+    "BB Seller",
+    "FBA Seller Count",
+    "FBA Seller 90d Avg",
+)
+
+
 def compute_ip_risk(df: pd.DataFrame, niche: str) -> pd.DataFrame:
     """Append the 9 IP-risk columns to a Phase-3 shortlist DataFrame.
 
     Pure: does not read or write disk, does not mutate the input.
-    Missing source columns are tolerated — they coerce to 0/empty.
+    Missing source columns are tolerated (coerce to 0/empty) but emit a
+    warning so the operator knows scoring relied on defaults.
     """
     if df.empty:
         return df.assign(**{header: pd.Series(dtype=object) for header in IP_HEADERS})
+
+    missing = [c for c in _REQUIRED_INPUT_COLUMNS if c not in df.columns]
+    if missing:
+        warnings.warn(
+            f"compute_ip_risk: missing input columns {missing}; rows will be "
+            f"scored using defaults (0/empty), which can produce misleading "
+            f"fortress / brand-match signals.",
+            stacklevel=2,
+        )
 
     out = df.copy()
     rows = []
     for _, row in out.iterrows():
         rows.append(
             _score_row(
-                brand=str(row.get("Brand", "") or "").strip(),
-                bb_seller=str(row.get("BB Seller", "") or "").strip(),
+                brand=_coerce_str(row.get("Brand", "")),
+                bb_seller=_coerce_str(row.get("BB Seller", "")),
                 fba_seller_count=_coerce_num(row.get("FBA Seller Count", 0)),
                 fba_seller_90d_avg=_coerce_num(row.get("FBA Seller 90d Avg", 0)),
                 review_count=_coerce_num(row.get("Review Count", 0)),
@@ -419,6 +453,27 @@ def build_handoff(df: pd.DataFrame, niche: str, output_filename: str) -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────
+# Step contract — uniform call shape for the step 5 runner.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def run_step(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Step-runner-compatible wrapper.
+
+    All composable steps accept (df, config) so the step 5 YAML runner can
+    invoke any step uniformly. `config` is a strategy/phase-level config
+    dict — for IP risk, only the niche key is read.
+
+    Required keys:
+      niche: str — niche slug (kids-toys, sports-goods, etc.)
+    """
+    niche = config.get("niche")
+    if not niche:
+        raise ValueError("ip_risk step requires config['niche']")
+    return compute_ip_risk(df, niche)
+
+
+# ────────────────────────────────────────────────────────────────────────
 # CLI — mirrors legacy phase4_ip_risk.js paths so existing data folders
 # pick up the new step without restructuring.
 # ────────────────────────────────────────────────────────────────────────
@@ -437,7 +492,10 @@ def run(niche: str, base: Path) -> None:
         print(f"Input not found: {input_path}", file=sys.stderr)
         sys.exit(1)
 
-    df = pd.read_csv(input_path, dtype=str, keep_default_na=False)
+    # utf-8-sig strips a leading BOM if present (the legacy JS did the same
+    # via `.replace(/^﻿/, "")`); without it the first column header
+    # would be `﻿ASIN` and every row.get("ASIN") would return "".
+    df = pd.read_csv(input_path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
     enriched = compute_ip_risk(df, niche)
     enriched.to_csv(output_path, index=False)
     stats_path.write_text(build_stats(enriched, niche), encoding="utf-8")

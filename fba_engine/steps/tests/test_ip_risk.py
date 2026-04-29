@@ -9,6 +9,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+import math
+import warnings
+
 from fba_engine.steps.ip_risk import (
     brand_type,
     build_handoff,
@@ -18,6 +21,7 @@ from fba_engine.steps.ip_risk import (
     compute_ip_risk,
     levenshtein,
     normalize_name,
+    run_step,
     similarity,
 )
 
@@ -369,9 +373,10 @@ class TestComputeIPRisk:
         # A bare-bones DataFrame with only ASIN should still run without crashing.
         # Empty FBA seller fields coerce to 0, which trips the fortress check
         # (0 <= 1 AND 0 <= 1.5 → YES → +3); kids-toys is HIGH category (+1).
-        # Final: 4 → Medium band.
+        # Final: 4 → Medium band. The missing-columns warning is expected.
         df = pd.DataFrame([{"ASIN": "B0BARE"}])
-        out = compute_ip_risk(df, niche="kids-toys")
+        with pytest.warns(UserWarning, match="missing input columns"):
+            out = compute_ip_risk(df, niche="kids-toys")
         assert len(out) == 1
         assert out.iloc[0]["IP Risk Score"] == 4
         assert out.iloc[0]["IP Risk Band"] == "Medium"
@@ -414,3 +419,194 @@ class TestStats:
         assert "Phase 4 Handoff" in text
         assert "Status: COMPLETE" in text
         assert "Run Phase 5" in text
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Reviewer-requested coverage — boundary cases, NaN safety, run_step shape.
+# ────────────────────────────────────────────────────────────────────────
+
+
+class TestScoreBoundaries:
+    """The half-rounding boundary is the trickiest porting bug-class
+    (JS Math.round vs Python round). Pin it explicitly per band edge."""
+
+    def test_score_3_5_rounds_up_to_4_medium(self):
+        # YES match (3) + MEDIUM category (0.5) = 3.5 → round-up → 4 → Medium.
+        df = pd.DataFrame(
+            [
+                _make_row(
+                    Brand="Acme",
+                    **{
+                        "BB Seller": "Acme",
+                        "FBA Seller Count": "5",
+                        "FBA Seller 90d Avg": "5",
+                    },
+                )
+            ]
+        )
+        out = compute_ip_risk(df, niche="afro-hair")  # MEDIUM
+        assert out.iloc[0]["IP Risk Score"] == 4
+        assert out.iloc[0]["IP Risk Band"] == "Medium"
+
+    def test_score_6_5_rounds_up_to_7_high(self):
+        # YES match (3) + fortress (3) + MEDIUM category (0.5) = 6.5
+        # → round-up → 7 → High.
+        df = pd.DataFrame(
+            [
+                _make_row(
+                    Brand="Acme",
+                    **{
+                        "BB Seller": "Acme",
+                        "FBA Seller Count": "1",
+                        "FBA Seller 90d Avg": "1.0",
+                    },
+                )
+            ]
+        )
+        out = compute_ip_risk(df, niche="pet-care")  # MEDIUM
+        assert out.iloc[0]["IP Risk Score"] == 7
+        assert out.iloc[0]["IP Risk Band"] == "High"
+
+    def test_score_zero_when_no_signals(self):
+        # No match, no fortress, generic brand, no A+, LOW category.
+        df = pd.DataFrame(
+            [
+                _make_row(
+                    Brand="Generic",
+                    **{
+                        "BB Seller": "Disjoint Co",
+                        "FBA Seller Count": "10",
+                        "FBA Seller 90d Avg": "10",
+                    },
+                )
+            ]
+        )
+        out = compute_ip_risk(df, niche="stationery")  # LOW
+        assert out.iloc[0]["IP Risk Score"] == 0
+        assert out.iloc[0]["IP Risk Band"] == "Low"
+
+    def test_score_saturates_at_ten_when_signals_overshoot(self):
+        # Maximum signal stack is 3+3+1+1+1+1 = 10 exactly. To verify
+        # saturation we'd need >10 raw, which the current weights don't
+        # produce. Test at-cap behaviour instead — score is exactly 10
+        # AND band is High (i.e. clamp didn't accidentally drop it).
+        df = pd.DataFrame(
+            [
+                _make_row(
+                    Brand="LEGO",
+                    **{
+                        "BB Seller": "LEGO UK",
+                        "FBA Seller Count": "1",
+                        "FBA Seller 90d Avg": "1.0",
+                        "Has A+ Content": "Y",
+                    },
+                )
+            ]
+        )
+        out = compute_ip_risk(df, niche="kids-toys")  # HIGH
+        assert out.iloc[0]["IP Risk Score"] == 10
+        assert out.iloc[0]["IP Risk Band"] == "High"
+
+
+class TestPandasNaNSafety:
+    """Pandas NaN is a truthy float, so `raw or ""` doesn't catch it.
+    The CLI path uses `dtype=str, keep_default_na=False` which avoids
+    this — but step 5's runner will pass arbitrary DataFrames where
+    NaNs can appear. Pin the safety net here."""
+
+    def test_nan_brand_does_not_become_string_nan(self):
+        # NaN brand should be treated as empty, not as the literal "nan"
+        # (which is 3 chars and would mis-classify as SYNTHETIC).
+        df = pd.DataFrame(
+            [
+                {
+                    "ASIN": "B0NAN",
+                    "Brand": float("nan"),
+                    "BB Seller": float("nan"),
+                    "FBA Seller Count": 5,
+                    "FBA Seller 90d Avg": 5.0,
+                    "Review Count": 100,
+                    "Star Rating": 4.0,
+                    "Has A+ Content": "N",
+                }
+            ]
+        )
+        out = compute_ip_risk(df, niche="stationery")
+        # Empty brand → compact = "" → len <= 3 → SYNTHETIC. Acceptable
+        # (current behaviour for empty brand). Critical assertion: did
+        # NOT mistake NaN for a 3-char "nan" string and use it for any
+        # other downstream signal.
+        assert out.iloc[0]["Brand Seller Match"] == "NO"
+
+    def test_nan_numeric_columns_coerce_to_zero(self):
+        df = pd.DataFrame(
+            [
+                {
+                    "ASIN": "B0NUMNAN",
+                    "Brand": "Acme",
+                    "BB Seller": "Disjoint",
+                    "FBA Seller Count": float("nan"),
+                    "FBA Seller 90d Avg": float("nan"),
+                }
+            ]
+        )
+        out = compute_ip_risk(df, niche="stationery")
+        # NaN coerced to 0 → fortress YES (0 <= 1 AND 0 <= 1.5).
+        assert out.iloc[0]["Fortress Listing"] == "YES"
+
+    def test_warns_when_required_columns_missing(self):
+        df = pd.DataFrame([{"ASIN": "B0WARN", "Brand": "Acme"}])
+        with pytest.warns(UserWarning, match="missing input columns"):
+            _ = compute_ip_risk(df, niche="stationery")
+
+    def test_no_warning_when_all_required_columns_present(self):
+        df = pd.DataFrame([_make_row()])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # any warning becomes a test failure
+            _ = compute_ip_risk(df, niche="stationery")
+
+
+class TestRunStep:
+    """Step 5's runner will invoke every step as run_step(df, config).
+    Pin the contract."""
+
+    def test_run_step_returns_enriched_dataframe(self):
+        df = pd.DataFrame([_make_row()])
+        out = run_step(df, {"niche": "stationery"})
+        assert "IP Risk Score" in out.columns
+        assert len(out) == 1
+
+    def test_run_step_raises_when_niche_missing_from_config(self):
+        df = pd.DataFrame([_make_row()])
+        with pytest.raises(ValueError, match="niche"):
+            run_step(df, {})
+
+    def test_run_step_raises_when_niche_is_empty_string(self):
+        df = pd.DataFrame([_make_row()])
+        with pytest.raises(ValueError, match="niche"):
+            run_step(df, {"niche": ""})
+
+
+class TestEdgeCaseInputs:
+    """Reviewer-flagged: weird brand strings shouldn't crash the scorer."""
+
+    def test_unicode_brand_does_not_crash(self):
+        df = pd.DataFrame(
+            [
+                _make_row(Brand="Ø Café", **{"BB Seller": "Different Co"}),
+                _make_row(Brand="日本ブランド", **{"BB Seller": "Different Co"}),
+            ]
+        )
+        out = compute_ip_risk(df, niche="stationery")
+        assert len(out) == 2
+        # Just verify scoring ran — we don't make claims about Unicode
+        # brand classification semantics.
+        assert "IP Risk Score" in out.columns
+
+    def test_two_digit_only_brand_is_synthetic(self):
+        # "24" → compact="24" → matches \d{2,} → SYNTHETIC.
+        assert brand_type("24", review_count=0, rating=0) == "SYNTHETIC"
+
+    def test_pure_punctuation_brand_falls_through_to_short(self):
+        # "!!!" → compact="" → len <= 3 → SYNTHETIC.
+        assert brand_type("!!!", review_count=0, rating=0) == "SYNTHETIC"

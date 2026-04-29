@@ -117,7 +117,7 @@ Baseline counts as of step 3:
 |---|---|---|---|
 | shared lib (config_loader, roi_gate) | 26 | 0 | clean |
 | canonical engine | 42 | 0 | clean (was 23 pre-MCP; +19 preflight tests) |
-| pipeline steps (`fba_engine/steps/`) | 53 | 0 | step 4a — IP risk port from legacy Keepa skill 4 |
+| pipeline steps (`fba_engine/steps/`) | 67 | 0 | step 4a — IP risk port from legacy Keepa skill 4 |
 | abgee adapter | 12 | 0 | clean |
 | connect-beauty adapter | 15 | 0 | clean |
 | shure adapter | 9 | 3 | pre-existing — `test_ingest.py` expects abgee PDF format |
