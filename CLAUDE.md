@@ -7,20 +7,31 @@
 
 ## Current State
 **Last updated:** 2026-04-29 (end of session)
-**Currently working on:** MCP sourcing-tools expansion — branch `feat/mcp-sourcing-tools` is **feature-complete**. Awaiting code review and PR.
-**Status:** All 7 tools shipped end-to-end with tests, plus CLI mode, pipeline integration, and live-API integration smoke tests. Branch is 11 commits ahead of main, **not yet pushed**.
-- Tier 1 (3 commits): `check_listing_restrictions`, `check_fba_eligibility`, `estimate_fees_batch`
-- Tier 2 (2 commits): `get_catalog_item`, `get_live_pricing`
-- Tier 3 (2 commits): `preflight_asin` composite + CLI mode (`src/cli.ts`)
-- Pipeline integration (1 commit): `pipeline/preflight.py` annotates rows after the match loop with informational SP-API columns; markdown report adds "🚫 Restriction notes" section
-- Integration tests (1 commit): 5 read-only smoke tests against live SP-API
-- Tests: **99/99 vitest** + **34/34 sourcing_engine pytest** (11 new for preflight) + **5/5 live SP-API integration** all green
-- **Decision-gate untouched** per spec: SHORTLIST/REVIEW/REJECT counts unchanged. Restriction/eligibility data is informational only.
+**Currently working on:** Nothing in flight. **MCP sourcing-tools expansion (PR #5) is merged into main.**
+**Status:** Feature complete and live. Pipeline now auto-annotates matched rows with SP-API data (restrictions, FBA eligibility, live Buy Box, catalog brand, hazmat). Markdown report has a "🚫 Restriction notes" section listing gated SHORTLIST items.
 
-**Next steps:**
-1. Run code-reviewer agent over the 11-commit diff (per global CLAUDE.md: "Before creating any PR, run a thorough code review")
-2. Resolve any review findings
-3. Push branch and open PR (don't merge — user reviews whole thing as one unit)
+**What was delivered (15 commits merged via PR #5, `f8dfe64`):**
+- 7 MCP tools (`check_listing_restrictions`, `check_fba_eligibility`, `estimate_fees_batch`, `get_catalog_item`, `get_live_pricing`, `preflight_asin` composite, plus CLI mode)
+- Python pipeline integration (`shared/lib/python/sourcing_engine/pipeline/preflight.py`)
+- Persistent disk cache at `<repo>/.cache/fba-mcp/` (gitignored, TTLs configurable per resource via env vars)
+- 100 vitest unit + 5 live SP-API integration + 42 pytest tests, all green
+- Code reviewed (4 review findings landed in the PR), QA'd end-to-end on real connect-beauty data (3 production bugs found and fixed before merge)
+
+**Tests baseline going forward:**
+```bash
+cd services/amazon-fba-fees-mcp && npm test                  # 100/100 unit
+cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live (requires SP_API creds)
+cd shared/lib/python && pytest sourcing_engine/tests/        # 42/42
+```
+
+**Possible follow-up tickets** (documented in PR #5 description, not blockers):
+- M1 `get-live-pricing.ts` — defensive condition-filter on `BuyBoxPrices[]`
+- M2 `check-listing-restrictions.ts` — switch to reasonCode-first BRAND/CATEGORY classification
+- M3 `types.ts` — `raw` payloads bloat composite output ~10×; consider `include_raw?: boolean` (default false)
+- M4 `get-catalog-item.ts` — hazmat false-positive on string values like "none"
+- L1-L7 — minor CLI consistency, type fix-ups
+
+**Next steps:** None pending. User can pick from the M-series follow-ups or move to other work (e.g., reorganisation step 4: extract Keepa phases from `_legacy_keepa/`).
 
 **Blockers:** None.
 
