@@ -240,7 +240,7 @@ export async function getCatalogItem(
       marketplaceId,
     })) as SpApiCatalogResponse;
     const result = normalise(input.asin, marketplaceId, raw);
-    cache?.set(cacheKey, result);
+    cache?.set(cacheKey, { data: result });
     return result;
   } catch (err) {
     if (cache) {

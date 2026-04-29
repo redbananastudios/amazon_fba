@@ -134,7 +134,7 @@ export async function checkListingRestrictions(
     const { result, wellFormed } = normalise(input.asin, marketplaceId, raw);
     // Skip cache write if SP-API returned a malformed/empty response, so a
     // transient upstream issue isn't pinned at UNRESTRICTED for 7 days.
-    if (wellFormed) cache?.set(cacheKey, result);
+    if (wellFormed) cache?.set(cacheKey, { data: result });
     return result;
   } catch (err) {
     if (cache) {

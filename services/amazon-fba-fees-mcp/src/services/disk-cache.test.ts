@@ -33,7 +33,7 @@ describe("DiskCache", () => {
       defaultTtlSeconds: 60,
       cacheRoot: tmp,
     });
-    c.set(["asin", "B001"], { x: 42 });
+    c.set(["asin", "B001"], { data: { x: 42 } });
     const r = c.get("asin", "B001");
     expect(r.hit).toBe(true);
     expect(r.data).toEqual({ x: 42 });
@@ -45,7 +45,7 @@ describe("DiskCache", () => {
       defaultTtlSeconds: 60,
       cacheRoot: tmp,
     });
-    c.set(["k1"], "hello");
+    c.set(["k1"], { data: "hello" });
     const path = join(tmp, "test", "k1.json");
     expect(existsSync(path)).toBe(true);
     const entry = JSON.parse(readFileSync(path, "utf8"));
@@ -82,7 +82,7 @@ describe("DiskCache", () => {
       defaultTtlSeconds: 60,
       cacheRoot: tmp,
     });
-    c.set(["short"], "v", 1); // 1 second TTL
+    c.set(["short"], { data: "v", ttlSeconds: 1 }); // 1 second TTL
     expect(c.get("short").hit).toBe(true);
     // Manually backdate file
     const path = join(tmp, "test", "short.json");
@@ -102,7 +102,7 @@ describe("DiskCache", () => {
       cacheRoot: tmp,
     });
     // forward slash, colon, pipe — all unsafe filename chars
-    c.set(["a/b", "c:d", "e|f"], "ok");
+    c.set(["a/b", "c:d", "e|f"], { data: "ok" });
     const r = c.get("a/b", "c:d", "e|f");
     expect(r.hit).toBe(true);
     expect(r.data).toBe("ok");

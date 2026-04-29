@@ -211,7 +211,7 @@ export async function getLivePricing(
     // Skip cache write when SP-API returned no payload for this ASIN —
     // pinning a stub-with-no-Buy-Box for 5 minutes would mask transient
     // upstream issues. Only cache when the payload was structurally present.
-    if (payload) cache?.set([marketplaceId, condition, asin], result);
+    if (payload) cache?.set([marketplaceId, condition, asin], { data: result });
     results[idx] = result;
   });
 

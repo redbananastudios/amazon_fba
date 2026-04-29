@@ -210,7 +210,7 @@ export async function estimateFeesBatch(
       total_fees: parseAmount(fe.TotalFeesEstimate),
       currency: fe.TotalFeesEstimate?.CurrencyCode ?? "GBP",
     };
-    cache?.set(cacheKeyFor(item, marketplaceId), fees);
+    cache?.set(cacheKeyFor(item, marketplaceId), { data: fees });
     results[idx] = buildOkEntry(item.asin, identifier, fees);
   });
 
