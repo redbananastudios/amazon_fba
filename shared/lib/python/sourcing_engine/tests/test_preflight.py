@@ -337,6 +337,79 @@ def test_row_to_item_coerces_nan_cost_to_zero():
     assert item["cost_price"] == 0.0
 
 
+def test_row_to_item_allow_no_price_yields_zero_selling_price():
+    # Leads-mode (e.g. seller_storefront): rows have ASIN but no
+    # market_price yet. allow_no_price=True yields an item with
+    # selling_price=0.0 — safe ONLY when the caller's `include`
+    # excludes the pricing-dependent sources.
+    row = {"asin": "B0LEAD"}
+    item = pf._row_to_item(row, allow_no_price=True)
+    assert item is not None
+    assert item["asin"] == "B0LEAD"
+    assert item["selling_price"] == 0.0
+    assert item["cost_price"] == 0.0
+
+
+def test_row_to_item_allow_no_price_still_uses_real_price_when_present():
+    # If market_price IS present, allow_no_price doesn't override it.
+    # Price-bearing rows still get the real price.
+    row = _row("B0WITH")
+    row["market_price"] = 19.99
+    item = pf._row_to_item(row, allow_no_price=True)
+    assert item is not None
+    assert item["selling_price"] == 19.99
+
+
+def test_row_to_item_allow_no_price_still_requires_asin():
+    item = pf._row_to_item({"market_price": 0}, allow_no_price=True)
+    assert item is None
+
+
+def test_annotate_passes_include_to_cli_payload(tmp_path, monkeypatch):
+    # `include` argument must reach the JSON payload sent to the CLI
+    # so the MCP knows to skip pricing/fees/profitability sources.
+    monkeypatch.setattr(pf, "_find_cli", lambda *_: tmp_path / "cli.js")
+    (tmp_path / "cli.js").write_text("// fake")
+    monkeypatch.setattr(pf, "_check_runtime_ready", lambda: (True, ""))
+
+    captured: dict = {}
+
+    def fake_call_cli(cli, payload, **kw):
+        captured["payload"] = payload
+        return {"results": [
+            {"asin": item["asin"], "cached": {}, "errors": []}
+            for item in payload["items"]
+        ]}
+
+    monkeypatch.setattr(pf, "_call_cli", fake_call_cli)
+
+    rows = [{"asin": "B0LEAD"}]
+    pf.annotate_with_preflight(
+        rows, include=["restrictions", "fba", "catalog"],
+    )
+    assert captured["payload"]["include"] == ["restrictions", "fba", "catalog"]
+    # And the row was preflighted (allow_no_price kicked in because
+    # `include` excluded the pricing sources).
+    assert captured["payload"]["items"][0]["asin"] == "B0LEAD"
+
+
+def test_annotate_without_include_keeps_legacy_market_price_required(
+    tmp_path, monkeypatch,
+):
+    # Pin backwards compat: without `include`, ASIN-only rows still
+    # get seeded (the legacy contract supplier_pricelist depends on).
+    monkeypatch.setattr(pf, "_find_cli", lambda *_: tmp_path / "cli.js")
+    (tmp_path / "cli.js").write_text("// fake")
+    monkeypatch.setattr(pf, "_check_runtime_ready", lambda: (True, ""))
+    monkeypatch.setattr(pf, "_call_cli", lambda *a, **kw: None)
+
+    rows = [{"asin": "B0NOPRICE"}]
+    pf.annotate_with_preflight(rows)
+    # Row was seeded (no _call_cli should have been a candidate).
+    assert "restriction_status" in rows[0]
+    assert rows[0]["restriction_status"] is None
+
+
 def test_annotate_with_nan_rows_does_not_crash(tmp_path, monkeypatch):
     """Pipeline regression: end-to-end run fed rows with NaN market_price
     into the preflight payload, json.dumps emitted invalid JSON ('NaN'

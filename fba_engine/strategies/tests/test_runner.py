@@ -597,11 +597,18 @@ class TestSellerStorefrontStrategy:
         strat = load_strategy(yaml_path)
         assert strat.name == "seller_storefront"
         assert strat.input_discover is True
-        # Two steps: discover + supplier_leads.
-        assert [s.name for s in strat.steps] == ["discover", "supplier_leads"]
-        # Both modules import.
+        # Three steps: discover -> enrich (leads-mode) -> supplier_leads.
+        assert [s.name for s in strat.steps] == [
+            "discover", "enrich", "supplier_leads",
+        ]
+        # All modules import.
         for step in strat.steps:
             __import__(step.module)
+        # The enrich step is configured for leads mode (skips
+        # pricing-dependent MCP sources). This is the contract that
+        # replaces the legacy SellerAmp skill.
+        enrich_step = next(s for s in strat.steps if s.name == "enrich")
+        assert enrich_step.config.get("include") == "leads"
 
     def test_seller_storefront_yaml_runs_end_to_end(self, tmp_path: Path):
         # Stub the Keepa client to avoid real API calls. Inject the

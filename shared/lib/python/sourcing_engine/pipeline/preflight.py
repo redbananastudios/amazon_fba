@@ -120,7 +120,22 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
     return f
 
 
-def _row_to_item(row: dict) -> dict | None:
+def _row_to_item(row: dict, *, allow_no_price: bool = False) -> dict | None:
+    """Translate a pipeline row into the MCP preflight item shape.
+
+    Args:
+        row: pipeline row (post-calculate has market_price; ASIN-only
+            sources like seller_storefront leads do not).
+        allow_no_price: when True, ASIN-only rows yield an item with
+            ``selling_price=0.0`` (the MCP CLI accepts this so long as
+            ``include`` excludes the pricing-dependent sources —
+            pricing/fees/profitability). Used by leads-mode callers
+            that only need restrictions / FBA eligibility / catalog
+            (gating, hazmat, brand) and don't have a market price yet.
+
+    Returns the item dict, or None if the row can't be preflighted at
+    all (no asin, or no selling_price when allow_no_price is False).
+    """
     asin = row.get("asin")
     if not asin:
         return None
@@ -135,7 +150,13 @@ def _row_to_item(row: dict) -> dict | None:
             selling_price = float(c)
             break
     if selling_price is None:
-        return None
+        if not allow_no_price:
+            return None
+        # Leads-mode placeholder: the MCP types require selling_price to
+        # be a finite number. 0.0 is safe ONLY if the caller's `include`
+        # excludes pricing/fees/profitability sources — those would
+        # compute meaningless values otherwise.
+        selling_price = 0.0
     cost_price = _safe_float(row.get("buy_cost"), 0.0)
     if cost_price < 0:
         cost_price = 0.0
@@ -265,6 +286,7 @@ def annotate_with_preflight(
     cli_path: Path | None = None,
     seller_id: str | None = None,
     marketplace_id: str | None = None,
+    include: list[str] | None = None,
 ) -> list[dict]:
     """Annotate `rows` (in place) with informational SP-API columns.
 
@@ -273,6 +295,14 @@ def annotate_with_preflight(
         cli_path: explicit path to dist/cli.js. If None, auto-detect.
         seller_id: override SP_API_SELLER_ID for the restrictions check.
         marketplace_id: override default UK.
+        include: subset of MCP preflight sources to call. The MCP
+            supports {restrictions, fba, fees, catalog, pricing,
+            profitability}. ``None`` calls all of them (the legacy
+            supplier_pricelist contract). Leads-mode callers
+            (seller_storefront, ASIN-only inputs) should pass
+            ``["restrictions", "fba", "catalog"]`` to skip the pricing-
+            dependent sources — that lets ASIN-only rows preflight
+            without a market_price.
 
     Returns the same list (with rows mutated). Always returns successfully —
     individual failures are logged and rows are seeded with None columns so
@@ -300,18 +330,28 @@ def annotate_with_preflight(
             _seed_row(row)
         return rows
 
+    # Leads-mode: when `include` excludes the pricing-dependent sources,
+    # ASIN-only rows (no market_price) are still useful — restrictions,
+    # FBA eligibility, and catalog don't need a price.
+    pricing_sources = {"pricing", "fees", "profitability"}
+    allow_no_price = bool(include) and not (set(include) & pricing_sources)
+
     # Build a list of (row_idx, item) tuples for rows we can preflight,
     # then send them in chunks of 20.
     candidates: list[tuple[int, dict]] = []
     for idx, row in enumerate(rows):
-        item = _row_to_item(row)
+        item = _row_to_item(row, allow_no_price=allow_no_price)
         if item is not None:
             candidates.append((idx, item))
         else:
             _seed_row(row)
 
     if not candidates:
-        logger.info("preflight: no candidate rows (need asin + market_price)")
+        logger.info(
+            "preflight: no candidate rows "
+            "(need asin%s)",
+            "" if allow_no_price else " + market_price",
+        )
         return rows
 
     logger.info(
@@ -326,6 +366,8 @@ def annotate_with_preflight(
             payload["seller_id"] = seller_id
         if marketplace_id:
             payload["marketplace_id"] = marketplace_id
+        if include:
+            payload["include"] = include
         response = _call_cli(cli, payload)
         if not response or not isinstance(response.get("results"), list):
             logger.warning(
