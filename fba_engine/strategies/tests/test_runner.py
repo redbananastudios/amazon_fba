@@ -659,12 +659,18 @@ class TestSellerStorefrontStrategy:
 
 
 class TestOaCsvStrategy:
-    """Smoke test: oa_csv.yaml loads + runs against a fixture CSV."""
+    """Smoke test: oa_csv.yaml loads + runs the full
+    discover → keepa_enrich → calculate → decide chain against a
+    fixture CSV with a stubbed Keepa client."""
 
     _SELLERAMP_CSV = (
+        # B0OA1 buy_cost is £3 vs £15 market — clears ROI thresholds
+        # comfortably (calculate's standard-tier FBA fees eat ~£8.50,
+        # leaving ~£3.50 profit at >100% ROI).
+        # B0OA2 buy_cost is £40 vs £15 market — clearly unprofitable.
         "ASIN,Title,Cost,URL\n"
-        "B0OA1,OA Item One,10.50,https://retailer.test/p/1\n"
-        "B0OA2,OA Item Two,7.25,https://retailer.test/p/2\n"
+        "B0OA1,OA Item One,3.00,https://retailer.test/p/1\n"
+        "B0OA2,OA Item Two,40.00,https://retailer.test/p/2\n"
     )
 
     def test_oa_csv_yaml_loads(self):
@@ -675,18 +681,50 @@ class TestOaCsvStrategy:
         strat = load_strategy(yaml_path)
         assert strat.name == "oa_csv"
         assert strat.input_discover is True
-        # Single step: discover.
-        assert [s.name for s in strat.steps] == ["discover"]
+        # Full chain: discover -> keepa_enrich -> calculate -> decide.
+        assert [s.name for s in strat.steps] == [
+            "discover", "keepa_enrich", "calculate", "decide",
+        ]
         for step in strat.steps:
             __import__(step.module)
 
-    def test_oa_csv_yaml_runs_end_to_end(self, tmp_path: Path):
+    def test_oa_csv_yaml_runs_end_to_end_with_decisions(self, tmp_path: Path):
+        # End-to-end run with stubbed Keepa: pin that the chain
+        # produces a `decision` column with non-empty verdicts. The
+        # cheap row (£5 cost vs £15 market) should be SHORTLIST/REVIEW;
+        # the expensive row (£40 cost vs £15 market) should be REJECT
+        # for unprofitability — verifying calculate + decide actually
+        # ran.
+        from unittest.mock import MagicMock
+        from keepa_client import KeepaProduct
+        from keepa_client.models import KeepaStats
+
         repo_root = Path(__file__).resolve().parents[3]
         yaml_path = repo_root / "fba_engine" / "strategies" / "oa_csv.yaml"
         if not yaml_path.exists():
             pytest.skip(f"oa_csv.yaml not found at {yaml_path}")
 
-        # Sandboxed OA CSV + empty exclusions list.
+        # Build a stats-bearing KeepaProduct for each test ASIN. Both
+        # have healthy market signals — pricing differs only in the
+        # supplier-side buy_cost the OA CSV provides.
+        def _stub_product(asin: str) -> KeepaProduct:
+            current = [-1] * 19
+            current[0] = 1400   # AMAZON £14
+            current[3] = 5000   # SALES rank
+            current[10] = 1450  # NEW_FBA £14.50
+            current[11] = 5     # COUNT_NEW (offers)
+            current[18] = 1500  # BUY_BOX £15
+            return KeepaProduct(
+                asin=asin, title=f"Title {asin}", brand="Acme",
+                stats=KeepaStats(current=current, avg90=current),
+                monthlySold=200,
+            )
+
+        client = MagicMock()
+        client.get_products.return_value = [
+            _stub_product("B0OA1"), _stub_product("B0OA2"),
+        ]
+
         csv_in = tmp_path / "in.csv"
         csv_in.write_text(self._SELLERAMP_CSV, encoding="utf-8")
         exclusions = tmp_path / "exclusions.csv"
@@ -694,10 +732,11 @@ class TestOaCsvStrategy:
         run_dir = tmp_path / "out"
 
         strat = load_strategy(yaml_path)
-        # Inject the sandboxed exclusions path into the discover step.
         for step in strat.steps:
             if step.name == "discover":
                 step.config["exclusions_path"] = str(exclusions)
+            if step.name == "keepa_enrich":
+                step.config["client"] = client
 
         context = {
             "feed": "selleramp",
@@ -707,10 +746,18 @@ class TestOaCsvStrategy:
         }
         out = run_strategy(strat, context=context, df_in=None)
 
-        # Two rows discovered; output CSV written.
         assert len(out) == 2
         assert set(out["asin"]) == {"B0OA1", "B0OA2"}
-        assert (out["source"] == "oa_csv").all()
+        # Every row got a decision (SHORTLIST / REVIEW / REJECT).
+        assert "decision" in out.columns
+        valid = {"SHORTLIST", "REVIEW", "REJECT"}
+        assert all(d in valid for d in out["decision"]), out["decision"].tolist()
+        # Cheap row clears profit thresholds; expensive row REJECTs.
+        cheap = out[out["asin"] == "B0OA1"].iloc[0]
+        expensive = out[out["asin"] == "B0OA2"].iloc[0]
+        assert cheap["decision"] in {"SHORTLIST", "REVIEW"}, cheap["decision_reason"]
+        assert expensive["decision"] == "REJECT"
+        # Verdict CSV written at the configured location.
         assert (
-            run_dir / "oa_candidates_selleramp_20260430_120000.csv"
+            run_dir / "oa_decisions_selleramp_20260430_120000.csv"
         ).exists()

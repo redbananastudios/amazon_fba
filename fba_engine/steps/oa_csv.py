@@ -12,7 +12,8 @@ Output columns (mapped to the canonical engine's schema):
   - source              = "oa_csv"
   - feed                = "selleramp" | "tactical_arbitrage" | "oaxray"
   - retail_url
-  - retail_cost_inc_vat = canonical `buy_cost` (per PRD §6.4)
+  - buy_cost            (renamed from importer-side `retail_cost_inc_vat`
+                         per PRD §6.4; what `calculate` reads directly)
   - retail_name
 
 Standalone CLI invocation:
@@ -44,12 +45,17 @@ from oa_importers import IMPORTERS
 # Constants.
 # ────────────────────────────────────────────────────────────────────────
 
+# Output schema. `buy_cost` is the canonical name read by
+# `fba_engine.steps.calculate` — the importer-side dataclass field is
+# `retail_cost_inc_vat` (faithful to the OA tool's export semantics);
+# we rename here at the canonical-engine boundary so downstream
+# calculate / decide chain without an alias step.
 OA_DISCOVERY_COLUMNS: tuple[str, ...] = (
     "asin",
     "source",
     "feed",
     "retail_url",
-    "retail_cost_inc_vat",
+    "buy_cost",
     "retail_name",
 )
 
@@ -90,17 +96,24 @@ def load_exclusions(path: Path | str) -> set[str]:
 
 
 def _candidates_to_df(candidates: list) -> pd.DataFrame:
-    """Convert OaCandidate dataclass list to a DataFrame with the canonical schema."""
+    """Convert OaCandidate dataclass list to a DataFrame with the canonical schema.
+
+    Two renames happen here at the canonical-engine boundary:
+      - `source` is added (constant `"oa_csv"`) so downstream steps can
+        branch on origin (e.g. OA price already includes VAT vs
+        supplier_pricelist where it doesn't).
+      - `retail_cost_inc_vat` (the importer-faithful name on the
+        ``OaCandidate`` dataclass) is renamed to `buy_cost` so
+        ``calculate.calculate_economics`` reads it directly without an
+        alias step.
+    """
     if not candidates:
         return pd.DataFrame(columns=list(OA_DISCOVERY_COLUMNS))
     rows = []
     for c in candidates:
         d = asdict(c)
-        # `source` is constant across this discovery step; it identifies
-        # the discovery method to downstream steps that may need to
-        # branch on origin (e.g. OA price already includes VAT vs
-        # supplier_pricelist where it doesn't).
         d["source"] = "oa_csv"
+        d["buy_cost"] = d.pop("retail_cost_inc_vat")
         rows.append(d)
     df = pd.DataFrame(rows)
     # Re-order columns to match the canonical schema.

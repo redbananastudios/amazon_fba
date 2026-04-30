@@ -75,11 +75,11 @@ class TestEnrichWithKeepa:
 
     def test_preserves_input_columns(self):
         df = pd.DataFrame([
-            {"asin": "B0AAA", "retail_cost_inc_vat": 5.0, "source": "oa_csv"},
+            {"asin": "B0AAA", "buy_cost": 5.0, "source": "oa_csv"},
         ])
         client = _stub_client([_product("B0AAA")])
         out = enrich_with_keepa(df, client=client)
-        assert out.iloc[0]["retail_cost_inc_vat"] == 5.0
+        assert out.iloc[0]["buy_cost"] == 5.0
         assert out.iloc[0]["source"] == "oa_csv"
         # Plus the new market columns.
         assert out.iloc[0]["buy_box_price"] == 15.25
@@ -203,7 +203,7 @@ class TestColumnsConstant:
             "buy_box_avg90",
             "fba_seller_count",
             "sales_rank",
-            "monthly_sales_estimate",
+            "sales_estimate",
         )
 
 

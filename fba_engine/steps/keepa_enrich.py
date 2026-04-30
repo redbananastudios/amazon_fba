@@ -15,7 +15,7 @@ Output columns appended (per `market_snapshot()` in
   - buy_box_avg90         (90-day Buy Box average)
   - fba_seller_count      (current new offer count, proxy for FBA seller count)
   - sales_rank
-  - monthly_sales_estimate
+  - sales_estimate        (Keepa "Bought in past month" — what calculate reads)
 
 Market-data columns only. Descriptive fields (product_name, brand,
 category) belong to the discovery step (oa_csv, seller_storefront)
@@ -56,7 +56,7 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     "buy_box_avg90",
     "fba_seller_count",
     "sales_rank",
-    "monthly_sales_estimate",
+    "sales_estimate",
 )
 
 DEFAULT_KEEPA_CONFIG_PATH: Path = (
