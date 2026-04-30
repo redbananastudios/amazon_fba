@@ -121,6 +121,7 @@ Baseline counts as of step 4b:
 | strategies (`fba_engine/strategies/`) | 23 | 0 | YAML strategy runner (step 5) — interpolation + chain execution + end-to-end keepa_niche |
 | `keepa_client` (`shared/lib/python/keepa_client/`) | 38 | 0 | typed Keepa client — pydantic models, token bucket + refund, disk cache, JSONL log, retry on 429 / 502-504 |
 | `oa_importers` (`shared/lib/python/oa_importers/`) | 13 | 0 | OA-feed importer registry — SellerAmp 2DSorter (full impl) + Tactical Arbitrage / OAXray (stubs) |
+| `cli/` launch helpers | 20 | 0 | `python run.py open --asin / --target keepa\|amazon\|supplier\|storefront` |
 | abgee adapter | 12 | 0 | clean |
 | connect-beauty adapter | 15 | 0 | clean |
 | shure adapter | 9 | 3 | pre-existing — `test_ingest.py` expects abgee PDF format |
