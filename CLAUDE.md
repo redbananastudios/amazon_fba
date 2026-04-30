@@ -7,47 +7,24 @@
 
 ## Current State
 **Last updated:** 2026-04-30
-**Currently working on:** Cross-cutting code review of all 5 ported steps (`ip_risk`, `decision_engine`, `build_output`, `build_xlsx`, `push_to_gsheets`) — independent reviewers found 13 HIGH defects + 1 MEDIUM. All addressed in a single follow-up branch.
-**Status:** All step 4 sub-steps merged to main (PRs #8/#10/#12/#13/#14). Code-review followups branch open.
+**Currently working on:** Step 4 (Keepa pipeline JS→Python port) is fully complete. All 5 step modules merged, all cross-cutting code-review defects fixed, helpers consolidated. No outstanding implementation work — next moves are scoping decisions or new feature scopes.
+**Status:** Main is at PR #17. 421 step tests + 68 shared lib tests + 110 MCP vitest tests all green.
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                  # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live SP-API
 cd shared/lib/python && pytest tests/ sourcing_engine/tests/ # 68/68
-pytest fba_engine/steps/tests/                               # 416/416 (71 ip_risk + 157 decision + 65 build_output + 71 build_xlsx + 52 push_gsheets)
+pytest fba_engine/steps/tests/                               # 421/421 (71 ip_risk + 157 decision + 65 build_output + 71 build_xlsx + 57 push_gsheets)
 ```
 
-### What landed this session
+### What landed today (2026-04-30)
 
-**Code-review followups** (branch open): independent per-module review surfaced
-13 HIGH defects across the 5 step modules + 1 MEDIUM in decision_engine. All
-fixed with regression tests (+32 tests net):
+**PR #15 — Cross-cutting followups** (independent reviewer, MERGED): 13 HIGH defects + 1 MEDIUM across all 5 step modules. +32 regression tests. Notable fixes: `bought_int` `int(nan)` ValueError; CSV writes now atomic via tmp+rename; UTF-8-sig encoding round-trip; `compute_workbook` schema validation; cols 40+42 NUMERIC_COLS/PCT_COLS membership; chunked resumable uploads with per-chunk retry; `_is_quota_error` tightening; previous-sheet delete deferred until after new upload succeeds; orphan-sheet cleanup; tightened title clamp.
 
-- `ip_risk`: top-10 stats sort coerces numerics so `Monthly Gross Profit`
-  with non-numeric strings doesn't lex-sort ("9" > "10"). `_yes_token`
-  switched from a regex with implicit fullmatch anchoring to an explicit
-  `lower() in {"y","yes"}` check.
-- `decision_engine`: `calc_target_buy_price` returns `""` when the lane
-  buffer fully consumes the max buy price (legacy leaked `"GBP0.00"`).
-- `build_output`: NaN/inf-safe `bought_int` (was `int(nan)` → ValueError).
-  CSV writes are atomic via `<path>.tmp` + rename. Output CSVs use
-  `utf-8-sig` to round-trip cleanly with the read encoding (Excel BOM).
-  `working/` no longer created on missing-input exit.
-- `build_xlsx`: schema validation in `compute_workbook` (conditional fills
-  use hard-coded col indices, so a reordered frame would silently paint
-  wrong cells). Header borders restored on rows 2 + 3 (lost styling vs
-  legacy JS). Cols 40 (FBA Seller Count) + 42 (BB Amazon %) added to
-  `NUMERIC_COLS` / `PCT_COLS` — same JS-bug class as the documented
-  col-61 fix.
-- `push_to_gsheets`: 5 HIGH fixes — chunked resumable uploads with
-  per-chunk retry; `_retry_with_backoff` helper for transient (429/5xx)
-  errors; tightened `_is_quota_error` to canonical phrases (no false
-  positives on "API quota check timed out"); orchestrator now reads
-  csv_rows from the xlsx itself if not supplied so Strategy 3 always
-  has data; orphan-sheet cleanup if Strategy 3 population fails after
-  create succeeds; previous-sheet delete deferred until AFTER new
-  upload succeeds (no more half-deleted state).
+**PR #16 — Strategy 3 reads from CSV** (this session, MERGED): fixed a HIGH-severity regression PR #15 introduced. `_csv_rows_from_xlsx` was reading title + group-header rows from the styled XLSX, polluting the Sheets-API fallback Sheet. New `_csv_rows_from_path` prefers a sibling CSV (matches legacy JS); xlsx fallback now skips the 2-row styling prelude. +5 tests.
+
+**PR #17 — Helpers extraction** (this session, MERGED): consolidated 6 duplicated helpers (`coerce_str`, `parse_money`, `clamp`, `round_half_up`, `is_missing`, `atomic_write`) into `fba_engine/steps/_helpers.py`. Net -107 LOC across step files. Behavioural improvements landed alongside: `decision_engine.parse_money` now `pd.NA`-safe; `push_to_gsheets` id-file write now goes through `atomic_write` with crash cleanup. Zero test changes.
 
 ### Prior session highlights (kept for context)
 
@@ -75,15 +52,39 @@ those quotes when writing to `settings.json`. Bash `source` now works on the fil
 | 5.1 — Build Output (merge logic) | ~330 | **MERGED PR #12** (step 4c.1) |
 | 5.2 — Build Output (XLSX styling) | 529 | **MERGED PR #13** (step 4c.2) |
 | 5.3 — Build Output (GSheets push) | 311 | **MERGED PR #14** (step 4c.3) |
+| (cross-cutting) — Code-review followups | — | **MERGED PR #15** (13 HIGH + 1 MEDIUM defects fixed) |
+| (fix) — Strategy 3 reads from CSV | — | **MERGED PR #16** (HIGH regression in #15 fixed) |
+| (refactor) — `_helpers.py` extraction | — | **MERGED PR #17** (6 helpers consolidated) |
 | 3 — Scoring | 0 (SKILL.md) | **Scope decision needed**: extract a canonical scoring step, or keep agent-driven? Per-niche scripts get generated under `data/{niche}/working/`. |
 | 1 — Keepa Finder | 0 (browser) | **Separate scoping**: Keepa API integration vs Playwright vs keep as Claude Code skill |
 | 2 — SellerAmp | 0 (browser) | Same scoping question as Skill 1 |
 
-**Blockers:** None remaining for step 4. Outstanding items: the (deferred)
-`_helpers.py` extraction across step files, Skill 3 scope decision (extract
-canonical scoring step or keep agent-driven?), and the browser-vs-API scoping
-for Skills 1 + 2. Code-review followups of MEDIUM severity are tracked in
-the PR description for the followups branch (LOWs deferred).
+**Blockers:** None remaining for step 4 — it's complete. The remaining
+roadmap items all need *scoping decisions* before any implementation:
+
+1. **Skill 3 (scoring)**: `skills/skill-3-scoring/` is just a SKILL.md — no
+   ported code. Per-niche scoring scripts get generated under
+   `data/{niche}/working/` by an agent. Question: extract a canonical
+   `fba_engine/steps/scoring.py` (matches the rest of step 4), or leave
+   agent-driven? Tradeoff: portability + testability vs flexibility per niche.
+
+2. **Skill 1 (Keepa Finder) + Skill 2 (SellerAmp)**: both browser-based in
+   the legacy. Three options each: official API integration (Keepa has one,
+   SellerAmp has a paid API), Playwright headless automation, or keep as a
+   Claude Code skill that the agent invokes via the browser. Decision drives
+   whether they get ports at all.
+
+3. **Step 5 (YAML strategy runner)**: per the original architecture plan,
+   the `run_step(df, config)` contract on every ported step is meant to be
+   composed by a YAML runner under `fba_engine/strategies/`. Not started.
+   Unblocked by step 4 completion — this is the natural next-natural-task
+   if Peter wants to keep moving on the engine refactor.
+
+**Open low-priority polish (not blocking):**
+- Resumable upload progress logging dropped in PR #15 (`_status` discarded)
+- Title clamp at 200 chars vs Sheets API's actual 100-char limit
+- Strategy 2 silently falls through on auth failures (pre-existing, JS-faithful)
+- Dead `last_err` defensive branch in `_retry_with_backoff`
 
 ### Workflow notes (cumulative across sessions)
 - **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.
