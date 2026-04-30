@@ -1,0 +1,67 @@
+# Strategy: supplier_pricelist
+# Composes the canonical engine's per-stage step modules into a single
+# chain mirroring the legacy `sourcing_engine.main.run_pipeline`.
+#
+# Run via:
+#   python -m fba_engine.strategies.runner \
+#       --strategy fba_engine/strategies/supplier_pricelist.yaml \
+#       --context supplier=connect-beauty \
+#                 input_path=fba_engine/data/pricelists/connect-beauty/raw \
+#                 market_data_path=fba_engine/data/pricelists/connect-beauty/raw/keepa.csv \
+#                 run_dir=fba_engine/data/pricelists/connect-beauty/results/run \
+#                 timestamp=20260429_120000 \
+#                 supplier_label="Connect Beauty"
+#
+# Equivalent direct invocation: `python run.py --supplier connect-beauty`.
+# The YAML form is preferred when chaining strategies (e.g. Cowork
+# orchestration that wants to fan-out across multiple suppliers).
+
+name: supplier_pricelist
+description: >
+  Canonical supplier-pricelist sourcing strategy: discover from a
+  supplier adapter, resolve EAN→ASIN against Keepa, calculate fees +
+  conservative price + profit, decide SHORTLIST/REVIEW/REJECT, enrich
+  with SP-API preflight, and write CSV+XLSX+MD outputs.
+
+# `input.discover: true` tells the runner the first step creates the
+# DataFrame from supplier files (no input CSV to load).
+input:
+  discover: true
+
+steps:
+  # Stage 01 — discover (adapter ingest + normalise + case_detection).
+  - name: discover
+    module: fba_engine.steps.supplier_pricelist_discover
+    config:
+      supplier: "{supplier}"
+      input_path: "{input_path}"
+
+  # Stage 02 — resolve (EAN validation + Amazon market match).
+  - name: resolve
+    module: fba_engine.steps.resolve
+    config:
+      market_data_path: "{market_data_path}"
+
+  # Stage 04 — calculate (fees + conservative price + profit + risk).
+  - name: calculate
+    module: fba_engine.steps.calculate
+
+  # Stage 05 — decide (SHORTLIST / REVIEW / REJECT).
+  - name: decide
+    module: fba_engine.steps.decide
+
+  # Stage 03 — enrich (SP-API preflight). Mirrors run_pipeline's
+  # AFTER-decide ordering. Set enabled=false for offline / no-creds
+  # environments.
+  - name: enrich
+    module: fba_engine.steps.enrich
+    config:
+      enabled: true
+
+  # Stage 06 — output (CSV + XLSX + MD writers).
+  - name: output
+    module: fba_engine.steps.supplier_pricelist_output
+    config:
+      run_dir: "{run_dir}"
+      timestamp: "{timestamp}"
+      supplier_label: "{supplier_label}"

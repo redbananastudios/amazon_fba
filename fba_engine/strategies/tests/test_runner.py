@@ -126,6 +126,43 @@ steps:
         strat = load_strategy(self._write_yaml(tmp_path, body))
         assert strat.steps[0].config == {}
 
+    def test_input_discover_flag_loads(self, tmp_path: Path):
+        body = """\
+name: t
+description: d
+input:
+  discover: true
+steps: []
+"""
+        strat = load_strategy(self._write_yaml(tmp_path, body))
+        assert strat.input_discover is True
+        assert strat.input_path is None
+
+    def test_input_discover_default_false(self, tmp_path: Path):
+        body = """\
+name: t
+description: d
+input:
+  path: "/tmp/x.csv"
+steps: []
+"""
+        strat = load_strategy(self._write_yaml(tmp_path, body))
+        assert strat.input_discover is False
+
+    def test_input_discover_quoted_string_rejected(self, tmp_path: Path):
+        # A string `"true"` is truthy via bool() — silent acceptance
+        # would let `discover: "false"` (still truthy) wrongly opt-in.
+        # The loader must reject anything that isn't a real YAML bool.
+        body = """\
+name: t
+description: d
+input:
+  discover: "true"
+steps: []
+"""
+        with pytest.raises(StrategyConfigError, match="discover"):
+            load_strategy(self._write_yaml(tmp_path, body))
+
     def test_missing_name_field_raises(self, tmp_path: Path):
         body = """\
 description: no name
@@ -229,6 +266,15 @@ class TestRunStrategyControlFlow:
         strat = _strategy(steps=[])
         with pytest.raises(StrategyConfigError, match="input"):
             run_strategy(strat, context={}, df_in=None)
+
+    def test_input_discover_flag_passes_empty_df(self):
+        # Strategies whose first step is a discoverer (creates rows from
+        # supplier files / API calls) opt out of the input.path guard
+        # via input.discover: true. The runner passes an empty df_in
+        # and the discover step ignores it.
+        strat = _strategy(steps=[], input_discover=True)
+        out = run_strategy(strat, context={}, df_in=None)
+        assert out.empty
 
     def test_empty_step_chain_returns_input_unchanged(self):
         df = pd.DataFrame([{"ASIN": "B0"}])
@@ -379,3 +425,64 @@ class TestKeepaNicheStrategy:
         # Output CSV was written to the sandbox via atomic_write.
         output_csv = tmp_path / "working" / "kids_toys_phase6_decisions.csv"
         assert output_csv.exists()
+
+
+class TestSupplierPricelistStrategy:
+    """Smoke test: the canonical supplier_pricelist.yaml loads and
+    structurally matches the new step modules + the input.discover
+    contract."""
+
+    _SUPPLIER_CSV = (
+        "SKU,Manufacturer,Title,Category,Barcode,Case Size,"
+        "Units Available,Unit Price (GBP),Case Price (GBP)\n"
+        "SKU-A,Acme,Widget,Tools,5012345678900,1,100,5.00,5.00\n"
+    )
+
+    def test_supplier_pricelist_yaml_loads_with_discover_input(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = repo_root / "fba_engine" / "strategies" / "supplier_pricelist.yaml"
+        if not yaml_path.exists():
+            pytest.skip(f"supplier_pricelist.yaml not found at {yaml_path}")
+
+        strat = load_strategy(yaml_path)
+        assert strat.name == "supplier_pricelist"
+        assert strat.input_discover is True
+        assert strat.input_path is None
+        # All six step module paths are real Python modules.
+        for step in strat.steps:
+            __import__(step.module)
+
+    def test_supplier_pricelist_yaml_runs_end_to_end(self, tmp_path: Path):
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = repo_root / "fba_engine" / "strategies" / "supplier_pricelist.yaml"
+        if not yaml_path.exists():
+            pytest.skip(f"supplier_pricelist.yaml not found at {yaml_path}")
+
+        # Sandbox the supplier raw + run dir under tmp_path.
+        raw = tmp_path / "raw"
+        raw.mkdir()
+        (raw / "p.csv").write_text(self._SUPPLIER_CSV, encoding="utf-8")
+        run_dir = tmp_path / "out"
+
+        context = {
+            "supplier": "connect-beauty",
+            "input_path": str(raw),
+            "market_data_path": "",  # no Keepa CSV — every row REJECTs (no_match)
+            "run_dir": str(run_dir),
+            "timestamp": "20260429_120000",
+            "supplier_label": "Connect Beauty",
+        }
+
+        # `enabled: true` in the YAML for enrich would call the MCP CLI.
+        # Override via the strategy YAML's loaded steps to disable it for
+        # this offline test.
+        strat = load_strategy(yaml_path)
+        for s in strat.steps:
+            if s.name == "enrich":
+                s.config["enabled"] = False
+
+        out = run_strategy(strat, context=context, df_in=None)
+        # Every row should REJECT (no Keepa data).
+        assert (out["decision"] == "REJECT").all()
+        # Output writers ran and produced the timestamped CSV.
+        assert (run_dir / "shortlist_20260429_120000.csv").exists()
