@@ -6,99 +6,90 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-04-30 (later in same session)
-**Currently working on:** Step 5 (YAML strategy runner) just shipped. Step 4 + step 5 of the engine refactor are now both complete. The `keepa_niche` pipeline is fully expressible as a single YAML and runs end-to-end through ported Python steps.
-**Status:** Main is at PR #18. 444 Python tests + 110 MCP vitest tests all green.
+**Last updated:** 2026-04-30 (Phase 2 complete — 5 PRs merged this session)
+**Currently working on:** Phase 2 of `docs/PRD-sourcing-strategies.md` is fully shipped. Canonical engine refactored, keepa_client production-grade, two new sourcing strategies (seller_storefront, oa_csv) live, run_summary.json observability sidecar added.
+**Status:** Main is at PR #30 (commit `ca0b281`). **719 Python tests + 110 MCP vitest = 829 total green.**
 
 **Latest tests baseline:**
 ```bash
-cd services/amazon-fba-fees-mcp && npm test                  # 110/110 unit
-cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live SP-API
-cd shared/lib/python && pytest tests/ sourcing_engine/tests/ # 68/68
-pytest fba_engine/steps/tests/                               # 421/421 (71 ip_risk + 157 decision + 65 build_output + 71 build_xlsx + 57 push_gsheets)
-pytest fba_engine/strategies/tests/                          # 23/23 (YAML runner)
+cd services/amazon-fba-fees-mcp && npm test                          # 110/110 unit
+cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
+pytest shared/lib/python/ fba_engine/steps/tests/ \
+       fba_engine/strategies/tests/ cli/tests/                       # 719/719 in ~11s
 ```
 
-### What landed today (2026-04-30)
+### What landed this session (2026-04-30, Phase 2)
 
-**PR #15 — Cross-cutting followups** (independent reviewer, MERGED): 13 HIGH defects + 1 MEDIUM across all 5 step modules. +32 regression tests. Notable fixes: `bought_int` `int(nan)` ValueError; CSV writes now atomic via tmp+rename; UTF-8-sig encoding round-trip; `compute_workbook` schema validation; cols 40+42 NUMERIC_COLS/PCT_COLS membership; chunked resumable uploads with per-chunk retry; `_is_quota_error` tightening; previous-sheet delete deferred until after new upload succeeds; orphan-sheet cleanup; tightened title clamp.
+**PR #26 — Canonical engine refactor** (MERGED): split `sourcing_engine.main.run_pipeline` into 6 composable step modules at `fba_engine/steps/` exposing the `run_step(df, config) -> df` contract:
+- `supplier_pricelist_discover` — adapter ingest + normalise + case_detection
+- `resolve` — EAN validation + Amazon market match (multi-match explosion)
+- `calculate` — fees + conservative price + profit + risk flags
+- `decide` — SHORTLIST / REVIEW / REJECT verdicts
+- `enrich` — SP-API preflight passthrough
+- `supplier_pricelist_output` — CSV + XLSX + MD writers
 
-**PR #16 — Strategy 3 reads from CSV** (this session, MERGED): fixed a HIGH-severity regression PR #15 introduced. `_csv_rows_from_xlsx` was reading title + group-header rows from the styled XLSX, polluting the Sheets-API fallback Sheet. New `_csv_rows_from_path` prefers a sibling CSV (matches legacy JS); xlsx fallback now skips the 2-row styling prelude. +5 tests.
+`run_pipeline` keeps its public signature; internally composes the new modules. Adds `fba_engine/strategies/supplier_pricelist.yaml`. Runner extended with `input.discover: true` (strict bool — quoted `"true"` rejected). Caught + fixed a NaN-truthy bug that would have skipped match rows after DataFrame round-trip (`pd.DataFrame` fills missing dict keys with NaN, which is truthy — `is_missing()` is the safe check). PR #25's 9-case integration test was the regression check.
 
-**PR #17 — Helpers extraction** (this session, MERGED): consolidated 6 duplicated helpers (`coerce_str`, `parse_money`, `clamp`, `round_half_up`, `is_missing`, `atomic_write`) into `fba_engine/steps/_helpers.py`. Net -107 LOC across step files. Behavioural improvements landed alongside: `decision_engine.parse_money` now `pd.NA`-safe; `push_to_gsheets` id-file write now goes through `atomic_write` with crash cleanup. Zero test changes.
+**PR #27 — keepa_client batch + stale-on-error** (MERGED):
+- `KeepaClient.get_products(asins)` — chunked batch lookup (dedupes input, preserves order, filters Keepa nulls, defensive against extras Keepa returns beyond request).
+- `DiskCache.get_stale(namespace, key)` — TTL-ignoring lookup.
+- All three Keepa methods (`get_product`, `get_products`, `get_seller`) fall back to expired cached data when API fails after retries. Token log records `cached=true, stale=true` so operators correlate degraded responses with upstream incidents. Single-ASIN methods raise when no fallback exists; the batch method silently drops affected ASINs (caller compares `len(out)` to `len(asins)`).
 
-**Step 5 — YAML strategy runner** (later this session, PR open): new `fba_engine/strategies/` with `runner.py` (~310 LOC), `keepa_niche.yaml`, and 23 pytest cases. Composes ported step modules via the `run_step(df, config) -> df` contract. Variable interpolation (`{niche}`, `{base}`, etc.), `StrategyConfigError` vs `StrategyExecutionError` taxonomy, atomic CSV write via shared `atomic_write` helper, callable-checked step loading, friendly CLI error reporting. Smoke test confirmed: 3-step `keepa_niche` chain end-to-end produces 78-column output (44 input + 9 ip_risk + 14 build_output reshape + 11 decision_engine), verdict NEGOTIATE on the clean fixture row. Pre-PR code-reviewer surfaced 5 LOWs (verdict pin, atomic write, callable check, interpolation depth comment, CLI error wrapping) — all addressed before PR open.
+**PR #28 — seller_storefront discovery step** (MERGED): `fba_engine/steps/seller_storefront.py` walks an Amazon seller's storefront via Keepa and emits a canonical leads DataFrame (asin, source, seller_id, seller_name, product_name, brand, category, amazon_url). Wholesale-leads strategy. No buy_cost — discovery is leads-only by design (heuristic buy_cost would silently produce fake ROI verdicts). +15 tests with stubbed KeepaClient.
+
+**PR #29 — strategy YAMLs** (MERGED):
+- `fba_engine/strategies/seller_storefront.yaml` — 2-step chain: discover → supplier_leads → output CSV + supplier_leads.md.
+- `fba_engine/strategies/oa_csv.yaml` — 1-step: discover → output (OA buyers go directly to retail_url; supplier_leads redundant).
+- 4 YAML smoke tests including end-to-end runs with stubbed Keepa.
+
+**PR #30 — run_summary.json + strategy docs** (MERGED): when `output.csv` is set, runner writes a `<csv-stem>.summary.json` sibling capturing strategy name, context, started_at/completed_at (ISO 8601 UTC), duration, initial_rows, final_rows, per-step `step_summary` (name, module, rows_in, rows_out, duration, error?), outputs paths. Failure path doesn't serialise the summary (operators read StrategyExecutionError + logs). Plus `docs/strategies/seller_storefront.md` + `docs/strategies/oa_csv.md` matching the existing `supplier_pricelist.md` shape. +4 tests.
 
 ### Prior session highlights (kept for context)
 
-**Step 4b — Decision Engine port** (PR #10, MERGED): 1:1 port of `phase6_decision.js` (651 LOC) → 155 pytest cases.
+**Phase 1 (PRs #20-#25, MERGED):** docs/PRD-sourcing-strategies.md (PR #20), keepa_client foundation (PR #21), supplier_leads step / Skill 99 v1 (PR #22), oa_csv discovery + SellerAmp 2DSorter importer (PR #23), CLI launch helpers (PR #24), sourcing_engine integration test as PR #7 safety net (PR #25).
 
-**Step 4c.1 — Build Output merge** (PR #12, MERGED): 1:1 port of `phase5_build.js` (~330 LOC) → 60 pytest cases.
+**Step 4 + 5 (PRs #8-#18, MERGED, prior session):** ip_risk, decision_engine, build_output (3-part: merge/XLSX/GSheets), cross-cutting fixes, helpers extraction, YAML strategy runner with `keepa_niche.yaml`.
 
-**Step 4c.2 — XLSX styling** (PR #13, MERGED): port of `build_final_xlsx.js` (529 LOC) via openpyxl → 65 pytest cases.
+### Roadmap status (where we are)
 
-**Step 4c.3 — Google Sheets push** (PR #14, MERGED): Port of `push_to_gsheets.js` (311 LOC) → 37 pytest cases.
+**Phase 2 of PRD: COMPLETE** ✅ (PRs #26–#30 this session)
 
-**PRs #6–#9** (prior session): doc-drift fixes, MCP M1-M4 + L1-L7 follow-ups
-(110/110 vitest), step 4a IP Risk port (67 pytest), handoff doc. All merged.
+| Phase 2 deliverable | Status |
+|---|---|
+| Canonical engine refactor (6 step modules) | ✅ #26 |
+| keepa_client batch + stale-on-error | ✅ #27 |
+| seller_storefront discovery step | ✅ #28 |
+| seller_storefront.yaml + oa_csv.yaml | ✅ #29 |
+| run_summary.json + strategy docs | ✅ #30 |
 
-**Credentials infrastructure** (prior session): `F:/My Drive/workspace/credentials.env`
-now quotes values containing bash special chars; `sync-credentials.ps1` strips
-those quotes when writing to `settings.json`. Bash `source` now works on the file.
+**Open scoping decisions (no PRs yet):**
 
-### Step 4 roadmap status
+1. **`keepa_enrich` step** — fetches `market_price` / `fees` / `sales_estimate` per ASIN so `oa_csv` can chain into `calculate→decide` for full ROI verdicts. Currently `oa_csv.yaml` stops at discovery (leads-only). The existing `resolve` step is EAN-keyed and assumes supplier-pricelist input, doesn't fit OA's pre-resolved ASINs. Implementation involves parsing Keepa's `csv` array indices (deliberately avoided in `KeepaProduct` model so far). Med-effort PR.
 
-| Skill / Sub-step | LOC (JS) | Status |
-|---|---|---|
-| 4 — IP Risk | 351 | **MERGED PR #8** |
-| 6 — Decision Engine | 651 | **MERGED PR #10** (step 4b) |
-| 5.1 — Build Output (merge logic) | ~330 | **MERGED PR #12** (step 4c.1) |
-| 5.2 — Build Output (XLSX styling) | 529 | **MERGED PR #13** (step 4c.2) |
-| 5.3 — Build Output (GSheets push) | 311 | **MERGED PR #14** (step 4c.3) |
-| (cross-cutting) — Code-review followups | — | **MERGED PR #15** (13 HIGH + 1 MEDIUM defects fixed) |
-| (fix) — Strategy 3 reads from CSV | — | **MERGED PR #16** (HIGH regression in #15 fixed) |
-| (refactor) — `_helpers.py` extraction | — | **MERGED PR #17** (6 helpers consolidated) |
-| Step 5 — YAML strategy runner | — | **PR open** (this session) — `fba_engine/strategies/runner.py` + `keepa_niche.yaml` + 23 tests |
-| 3 — Scoring | 0 (SKILL.md) | **Scope decision needed**: extract a canonical scoring step, or keep agent-driven? Per-niche scripts get generated under `data/{niche}/working/`. |
-| 1 — Keepa Finder | 0 (browser) | **Separate scoping**: Keepa API integration vs Playwright vs keep as Claude Code skill |
-| 2 — SellerAmp | 0 (browser) | Same scoping question as Skill 1 |
+2. **Skill 1 (Keepa Finder) + Skill 2 (SellerAmp)** — both browser-based in the legacy. Three options each: official API (Keepa has one; SellerAmp has paid API), Playwright headless, or keep as Claude Code skills. Decision drives whether they get ports at all.
 
-**Blockers:** None remaining for steps 4 + 5 — both complete. The remaining
-roadmap items all need *scoping decisions* before any implementation:
-
-1. **Skill 3 (scoring)**: `skills/skill-3-scoring/` is just a SKILL.md — no
-   ported code. Per-niche scoring scripts get generated under
-   `data/{niche}/working/` by an agent. Question: extract a canonical
-   `fba_engine/steps/scoring.py` (matches the rest of step 4), or leave
-   agent-driven? Tradeoff: portability + testability vs flexibility per niche.
-
-2. **Skill 1 (Keepa Finder) + Skill 2 (SellerAmp)**: both browser-based in
-   the legacy. Three options each: official API integration (Keepa has one,
-   SellerAmp has a paid API), Playwright headless automation, or keep as a
-   Claude Code skill that the agent invokes via the browser. Decision drives
-   whether they get ports at all.
-
-3. **`supplier_pricelist` strategy YAML**: the canonical engine at
-   `shared/lib/python/sourcing_engine/` doesn't yet expose a
-   `run_step(df, config) -> df` contract — it's a top-down `main.py`
-   orchestrator. Refactoring it into composable steps so it can also be
-   expressed as a strategy YAML is a meaningful project but unblocked by
-   step 5 landing. Lower priority than the scoping decisions above.
+3. **Skill 3 (Scoring)** — `skills/skill-3-scoring/` is just a SKILL.md. Per-niche scoring scripts get generated under `data/{niche}/working/` by an agent. Question: extract canonical `fba_engine/steps/scoring.py` (matches rest of step 4), or leave agent-driven? Tradeoff: portability + testability vs flexibility per niche.
 
 **Open low-priority polish (not blocking):**
 - Resumable upload progress logging dropped in PR #15 (`_status` discarded)
 - Title clamp at 200 chars vs Sheets API's actual 100-char limit
 - Strategy 2 silently falls through on auth failures (pre-existing, JS-faithful)
 - Dead `last_err` defensive branch in `_retry_with_backoff`
+- TA + OAXray oa_importers stubbed out — add their parsers when needed
 
 ### Workflow notes (cumulative across sessions)
 - **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.
+- **`gh pr merge` in worktrees:** Local cleanup fails because main is checked out at the parent worktree (`fatal: 'main' is already used by worktree at 'O:/fba'`). Use `gh pr merge <N> --merge --delete-branch --admin` — the merge succeeds on GitHub even when local cleanup fails. Verify via `gh pr view <N> --json state,mergedAt`.
+- **Always fetch before branching:** After merging a PR, run `git fetch origin && git checkout -b <new-branch> origin/main` (NOT just `origin/main` from stale local cache). Branching off pre-merge state silently drops the merged work.
+- **NaN-truthy trap (pandas):** `pd.DataFrame.from_records(list_of_dicts)` fills missing dict keys with NaN, which is **truthy** for floats. The naive `if row_dict.get("decision"):` short-circuits on rows that came through DataFrame construction even when decision is genuinely absent. Use `is_missing()` from `fba_engine/steps/_helpers.py` (catches None / NaN / pd.NA / pd.NaT).
 - **TS imports:** This project uses ESM/nodenext — relative imports MUST end in `.js` even when source is `.ts` (e.g., `import {X} from "./foo.js"`). Otherwise `npm run build` fails (vitest is more lenient).
 - **MCP test path:** Always run `npm` commands inside the actual worktree's `services/amazon-fba-fees-mcp/`, not `O:/fba/services/amazon-fba-fees-mcp/`. They're separate copies.
 - **Credential sync:** After editing `F:\My Drive\workspace\credentials.env`, run `& 'F:\My Drive\workspace\sync-credentials.ps1'` (PowerShell — bash quoting breaks on the space in "My Drive"). Then verify with `grep '"SP_API_' "C:/Users/peter/.claude/settings.json"`.
 - **MCP `.mcp.json` path** at repo root references the MCP at `services/amazon-fba-fees-mcp/dist/index.js` (corrected from old root-level path during cleanup).
 - **SP-API endpoint group names** (amazon-sp-api lib): catalogItems, productFees, listingsRestrictions, fbaInboundEligibility, productPricing. Use `client.callAPI({ operation, endpoint, ... })`.
 - **Disk cache layout:** `<repo>/.cache/fba-mcp/<resource>/<key-parts>__joined.json` — gitignored. `DiskCache.get()` returns `{ hit, stale, data }` enabling stale-on-error fallback.
+- **Keepa cache layout:** `<keepa_cache_root>/<namespace>/<key>.json` per `shared/lib/python/keepa_client/cache.py`. Use `DiskCache.get_stale()` for stale-on-error fallback (introduced in PR #27).
+- **Strategy YAML `input.discover: true`:** when first step creates the DataFrame from API/files, set this flag instead of `input.path`. Strict bool coercion at load time — quoted `"true"` / `"false"` get rejected.
 - **Vitest integration tests:** Live in `src/__integration__/*.integration.test.ts`. Excluded from default `npm test` via `vitest.config.ts` exclude. Run with `npm run test:integration` (separate `vitest.integration.config.ts`).
 
 ## Session Protocol
