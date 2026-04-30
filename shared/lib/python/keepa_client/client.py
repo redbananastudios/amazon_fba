@@ -2,14 +2,22 @@
 
 Wraps the rate limiter, cache, and token-usage log so callers get a
 cache-aware, throttled, observability-instrumented `get_product` /
-`get_seller` interface.
+`get_products` / `get_seller` interface.
 
-Per PRD §13 build order, this PR delivers single-ASIN product + seller
-lookups. Batch product lookups and stale-on-error are deferred to a
-follow-up.
+Phase 2.1 (this PR) adds:
+  - `get_products(asins)`: batch product lookup. Keepa's /product endpoint
+    accepts a comma-separated list; the client chunks per
+    ``config.batching.product_batch_size``, dedupes against the cache,
+    preserves caller-supplied ASIN order, and filters Keepa's `null`
+    entries for unknown ASINs.
+  - Stale-on-error: when the API fails after exhausting retries, the
+    client serves expired cached entries rather than raising. The token
+    log records this with ``cached=true, stale=true`` so operators can
+    correlate degraded responses with upstream incidents.
 """
 from __future__ import annotations
 
+import logging
 import random
 import time
 from typing import Any, Callable
@@ -21,6 +29,8 @@ from .config import KeepaConfig
 from .log import append_token_log
 from .models import KeepaProduct, KeepaSeller
 from .rate_limit import TokenBucket
+
+logger = logging.getLogger(__name__)
 
 
 class KeepaApiError(RuntimeError):
@@ -71,7 +81,25 @@ class KeepaClient:
             "seller": seller_id,
             "storefront": 1 if storefront else 0,
         }
-        payload = self._request("/seller", params)
+        try:
+            payload = self._request("/seller", params)
+        except KeepaApiError:
+            stale = self._cache.get_stale("seller", cache_key)
+            if stale is not None:
+                logger.warning(
+                    "Keepa /seller failed for %s — using stale cache",
+                    seller_id,
+                )
+                append_token_log(
+                    self._log_path, endpoint="seller", tokens=0, cached=True,
+                    extra={
+                        "seller_id": seller_id,
+                        "storefront": storefront,
+                        "stale": True,
+                    },
+                )
+                return KeepaSeller.model_validate(stale)
+            raise
         tokens_used = int(payload.get("tokensConsumed", 0))
         append_token_log(
             self._log_path, endpoint="seller", tokens=tokens_used, cached=False,
@@ -106,7 +134,20 @@ class KeepaClient:
             "domain": self._config.api.marketplace,
             "asin": asin,
         }
-        payload = self._request("/product", params)
+        try:
+            payload = self._request("/product", params)
+        except KeepaApiError:
+            stale = self._cache.get_stale("product", asin)
+            if stale is not None:
+                logger.warning(
+                    "Keepa /product failed for %s — using stale cache", asin,
+                )
+                append_token_log(
+                    self._log_path, endpoint="product", tokens=0, cached=True,
+                    extra={"asin": asin, "stale": True},
+                )
+                return KeepaProduct.model_validate(stale)
+            raise
         tokens_used = int(payload.get("tokensConsumed", 0))
         append_token_log(
             self._log_path, endpoint="product", tokens=tokens_used, cached=False,
@@ -123,6 +164,119 @@ class KeepaClient:
         ttl = self._config.cache.ttl_seconds.get("product", 24 * 3600)
         self._cache.set("product", asin, product_payload, ttl_seconds=ttl)
         return KeepaProduct.model_validate(product_payload)
+
+    def get_products(self, asins: list[str]) -> list[KeepaProduct]:
+        """Look up multiple products in one or more batched API calls.
+
+        Behaviour:
+          - Empty input returns ``[]`` without any HTTP call.
+          - Already-cached ASINs are served from the cache and removed
+            from the batch — only uncached ASINs hit the API.
+          - The remaining ASINs are chunked at
+            ``config.batching.product_batch_size`` and each chunk is
+            sent as a single comma-separated /product call. Each
+            returned product is cached individually so a subsequent
+            ``get_product`` call hits without an HTTP round-trip.
+          - Output preserves the order of the input ``asins`` list.
+          - Keepa returns ``null`` entries for ASINs it couldn't
+            resolve; those are filtered out (the result list may
+            therefore be shorter than the input).
+          - On API failure, ASINs with a stale cached entry fall back
+            to the stale value; the rest are dropped (caller compares
+            ``len(out)`` to ``len(asins)`` to detect partial loss).
+        """
+        if not asins:
+            return []
+
+        # Build the by-ASIN result map first; that lets us preserve
+        # caller order regardless of how the cache + API split the work.
+        by_asin: dict[str, dict] = {}
+
+        # Cache pass — pull anything fresh, leave the rest for the API.
+        uncached: list[str] = []
+        for asin in asins:
+            cached = self._cache.get("product", asin)
+            if cached is not None:
+                by_asin[asin] = cached
+                append_token_log(
+                    self._log_path, endpoint="product", tokens=0, cached=True,
+                    extra={"asin": asin, "batch": True},
+                )
+            else:
+                uncached.append(asin)
+
+        # API pass — chunked. Dedupe via `dict.fromkeys` (preserves first-
+        # seen order, drops duplicate ASINs in the input so we don't waste
+        # tokens fetching the same ASIN twice in one call).
+        to_fetch = list(dict.fromkeys(uncached))
+        batch_size = self._config.batching.product_batch_size
+        ttl = self._config.cache.ttl_seconds.get("product", 24 * 3600)
+
+        for i in range(0, len(to_fetch), batch_size):
+            chunk = to_fetch[i : i + batch_size]
+            params = {
+                "key": self._api_key,
+                "domain": self._config.api.marketplace,
+                "asin": ",".join(chunk),
+            }
+            try:
+                payload = self._request("/product", params)
+            except KeepaApiError:
+                # Stale-on-error: serve any expired cache entries for
+                # this chunk, log them as stale, drop the rest. Don't
+                # propagate — partial data is better than no data for
+                # batch callers (e.g. seller_storefront walking 1000
+                # ASINs that should not all fail because Keepa is
+                # transiently degraded).
+                logger.warning(
+                    "Keepa /product batch (%d ASINs) failed — serving stale "
+                    "cache where available", len(chunk),
+                )
+                for asin in chunk:
+                    stale = self._cache.get_stale("product", asin)
+                    if stale is not None:
+                        by_asin[asin] = stale
+                        append_token_log(
+                            self._log_path, endpoint="product",
+                            tokens=0, cached=True,
+                            extra={"asin": asin, "batch": True, "stale": True},
+                        )
+                # `continue` skips this chunk only; subsequent chunks
+                # still attempt fresh fetches (one bad chunk doesn't
+                # poison the rest of the batch).
+                continue
+
+            tokens_used = int(payload.get("tokensConsumed", 0))
+            append_token_log(
+                self._log_path, endpoint="product",
+                tokens=tokens_used, cached=False,
+                extra={"batch_size": len(chunk), "batch": True},
+            )
+
+            products = payload.get("products") or []
+            # Keepa returns one entry per requested ASIN, possibly
+            # `null` for ASINs it couldn't resolve. Filter nulls.
+            for prod in products:
+                if not prod:
+                    continue
+                asin = prod.get("asin")
+                if not asin:
+                    continue
+                self._cache.set("product", asin, prod, ttl_seconds=ttl)
+                by_asin[asin] = prod
+
+        # Reassemble in input order, dropping any ASINs we couldn't
+        # resolve at all (no cache, no API, no stale fallback). Order
+        # is carried by `asins` (the input list) — `by_asin` is a dict
+        # used only for O(1) lookup, so insertion order doesn't leak.
+        # Extra ASINs that Keepa returned beyond the request are cached
+        # under their own asin key but excluded from the output here
+        # (they're not in `asins`, so the membership check filters them).
+        return [
+            KeepaProduct.model_validate(by_asin[a])
+            for a in asins
+            if a in by_asin
+        ]
 
     # ──────────────────────────────────────────────────────────────────
     # Internal HTTP layer.
