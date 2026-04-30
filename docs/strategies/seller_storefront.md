@@ -81,6 +81,8 @@ In `<run_dir>/`:
 
 ## Schema
 
+Discovery columns (from Keepa):
+
 | Column | Source | Notes |
 |---|---|---|
 | `asin` | Keepa | Amazon Standard Identification Number |
@@ -91,6 +93,22 @@ In `<run_dir>/`:
 | `brand` | Keepa | Empty string when missing (not None) |
 | `category` | Keepa | Leaf of `categoryTree` |
 | `amazon_url` | constructed | `https://www.amazon.co.uk/dp/<asin>` |
+
+Enrichment columns (added by `enrich` in leads mode — SP-API):
+
+| Column | Source | Notes |
+|---|---|---|
+| `restriction_status` | SP-API listingsRestrictions | `UNRESTRICTED` / `BRAND_GATED` / etc. None when MCP unavailable |
+| `restriction_reasons` | SP-API listingsRestrictions | Comma-joined reason codes |
+| `fba_eligible` | SP-API fbaInboundEligibility | `true` / `false` / None |
+| `fba_ineligibility` | SP-API fbaInboundEligibility | Comma-joined ineligibility codes |
+| `catalog_brand` | SP-API catalogItems | Canonical brand from Amazon's catalog |
+| `hazmat_classification` | SP-API catalogItems | E.g. `"NONE"` / `"DANGEROUS_GOODS"` |
+
+Supplier-leads columns (added by `supplier_leads`):
+
+| Column | Source | Notes |
+|---|---|---|
 | `supplier_search_brand_distributor` | supplier_leads | Empty when brand is missing |
 | `supplier_search_brand_trade` | supplier_leads | Empty when brand is missing |
 | `supplier_search_product_wholesale` | supplier_leads | Always populated |
@@ -100,8 +118,18 @@ In `<run_dir>/`:
 ## Pipeline
 
 ```
-discover → supplier_leads → output CSV
+discover → enrich (leads mode) → supplier_leads → output CSV
 ```
+
+`enrich` calls the SP-API MCP in leads mode (`include: leads`,
+expanding to `[restrictions, fba, catalog]`). This adds gating /
+FBA eligibility / hazmat / catalog brand to each ASIN before the
+operator decides who to chase. Replaces what the legacy SellerAmp
+skill (Skill 2) used to provide for non-Buy-Box-% checks.
+
+`enrich` no-ops silently when SP-API creds aren't set or the MCP
+CLI isn't built — strategy still produces a leads CSV, just without
+gating columns.
 
 No `resolve` / `calculate` / `decide` steps — this is leads-only by
 design. A heuristic `buy_cost` (e.g. `market_price * 0.5`) would

@@ -33,6 +33,18 @@ steps:
     config:
       seller_id: "{seller_id}"
 
+  # Stage 03 — enrich: SP-API preflight (leads mode). Adds gating /
+  # FBA eligibility / hazmat / catalog brand to each ASIN via the
+  # MCP. `include: leads` is the alias for [restrictions, fba,
+  # catalog] — skips pricing-dependent sources because ASINs at this
+  # stage have no market_price yet. Replaces what the legacy
+  # SellerAmp skill (Skill 2) used to provide for non-Buy-Box-%
+  # checks. Silently no-ops when SP-API creds aren't set.
+  - name: enrich
+    module: fba_engine.steps.enrich
+    config:
+      include: leads
+
   # Stage 07 — supplier_leads: append supplier_search_* URLs.
   # Reads brand + product_name from each row and renders the configured
   # search templates (Brand distributor UK, Brand trade account, Product

@@ -1,15 +1,29 @@
 ﻿---
 name: skill-2-selleramp
 description: >
-  FBA sourcing Phase 2. Use after Skill 1 has produced a phase1_filtered.csv.
-  Triggers on: "run phase 2", "enrich products", "selleramp validation",
-  "check fees and gating". Reads the Keepa export, applies a fast
-  pre-filter using data already in the file, then visits sas.selleramp.com
-  for each surviving product to collect Fulfilment Fees, ROI, Buy Box %, gating
-  and hazmat status. Rescores and trims after enrichment.
+  DEPRECATED legacy skill. The non-Buy-Box-% checks (gating, FBA
+  eligibility, hazmat, catalog brand) are now provided by the SP-API
+  MCP via fba_engine/steps/enrich.py with `include: leads`. Buy Box %
+  remains the only SellerAmp-unique field; Keepa stats expose enough
+  signal (`buy_box_avg90`) for most cases. Keep this file for
+  reference only — do not invoke from new pipelines.
 ---
 
-# Skill 2 -- SellerAmp Enrichment (Phase 2)
+# Skill 2 -- SellerAmp Enrichment (Phase 2) — DEPRECATED
+
+> **Deprecated 2026-04-30.** Replaced by the canonical engine's
+> `enrich` step in leads mode (PR #34). The MCP at
+> `services/amazon-fba-fees-mcp/` returns gating, FBA eligibility,
+> hazmat, and catalog brand directly via SP-API — no SellerAmp login
+> or paid subscription required. Strategies that need this data
+> chain `enrich` with `include: leads` (alias for
+> `[restrictions, fba, catalog]`).
+>
+> See `docs/strategies/seller_storefront.md` for the canonical
+> wholesale-leads workflow. The historical SellerAmp content below
+> is kept for archival reference only.
+
+---
 
 Reads phase1_filtered.csv (output of Phase 1 exclusion filter),
 pre-filters using Keepa data, then visits sas.selleramp.com per ASIN
