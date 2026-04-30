@@ -681,3 +681,398 @@ class TestTokenBucketEngagement:
         client.get_seller("A2", storefront=True)
         # Second call drains burst → should sleep for refill.
         assert len(sleeps) >= 1
+
+
+# ---------------------------------------------------------------------------
+# DiskCache.get_stale — fallback contract for stale-on-error
+# ---------------------------------------------------------------------------
+
+
+class TestDiskCacheGetStale:
+    def test_returns_value_even_when_expired(self, tmp_path: Path):
+        cache = DiskCache(root=tmp_path)
+        cache.set("product", "B0STALE", {"asin": "B0STALE"}, ttl_seconds=0)
+        time.sleep(0.01)
+        # Confirm the normal get returns None for the expired entry...
+        assert cache.get("product", "B0STALE") is None
+        # ...but get_stale returns the stored value regardless.
+        stale = cache.get_stale("product", "B0STALE")
+        assert stale is not None
+        assert stale["asin"] == "B0STALE"
+
+    def test_returns_value_for_fresh_entry_too(self, tmp_path: Path):
+        # Don't penalise callers using get_stale on a still-fresh entry.
+        # The flag means "expired is acceptable", not "expired is required".
+        cache = DiskCache(root=tmp_path)
+        cache.set("product", "B0FRESH", {"asin": "B0FRESH"}, ttl_seconds=3600)
+        result = cache.get_stale("product", "B0FRESH")
+        assert result["asin"] == "B0FRESH"
+
+    def test_returns_none_for_unknown_key(self, tmp_path: Path):
+        # Missing entry → still None; stale-on-error has nothing to fall
+        # back to.
+        cache = DiskCache(root=tmp_path)
+        assert cache.get_stale("product", "B0MISSING") is None
+
+    def test_returns_none_for_malformed_file(self, tmp_path: Path):
+        # If the cache file is corrupted, get_stale should fail closed
+        # the same way get does — never return garbage.
+        cache = DiskCache(root=tmp_path)
+        path = tmp_path / "product" / "B0BROKEN.json"
+        path.parent.mkdir(parents=True)
+        path.write_text("{not valid json", encoding="utf-8")
+        assert cache.get_stale("product", "B0BROKEN") is None
+
+
+# ---------------------------------------------------------------------------
+# Batch product lookup — get_products
+# ---------------------------------------------------------------------------
+
+
+class TestKeepaClientGetProducts:
+    @patch("keepa_client.client.requests.get")
+    def test_batch_calls_endpoint_with_comma_separated_asins(
+        self, get_mock, tmp_path: Path
+    ):
+        get_mock.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "tokensConsumed": 12,
+                "products": [
+                    {"asin": "B0AAA", "title": "A", "brand": "X"},
+                    {"asin": "B0BBB", "title": "B", "brand": "Y"},
+                ],
+            },
+        )
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        out = client.get_products(["B0AAA", "B0BBB"])
+        assert len(out) == 2
+        assert all(isinstance(p, KeepaProduct) for p in out)
+        # One HTTP call for the whole batch.
+        assert get_mock.call_count == 1
+        # Comma-separated asin param is the Keepa contract.
+        call_kwargs = get_mock.call_args
+        assert call_kwargs.kwargs["params"]["asin"] == "B0AAA,B0BBB"
+
+    @patch("keepa_client.client.requests.get")
+    def test_batch_preserves_input_order(self, get_mock, tmp_path: Path):
+        # Keepa is documented to return products in request order, but
+        # callers (e.g. seller_storefront) iterate over the result list
+        # zipped against ASIN context — pin the contract here so a
+        # future Keepa quirk gets caught.
+        get_mock.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "tokensConsumed": 18,
+                "products": [
+                    {"asin": "B0CCC", "title": "C"},
+                    {"asin": "B0AAA", "title": "A"},
+                    {"asin": "B0BBB", "title": "B"},
+                ],
+            },
+        )
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        out = client.get_products(["B0CCC", "B0AAA", "B0BBB"])
+        assert [p.asin for p in out] == ["B0CCC", "B0AAA", "B0BBB"]
+
+    @patch("keepa_client.client.requests.get")
+    def test_batch_serves_cached_asins_without_api_call(
+        self, get_mock, tmp_path: Path
+    ):
+        get_mock.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "tokensConsumed": 6,
+                "products": [{"asin": "B0NEW", "title": "N"}],
+            },
+        )
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        # Prime cache for B0CACHED.
+        client._cache.set(
+            "product", "B0CACHED",
+            {"asin": "B0CACHED", "title": "Cached"}, ttl_seconds=3600,
+        )
+        # Batch with one cached + one new → only one ASIN should hit API.
+        out = client.get_products(["B0CACHED", "B0NEW"])
+        assert get_mock.call_count == 1
+        called_params = get_mock.call_args.kwargs["params"]
+        assert called_params["asin"] == "B0NEW"
+        # Output preserves order.
+        assert [p.asin for p in out] == ["B0CACHED", "B0NEW"]
+
+    @patch("keepa_client.client.requests.get")
+    def test_batch_all_cached_skips_api(self, get_mock, tmp_path: Path):
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        client._cache.set(
+            "product", "B0A",
+            {"asin": "B0A", "title": "A"}, ttl_seconds=3600,
+        )
+        client._cache.set(
+            "product", "B0B",
+            {"asin": "B0B", "title": "B"}, ttl_seconds=3600,
+        )
+        out = client.get_products(["B0A", "B0B"])
+        assert get_mock.call_count == 0
+        assert {p.asin for p in out} == {"B0A", "B0B"}
+
+    @patch("keepa_client.client.requests.get")
+    def test_empty_input_returns_empty_list(self, get_mock, tmp_path: Path):
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        assert client.get_products([]) == []
+        assert get_mock.call_count == 0
+
+    @patch("keepa_client.client.requests.get")
+    def test_batch_chunks_per_product_batch_size(
+        self, get_mock, tmp_path: Path
+    ):
+        # If the input exceeds product_batch_size, the client must split
+        # into multiple HTTP calls. Set batch_size=2 and pass 5 ASINs;
+        # expect 3 HTTP calls (2+2+1).
+        from keepa_client.config import (
+            ApiConfig, BatchingConfig, CacheConfig, KeepaConfig,
+            RateLimitConfig, RetryConfig,
+        )
+        cfg = KeepaConfig(
+            api=ApiConfig(
+                base_url="https://api.keepa.test",
+                marketplace=2, request_timeout_seconds=5,
+            ),
+            rate_limit=RateLimitConfig(
+                tokens_per_minute=10000, burst=10000,
+                retry_on_429=RetryConfig(
+                    max_retries=0, backoff_base_seconds=0,
+                    backoff_jitter_seconds=0,
+                ),
+            ),
+            cache=CacheConfig(
+                root=tmp_path / "c",
+                ttl_seconds={"product": 60, "seller": 60, "category": 60},
+            ),
+            batching=BatchingConfig(product_batch_size=2),
+        )
+        get_mock.side_effect = [
+            MagicMock(status_code=200, json=lambda: {
+                "tokensConsumed": 12,
+                "products": [
+                    {"asin": "B0A1", "title": "A1"},
+                    {"asin": "B0A2", "title": "A2"},
+                ],
+            }),
+            MagicMock(status_code=200, json=lambda: {
+                "tokensConsumed": 12,
+                "products": [
+                    {"asin": "B0A3", "title": "A3"},
+                    {"asin": "B0A4", "title": "A4"},
+                ],
+            }),
+            MagicMock(status_code=200, json=lambda: {
+                "tokensConsumed": 6,
+                "products": [{"asin": "B0A5", "title": "A5"}],
+            }),
+        ]
+        client = KeepaClient(api_key="fake", config=cfg)
+        out = client.get_products(["B0A1", "B0A2", "B0A3", "B0A4", "B0A5"])
+        assert get_mock.call_count == 3
+        assert [p.asin for p in out] == [
+            "B0A1", "B0A2", "B0A3", "B0A4", "B0A5",
+        ]
+
+    @patch("keepa_client.client.requests.get")
+    def test_batch_skips_null_products(self, get_mock, tmp_path: Path):
+        # Keepa returns a `products` array entry per requested ASIN; for
+        # invalid/unknown ASINs the entry can be `null`. The batch API
+        # must filter these so callers don't pass `None` to pydantic.
+        get_mock.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "tokensConsumed": 12,
+                "products": [
+                    {"asin": "B0GOOD", "title": "G"},
+                    None,  # Keepa null for invalid ASIN
+                    {"asin": "B0OK", "title": "O"},
+                ],
+            },
+        )
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        out = client.get_products(["B0GOOD", "B0BAD", "B0OK"])
+        assert [p.asin for p in out] == ["B0GOOD", "B0OK"]
+
+    @patch("keepa_client.client.requests.get")
+    def test_batch_filters_extra_asins_keepa_returns(
+        self, get_mock, tmp_path: Path
+    ):
+        # Defensive: if Keepa ever returned MORE products than asked
+        # (extra ASINs we didn't request), the input-order rebuild
+        # must still emit only what was asked. The extras get cached
+        # (so a future single-ASIN call hits) but are excluded from
+        # the output.
+        get_mock.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "tokensConsumed": 6,
+                "products": [
+                    {"asin": "B0ASKED", "title": "Asked"},
+                    {"asin": "B0EXTRA", "title": "Surprise"},
+                ],
+            },
+        )
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        out = client.get_products(["B0ASKED"])
+        assert [p.asin for p in out] == ["B0ASKED"]
+        # Extra ASIN was still cached so a future call doesn't re-fetch.
+        get_mock.reset_mock()
+        cached = client.get_product("B0EXTRA")
+        assert cached.asin == "B0EXTRA"
+        assert get_mock.call_count == 0
+
+    @patch("keepa_client.client.requests.get")
+    def test_batch_dedupes_duplicate_input_asins(
+        self, get_mock, tmp_path: Path
+    ):
+        # Pin that we don't waste tokens fetching the same ASIN twice
+        # if the caller passes duplicates. The output preserves input
+        # order including the duplicates (callers may iterate against
+        # a parallel list zip) — so the duplicates appear once each.
+        get_mock.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "tokensConsumed": 12,
+                "products": [
+                    {"asin": "B0ONE", "title": "One"},
+                    {"asin": "B0TWO", "title": "Two"},
+                ],
+            },
+        )
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        out = client.get_products(["B0ONE", "B0TWO", "B0ONE"])
+        # Single API call with deduped asin param.
+        assert get_mock.call_count == 1
+        assert get_mock.call_args.kwargs["params"]["asin"] == "B0ONE,B0TWO"
+        # Output preserves input order INCLUDING the duplicate.
+        assert [p.asin for p in out] == ["B0ONE", "B0TWO", "B0ONE"]
+
+    @patch("keepa_client.client.requests.get")
+    def test_batch_caches_each_product_individually(
+        self, get_mock, tmp_path: Path
+    ):
+        # After a batch fetch, individual get_product calls for the
+        # returned ASINs should hit the cache (zero new HTTP calls).
+        get_mock.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "tokensConsumed": 12,
+                "products": [
+                    {"asin": "B0BAT1", "title": "1"},
+                    {"asin": "B0BAT2", "title": "2"},
+                ],
+            },
+        )
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        client.get_products(["B0BAT1", "B0BAT2"])
+        get_mock.reset_mock()
+        client.get_product("B0BAT1")
+        client.get_product("B0BAT2")
+        assert get_mock.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Stale-on-error fallback
+# ---------------------------------------------------------------------------
+
+
+class TestStaleOnError:
+    @patch("keepa_client.client.requests.get")
+    def test_get_product_falls_back_to_stale_on_5xx(
+        self, get_mock, tmp_path: Path
+    ):
+        # Prime cache with stale (expired) entry; configure HTTP mock to
+        # 503 forever; client should return the stale value rather than
+        # raising. This is the entire point of stale-on-error: degrade
+        # gracefully when Keepa is down.
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        client._cache.set(
+            "product", "B0STALE",
+            {"asin": "B0STALE", "title": "From cache"},
+            ttl_seconds=0,  # already stale
+        )
+        time.sleep(0.01)
+        get_mock.return_value = MagicMock(status_code=503, text="oops")
+        product = client.get_product("B0STALE")
+        assert product.asin == "B0STALE"
+        assert product.title == "From cache"
+
+    @patch("keepa_client.client.requests.get")
+    def test_get_product_raises_when_no_stale_available(
+        self, get_mock, tmp_path: Path
+    ):
+        # No cache entry → no fallback → propagate the original error.
+        # This pins that the new behaviour doesn't silently swallow
+        # failures — only the "we have something to serve" path is new.
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        get_mock.return_value = MagicMock(status_code=503, text="oops")
+        with pytest.raises(KeepaApiError):
+            client.get_product("B0NEVER")
+
+    @patch("keepa_client.client.requests.get")
+    def test_get_seller_falls_back_to_stale_on_5xx(
+        self, get_mock, tmp_path: Path
+    ):
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        client._cache.set(
+            "seller", "A1__storefront",
+            {"sellerId": "A1", "sellerName": "Stale", "asinList": ["B001"]},
+            ttl_seconds=0,
+        )
+        time.sleep(0.01)
+        get_mock.return_value = MagicMock(status_code=503, text="oops")
+        seller = client.get_seller("A1", storefront=True)
+        assert seller.seller_id == "A1"
+        assert seller.asin_list == ["B001"]
+
+    @patch("keepa_client.client.requests.get")
+    def test_stale_fallback_logs_with_stale_flag(
+        self, get_mock, tmp_path: Path
+    ):
+        # The token log entry for a stale-fallback hit should be
+        # distinguishable from a fresh cache hit and from a successful
+        # API call. Pin via `cached=True, stale=True` flag.
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        client._cache.set(
+            "product", "B0STALE",
+            {"asin": "B0STALE"}, ttl_seconds=0,
+        )
+        time.sleep(0.01)
+        get_mock.return_value = MagicMock(status_code=503, text="oops")
+        client.get_product("B0STALE")
+        # Read back the token log JSONL.
+        log_path = tmp_path / "keepa_cache" / "token_log.jsonl"
+        lines = log_path.read_text().strip().splitlines()
+        last = json.loads(lines[-1])
+        assert last["cached"] is True
+        assert last.get("stale") is True
+        assert last["tokens"] == 0
+
+    @patch("keepa_client.client.requests.get")
+    def test_get_products_batch_falls_back_to_stale_on_5xx(
+        self, get_mock, tmp_path: Path
+    ):
+        # When the batch request fails, the client should serve any
+        # stale entries it has cached AND raise for the rest.
+        # Decision: the batch returns ONLY the products it could get
+        # (cached or stale). Missing-and-stale-unavailable ASINs are
+        # filtered out — caller infers absence by comparing input
+        # length to output. This matches the null-filtering contract
+        # for valid 200-response batches.
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        client._cache.set(
+            "product", "B0HAVE",
+            {"asin": "B0HAVE", "title": "Have"},
+            ttl_seconds=0,
+        )
+        time.sleep(0.01)
+        get_mock.return_value = MagicMock(status_code=503, text="oops")
+        out = client.get_products(["B0HAVE", "B0NEVER"])
+        # B0HAVE comes from stale cache; B0NEVER has no fallback so it's
+        # filtered out. Caller can detect this via len(out) < len(input).
+        assert len(out) == 1
+        assert out[0].asin == "B0HAVE"
