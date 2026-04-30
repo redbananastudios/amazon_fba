@@ -117,9 +117,10 @@ Baseline counts as of step 4b:
 |---|---|---|---|
 | shared lib (config_loader, roi_gate) | 26 | 0 | clean |
 | canonical engine | 42 | 0 | clean (was 23 pre-MCP; +19 preflight tests) |
-| pipeline steps (`fba_engine/steps/`) | 438 | 0 | 4a IP risk (71) + 4b decision (157) + 4c.1 build output (65) + 4c.2 build xlsx (71) + 4c.3 push gsheets (57) + supplier_leads (17) |
+| pipeline steps (`fba_engine/steps/`) | 452 | 0 | 4a IP risk (71) + 4b decision (157) + 4c.1 build output (65) + 4c.2 build xlsx (71) + 4c.3 push gsheets (57) + supplier_leads (17) + oa_csv (14) |
 | strategies (`fba_engine/strategies/`) | 23 | 0 | YAML strategy runner (step 5) — interpolation + chain execution + end-to-end keepa_niche |
 | `keepa_client` (`shared/lib/python/keepa_client/`) | 38 | 0 | typed Keepa client — pydantic models, token bucket + refund, disk cache, JSONL log, retry on 429 / 502-504 |
+| `oa_importers` (`shared/lib/python/oa_importers/`) | 13 | 0 | OA-feed importer registry — SellerAmp 2DSorter (full impl) + Tactical Arbitrage / OAXray (stubs) |
 | abgee adapter | 12 | 0 | clean |
 | connect-beauty adapter | 15 | 0 | clean |
 | shure adapter | 9 | 3 | pre-existing — `test_ingest.py` expects abgee PDF format |
