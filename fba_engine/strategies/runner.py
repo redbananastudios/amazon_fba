@@ -16,6 +16,12 @@ outputs read the relevant paths from the `config` dict — the runner just
 passes through whatever the YAML specified, with `{name}` interpolation
 applied to string values.
 
+When ``output.csv`` is set in the YAML, the runner also writes a
+``run_summary.json`` sibling file capturing per-step row counts +
+durations + the final output paths. This is intended for downstream
+observability (operators tailing a strategies-run log, Cowork
+orchestration that wants to know if a step is silently dropping rows).
+
 Standalone CLI invocation:
 
     python -m fba_engine.strategies.runner \\
@@ -26,8 +32,11 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import json
 import sys
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -234,20 +243,47 @@ def run_strategy(
     `context["niche"]` is at runtime.
 
     The final DataFrame is also written to `strategy.output_csv` (also
-    interpolated) if that key is set.
+    interpolated) if that key is set, alongside a ``run_summary.json``
+    capturing per-step row counts, durations, and output paths.
     """
+    started_at_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    started_at_mono = time.monotonic()
+
     df = _resolve_input_df(strategy, context, df_in)
+    initial_rows = len(df)
+
+    step_summaries: list[dict[str, Any]] = []
 
     for step in strategy.steps:
         module = _load_step_module(step)
         resolved_config = _interpolate_config(step.config, context)
+        rows_in = len(df)
+        step_start = time.monotonic()
         try:
             df = module.run_step(df, resolved_config)
         except Exception as err:
+            duration = round(time.monotonic() - step_start, 4)
+            step_summaries.append({
+                "name": step.name,
+                "module": step.module,
+                "rows_in": rows_in,
+                "rows_out": None,
+                "duration_seconds": duration,
+                "error": f"{type(err).__name__}: {err}",
+            })
             raise StrategyExecutionError(
                 f"step '{step.name}' ({step.module}) failed: "
                 f"{type(err).__name__}: {err}"
             ) from err
+        step_summaries.append({
+            "name": step.name,
+            "module": step.module,
+            "rows_in": rows_in,
+            "rows_out": len(df),
+            "duration_seconds": round(time.monotonic() - step_start, 4),
+        })
+
+    outputs: dict[str, str] = {}
 
     if strategy.output_csv:
         out_path = Path(interpolate(strategy.output_csv, context))
@@ -258,6 +294,31 @@ def run_strategy(
         atomic_write(
             out_path,
             lambda p: df.to_csv(p, index=False, encoding="utf-8-sig"),
+        )
+        outputs["csv"] = str(out_path)
+
+        # Write the run_summary.json sibling. Naming: <csv-stem>.summary.json
+        # so multiple strategies sharing a parent directory don't clash.
+        summary_path = out_path.with_suffix(".summary.json")
+        summary = {
+            "strategy": strategy.name,
+            "context": context,
+            "started_at": started_at_iso,
+            "completed_at": datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            "duration_seconds": round(time.monotonic() - started_at_mono, 4),
+            "initial_rows": initial_rows,
+            "final_rows": len(df),
+            "step_summary": step_summaries,
+            "outputs": {**outputs, "summary_json": str(summary_path)},
+        }
+        atomic_write(
+            summary_path,
+            lambda p: p.write_text(
+                json.dumps(summary, indent=2, default=str),
+                encoding="utf-8",
+            ),
         )
 
     return df
