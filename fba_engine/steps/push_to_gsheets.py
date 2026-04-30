@@ -497,12 +497,34 @@ def _create_via_sheets_api(
 # ────────────────────────────────────────────────────────────────────────
 
 
-def _csv_rows_from_xlsx(xlsx_path: Path) -> list[list[str]]:
-    """Read the 'Results' sheet of the styled XLSX and return rows-of-strings.
+# Number of styling rows `build_xlsx.compute_workbook` writes BEFORE the
+# column-header row (row 1: title, row 2: group headers). When falling back
+# to the xlsx for Strategy 3 input, we must skip these so the resulting
+# Sheet has a clean column-header-first shape.
+_XLSX_STYLING_PRELUDE_ROWS = 2
 
-    Used as the Strategy 3 input when the caller doesn't pre-render
-    csv_rows — guarantees the Sheets-API fallback can always run, rather
-    than silently skipping it (the legacy default behaviour).
+
+def _csv_rows_from_csv(csv_path: Path) -> list[list[str]]:
+    """Read a CSV at `csv_path` as rows-of-strings.
+
+    Uses utf-8-sig to round-trip cleanly with `build_output`'s write
+    encoding (matches the BOM-aware reads elsewhere in the pipeline).
+    """
+    df = pd.read_csv(
+        csv_path, dtype=str, keep_default_na=False, encoding="utf-8-sig"
+    )
+    return csv_rows_for_upload(df)
+
+
+def _csv_rows_from_xlsx(xlsx_path: Path) -> list[list[str]]:
+    """Read the 'Results' sheet of the styled XLSX, skipping styling prelude.
+
+    `build_xlsx.compute_workbook` writes a 3-row header (title at row 1,
+    group headers at row 2, column headers at row 3) before the data. We
+    drop the first 2 rows so the returned list starts with the column
+    headers — matching the shape `_create_via_sheets_api` expects. Without
+    this, Strategy 3 produces a Sheet where the title text sits in row 1
+    and the actual headers are in row 3 unstyled.
     """
     import openpyxl
 
@@ -510,11 +532,35 @@ def _csv_rows_from_xlsx(xlsx_path: Path) -> list[list[str]]:
     try:
         ws = wb["Results"] if "Results" in wb.sheetnames else wb.active
         rows: list[list[str]] = []
-        for row in ws.iter_rows(values_only=True):
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i < _XLSX_STYLING_PRELUDE_ROWS:
+                continue
             rows.append(["" if v is None else str(v) for v in row])
         return rows
     finally:
         wb.close()
+
+
+def _csv_rows_from_path(xlsx_path: Path) -> list[list[str]]:
+    """Resolve csv_rows for the Strategy 3 Sheets-API fallback.
+
+    Prefers a sibling CSV (same stem, `.csv` extension at the same
+    directory, or under `working/`) since it has clean headers + data
+    with no styling prelude — and matches what the legacy JS reads.
+    Falls back to the xlsx with a 2-row skip if no CSV is co-located.
+
+    Search order:
+      1. <xlsx_path>.csv  — sibling CSV (build_output writes both base/
+         and working/ but operators sometimes only retain one).
+      2. <xlsx_dir>/working/<stem>.csv
+      3. <xlsx_path> itself, with the styling prelude stripped.
+    """
+    sibling_csv = xlsx_path.with_suffix(".csv")
+    working_csv = xlsx_path.parent / "working" / sibling_csv.name
+    for csv_path in (sibling_csv, working_csv):
+        if csv_path.exists():
+            return _csv_rows_from_csv(csv_path)
+    return _csv_rows_from_xlsx(xlsx_path)
 
 
 def push_to_gsheets(
@@ -598,13 +644,18 @@ def push_to_gsheets(
     # Strategy 3: Sheets API create + populate. Render csv_rows from the
     # xlsx if not supplied so this path always has data — the legacy
     # default behaviour silently skipped Strategy 3 here.
+    #
+    # `_csv_rows_from_path` prefers a sibling CSV (built by step 4c.1)
+    # since it has clean headers + data; falls back to reading the styled
+    # xlsx with the title/group-header rows stripped.
     if new_id is None:
         if csv_rows is None:
             try:
-                csv_rows = _csv_rows_from_xlsx(xlsx_path)
+                csv_rows = _csv_rows_from_path(xlsx_path)
             except Exception as err:  # noqa: BLE001
                 print(
-                    f"Could not read xlsx for Strategy 3: {type(err).__name__}",
+                    f"Could not resolve csv_rows for Strategy 3: "
+                    f"{type(err).__name__}",
                     file=sys.stderr,
                 )
                 csv_rows = None
