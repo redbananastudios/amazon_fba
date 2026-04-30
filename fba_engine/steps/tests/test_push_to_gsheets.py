@@ -22,6 +22,8 @@ from fba_engine.steps.push_to_gsheets import (
     XLSX_MIMETYPE,
     PushFailedError,
     _create_via_sheets_api,
+    _csv_rows_from_path,
+    _csv_rows_from_xlsx,
     _delete_previous_sheet,
     _is_quota_error,
     _upload_raw_xlsx,
@@ -83,6 +85,109 @@ class TestCsvRowsForUpload:
         df = pd.DataFrame(columns=["ASIN"])
         rows = csv_rows_for_upload(df)
         assert rows == [["ASIN"]]
+
+
+# ---------------------------------------------------------------------------
+# _csv_rows_from_path / _csv_rows_from_xlsx — Strategy 3 input resolution.
+#
+# The styled XLSX produced by build_xlsx.compute_workbook has THREE prelude
+# rows (title at row 1, group headers at row 2, column headers at row 3,
+# data from row 4). Strategy 3 expects a flat header-row-first shape.
+# Reading the styled XLSX rows verbatim was a HIGH-severity regression
+# introduced by PR #15 — the fallback Sheet would have the title in row 1,
+# group labels in row 2, and the actual headers in row 3 unstyled.
+#
+# Fix: prefer the sibling CSV (build_output writes both <base>/<niche>.csv
+# and <base>/working/<niche>.csv) since it has clean headers + data.
+# ---------------------------------------------------------------------------
+
+
+def _write_csv_at(path: Path, rows: list[list[str]]) -> None:
+    """Write a UTF-8-sig CSV at `path` for test fixtures."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as fh:
+        for row in rows:
+            fh.write(",".join(row) + "\n")
+
+
+def _build_styled_xlsx(path: Path) -> None:
+    """Produce a real `compute_workbook`-shaped xlsx for Strategy 3 tests."""
+    from fba_engine.steps.build_output import FINAL_HEADERS, compute_phase5
+    from fba_engine.steps.build_xlsx import build_xlsx
+
+    # Synthesise a 1-row Phase-4 input that survives the PL filter.
+    raw = {h: "" for h in FINAL_HEADERS}
+    raw["ASIN"] = "B0SAMPLE"
+    raw["Title"] = "Sample"
+    raw["Brand"] = "Acme"
+    raw["Verdict"] = "YES"
+    raw["Composite Score"] = "8.5"
+    raw["Opportunity Lane"] = "BALANCED"
+    raw["Commercial Priority"] = "1"
+    raw["Current Price"] = "GBP25.99"
+    raw["Brand 1P"] = "N"
+    raw["FBA Seller Count"] = "5"
+    final_df, _, _ = compute_phase5(pd.DataFrame([raw]))
+    build_xlsx(final_df, niche="kids-toys", output_path=path)
+
+
+class TestCsvRowsFromPath:
+    def test_prefers_sibling_csv(self, tmp_path: Path):
+        # An xlsx exists, AND a CSV with matching stem alongside it. Helper
+        # MUST return the CSV's rows (clean headers + data, no styling prelude).
+        xlsx = tmp_path / "kids_toys_final_results.xlsx"
+        xlsx.write_bytes(b"placeholder")  # never read
+        csv = tmp_path / "kids_toys_final_results.csv"
+        _write_csv_at(csv, [["ASIN", "Brand"], ["B001", "Acme"]])
+        rows = _csv_rows_from_path(xlsx)
+        assert rows == [["ASIN", "Brand"], ["B001", "Acme"]]
+
+    def test_uses_working_csv_when_no_sibling(self, tmp_path: Path):
+        # Sibling CSV not present, but `working/` has it (build_output writes
+        # both base/ and working/, but operators sometimes only keep working/).
+        xlsx = tmp_path / "kids_toys_final_results.xlsx"
+        xlsx.write_bytes(b"placeholder")
+        working_csv = tmp_path / "working" / "kids_toys_final_results.csv"
+        _write_csv_at(working_csv, [["ASIN"], ["B999"]])
+        rows = _csv_rows_from_path(xlsx)
+        assert rows == [["ASIN"], ["B999"]]
+
+    def test_falls_back_to_xlsx_when_no_csv(self, tmp_path: Path):
+        # Neither sibling nor working CSV present — fall back to xlsx,
+        # but skip the styling prelude rows (title + group headers).
+        xlsx = tmp_path / "kids_toys_final_results.xlsx"
+        _build_styled_xlsx(xlsx)
+        rows = _csv_rows_from_path(xlsx)
+        # rows[0] must be the column-header row (starts with "ASIN").
+        assert rows[0][0] == "ASIN"
+        assert rows[0][1] == "Product Name"
+        # Data row must be present.
+        assert any(r[0] == "B0SAMPLE" for r in rows[1:])
+
+    def test_csv_preferred_over_xlsx_when_both_present(self, tmp_path: Path):
+        # When CSV exists, the xlsx is not opened — even if it would have
+        # produced different rows. Pin the CSV-first contract.
+        xlsx = tmp_path / "kids_toys_final_results.xlsx"
+        _build_styled_xlsx(xlsx)
+        csv = tmp_path / "kids_toys_final_results.csv"
+        _write_csv_at(csv, [["only_in_csv"], ["row"]])
+        rows = _csv_rows_from_path(xlsx)
+        assert rows == [["only_in_csv"], ["row"]]
+
+    def test_xlsx_helper_skips_first_two_rows(self, tmp_path: Path):
+        # Direct test of the fallback xlsx reader: must skip rows 1+2
+        # (title + group headers) so rows[0] is the actual column headers.
+        xlsx = tmp_path / "x.xlsx"
+        _build_styled_xlsx(xlsx)
+        rows = _csv_rows_from_xlsx(xlsx)
+        assert rows[0][0] == "ASIN", (
+            f"first row must be the column-header row, got: {rows[0][:3]!r}"
+        )
+        # The title text (row 1) and group labels (row 2) must NOT appear
+        # at index 0 of the result.
+        first_cell = rows[0][0] if rows else ""
+        assert "Final Results" not in first_cell  # would be the title text
+        assert first_cell != "Product"  # would be a group label
 
 
 # ---------------------------------------------------------------------------
@@ -675,13 +780,13 @@ class TestPushToGsheets:
         drive.files.return_value.delete.assert_not_called()
 
     @patch("fba_engine.steps.push_to_gsheets._build_clients")
-    def test_strategy_3_runs_without_csv_rows_supplied(
+    def test_strategy_3_runs_without_csv_rows_using_sibling_csv(
         self, build_clients_mock, tmp_path: Path
     ):
-        # Regression for HIGH-9: caller does NOT supply csv_rows. The
-        # orchestrator must read them from the xlsx itself so Strategy 3
-        # can run — the legacy default silently skipped Strategy 3 here.
-        import openpyxl
+        # Regression for the HIGH-1 follow-up: caller does NOT supply
+        # csv_rows; Strategy 3 reads them from the sibling CSV so the
+        # populated Sheet has clean column-header-row-first data (no
+        # title/group-label prelude from the styled xlsx).
         drive = MagicMock()
         sheets = MagicMock()
         next_chunk = drive.files.return_value.create.return_value.next_chunk
@@ -695,14 +800,11 @@ class TestPushToGsheets:
         }
         build_clients_mock.return_value = (drive, sheets)
 
-        # Real openpyxl xlsx with a Results sheet.
-        xlsx = tmp_path / "x.xlsx"
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Results"
-        ws.append(["ASIN", "Brand"])
-        ws.append(["B001", "Acme"])
-        wb.save(xlsx)
+        # Real styled xlsx + sibling CSV at the same stem.
+        xlsx = tmp_path / "kids_toys_final_results.xlsx"
+        _build_styled_xlsx(xlsx)
+        csv = tmp_path / "kids_toys_final_results.csv"
+        _write_csv_at(csv, [["ASIN", "Brand"], ["B001", "Acme"]])
 
         result = push_to_gsheets(
             xlsx_path=xlsx, niche="kids-toys",
@@ -710,6 +812,17 @@ class TestPushToGsheets:
             csv_rows=None,  # explicit — must NOT skip Strategy 3
         )
         assert result == "FB_ID"
+
+        # Pin the contract: the Results-sheet values written must START with
+        # the column-header row (NOT the styled title, NOT a group label).
+        update_op = sheets.spreadsheets.return_value.values.return_value.update
+        results_call = next(
+            c for c in update_op.call_args_list
+            if c.kwargs.get("range", "").startswith("Results!")
+        )
+        body_values = results_call.kwargs["body"]["values"]
+        assert body_values[0] == ["ASIN", "Brand"]
+        assert body_values[1] == ["B001", "Acme"]
 
     @patch("fba_engine.steps.push_to_gsheets._build_clients")
     def test_strategy_3_orphan_sheet_cleanup_on_population_failure(
