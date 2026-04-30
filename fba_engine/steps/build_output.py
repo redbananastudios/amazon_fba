@@ -341,7 +341,13 @@ def _build_final_row(row: dict) -> tuple[list[object], tuple[bool, str]]:
         brand_store_present, brand_type_v,
     )
 
-    bought_int = int(bought) if bought == int(bought) else bought
+    # Guard against NaN/inf — _parse_money normally clears NaN to 0.0 but
+    # any propagation of inf via upstream arithmetic would crash int().
+    bought_int = (
+        int(bought)
+        if math.isfinite(bought) and bought == int(bought)
+        else bought
+    )
 
     out_row: list[object] = [
         asin, title, brand, amazon_url, category, weight_flag,
@@ -564,14 +570,31 @@ def run_step(df: pd.DataFrame, config: dict) -> pd.DataFrame:
 # ────────────────────────────────────────────────────────────────────────
 
 
+def _atomic_write(path: Path, write_fn) -> None:
+    """Write to a `<path>.tmp` sibling then atomically rename. Prevents
+    consumers from seeing partial files if the run crashes mid-write."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        write_fn(tmp)
+    except Exception:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
+    tmp.replace(path)
+
+
 def run(niche: str, base: Path) -> None:
     """End-to-end: read Phase-3/4 CSV, write all Phase-5 outputs."""
     base = Path(base)
-    working = base / "working"
-    working.mkdir(parents=True, exist_ok=True)
     niche_snake = niche.replace("-", "_")
 
     # Prefer Phase 4 IP-risk output; fall back to Phase 3 shortlist.
+    # Compute candidates BEFORE creating working/ so a typo'd niche
+    # doesn't leave an empty working directory behind.
+    working = base / "working"
     candidates = [
         working / f"{niche_snake}_phase4_ip_risk.csv",
         working / f"{niche_snake}_phase3_shortlist.csv",
@@ -586,6 +609,8 @@ def run(niche: str, base: Path) -> None:
         )
         sys.exit(1)
 
+    working.mkdir(parents=True, exist_ok=True)
+
     final_csv_working = working / f"{niche_snake}_final_results.csv"
     final_csv_base = base / f"{niche_snake}_final_results.csv"
     supplier_csv = working / f"{niche_snake}_phase5_suppliers.csv"
@@ -598,15 +623,36 @@ def run(niche: str, base: Path) -> None:
     )
     final_df, supplier_df, rejected_df = compute_phase5(df)
 
-    final_df.to_csv(final_csv_working, index=False)
-    final_df.to_csv(final_csv_base, index=False)
-    supplier_df.to_csv(supplier_csv, index=False)
-    rejected_df.to_csv(reject_csv, index=False)
-    stats_path.write_text(
-        build_stats(final_df, rejected_df, niche, str(reject_csv)),
-        encoding="utf-8",
+    # Atomic + utf-8-sig writes for round-trip parity with read_csv above.
+    # Excel users opening the file directly need the BOM for non-ASCII
+    # brand names; downstream pd.read_csv with utf-8-sig strips it cleanly.
+    _atomic_write(
+        final_csv_working,
+        lambda p: final_df.to_csv(p, index=False, encoding="utf-8-sig"),
     )
-    handoff_path.write_text(build_handoff(final_df, niche), encoding="utf-8")
+    _atomic_write(
+        final_csv_base,
+        lambda p: final_df.to_csv(p, index=False, encoding="utf-8-sig"),
+    )
+    _atomic_write(
+        supplier_csv,
+        lambda p: supplier_df.to_csv(p, index=False, encoding="utf-8-sig"),
+    )
+    _atomic_write(
+        reject_csv,
+        lambda p: rejected_df.to_csv(p, index=False, encoding="utf-8-sig"),
+    )
+    _atomic_write(
+        stats_path,
+        lambda p: p.write_text(
+            build_stats(final_df, rejected_df, niche, str(reject_csv)),
+            encoding="utf-8",
+        ),
+    )
+    _atomic_write(
+        handoff_path,
+        lambda p: p.write_text(build_handoff(final_df, niche), encoding="utf-8"),
+    )
 
     # Lane + verdict counts at-a-glance (matches the legacy JS stdout).
     lane_counts: dict[str, int] = {}

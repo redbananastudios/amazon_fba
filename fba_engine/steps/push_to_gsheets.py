@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -122,24 +123,91 @@ def _build_clients(key_path: str | Path):
 # ────────────────────────────────────────────────────────────────────────
 
 
-def _is_quota_error(err: Exception) -> bool:
-    """True if `err` represents a Drive storage-quota failure.
-
-    Matches the legacy JS rule: status 403 OR message contains
-    'quota'/'storageQuota'. The status check is int-coerced because
-    `googleapiclient.errors.HttpError.resp.status` may surface as either
-    int or string depending on httplib2 version — relying on `== 403`
-    alone risks silent miss in production.
-    """
+def _http_status(err: Exception) -> int | None:
+    """Best-effort extraction of HTTP status from googleapiclient errors."""
     resp = getattr(err, "resp", None)
     status = getattr(resp, "status", None) if resp is not None else None
+    if status is None:
+        return None
     try:
-        if status is not None and int(status) == 403:
-            return True
+        return int(status)
     except (TypeError, ValueError):
-        pass
+        return None
+
+
+# Canonical phrases Google returns for quota/rate problems. Substring match
+# only on these (the bare word "quota" caught false positives like
+# "API quota check timed out").
+_QUOTA_PHRASES = ("storagequotaexceeded", "storagequota", "quotaexceeded")
+# Distinguish quota from rate limits: rate limits are transient (retry),
+# storage quota is not (fall through to next strategy).
+_RATE_LIMIT_PHRASES = ("userratelimitexceeded", "ratelimitexceeded")
+
+# HTTP statuses that are worth retrying with exponential backoff.
+TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _is_quota_error(err: Exception) -> bool:
+    """True iff `err` represents a Drive *storage*-quota failure.
+
+    Storage-quota errors are non-transient — the right response is to
+    fall through to a different upload strategy, not retry. Rate-limit
+    errors look similar (both can surface as 403) but are transient and
+    should be handled by the retry helper.
+    """
     msg = str(err).lower()
-    return "quota" in msg or "storagequota" in msg
+    if any(phrase in msg for phrase in _QUOTA_PHRASES):
+        return True
+    # 403 alone is too broad (covers permission denied), so we only
+    # accept it when accompanied by a quota/storage hint.
+    if _http_status(err) == 403 and "storage" in msg:
+        return True
+    return False
+
+
+def _is_transient(err: Exception) -> bool:
+    """True iff retrying after a backoff is likely to succeed."""
+    status = _http_status(err)
+    if status in TRANSIENT_STATUSES:
+        return True
+    msg = str(err).lower()
+    if any(phrase in msg for phrase in _RATE_LIMIT_PHRASES):
+        return True
+    # Network-level transients — connection reset, broken pipe, DNS blip.
+    name = type(err).__name__
+    if name in {"ConnectionError", "ConnectionResetError", "TimeoutError",
+                "ServerNotFoundError", "ProtocolError"}:
+        return True
+    return False
+
+
+def _retry_with_backoff(call, *, max_attempts: int = 4, base_delay: float = 2.0,
+                        sleep=time.sleep):
+    """Call `call()` with exponential-backoff retry on transient errors.
+
+    Backoff schedule: base * (2 ** attempt) → 2s, 4s, 8s, 16s. Non-transient
+    errors propagate immediately. The `sleep` parameter is injected so
+    tests can run without real delays.
+    """
+    last_err: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return call()
+        except Exception as err:  # noqa: BLE001 — re-raised on non-transient
+            if not _is_transient(err) or attempt == max_attempts - 1:
+                raise
+            last_err = err
+            delay = base_delay * (2 ** attempt)
+            print(
+                f"Transient error (attempt {attempt + 1}/{max_attempts}); "
+                f"retrying in {delay}s: {err}",
+                file=sys.stderr,
+            )
+            sleep(delay)
+    # Defensive — should never reach here; loop either returns or raises.
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("retry loop exited without result or exception")
 
 
 def csv_rows_for_upload(df: pd.DataFrame) -> list[list[str]]:
@@ -197,6 +265,24 @@ def _delete_previous_sheet(drive, previous_id: str | None) -> bool:
 # ────────────────────────────────────────────────────────────────────────
 
 
+# Chunk size for resumable uploads. 5 MiB is the smallest size Drive will
+# accept for non-final chunks and keeps memory pressure low for large XLSX.
+_RESUMABLE_CHUNK_SIZE = 5 * 1024 * 1024
+
+
+def _execute_resumable(request) -> dict:
+    """Drive resumable uploads pump via `next_chunk()` until done.
+
+    Each chunk is a separate HTTP request; transient errors mid-upload
+    can be retried per-chunk via `_retry_with_backoff` without restarting
+    the whole upload. Returns the final API response dict.
+    """
+    response = None
+    while response is None:
+        _status, response = _retry_with_backoff(request.next_chunk)
+    return response
+
+
 def _upload_with_conversion(
     drive, xlsx_path: Path, name: str, folder_id: str
 ) -> str:
@@ -204,7 +290,8 @@ def _upload_with_conversion(
 
     Returns the new spreadsheet's id. Raises whatever the API raises —
     callers detect quota errors via `_is_quota_error` and fall through
-    to Strategy 2.
+    to Strategy 2; transient errors are retried internally via the
+    resumable chunk loop.
     """
     from googleapiclient.http import MediaFileUpload
 
@@ -212,13 +299,17 @@ def _upload_with_conversion(
     if folder_id:
         file_metadata["parents"] = [folder_id]
 
-    media = MediaFileUpload(str(xlsx_path), mimetype=XLSX_MIMETYPE, resumable=False)
-    res = drive.files().create(
+    media = MediaFileUpload(
+        str(xlsx_path), mimetype=XLSX_MIMETYPE,
+        resumable=True, chunksize=_RESUMABLE_CHUNK_SIZE,
+    )
+    request = drive.files().create(
         body=file_metadata,
         media_body=media,
         fields="id, webViewLink",
         supportsAllDrives=True,
-    ).execute()
+    )
+    res = _execute_resumable(request)
     return res["id"]
 
 
@@ -237,19 +328,41 @@ def _upload_raw_xlsx(
     if folder_id:
         file_metadata["parents"] = [folder_id]
 
-    media = MediaFileUpload(str(xlsx_path), mimetype=XLSX_MIMETYPE, resumable=False)
-    res = drive.files().create(
+    media = MediaFileUpload(
+        str(xlsx_path), mimetype=XLSX_MIMETYPE,
+        resumable=True, chunksize=_RESUMABLE_CHUNK_SIZE,
+    )
+    request = drive.files().create(
         body=file_metadata,
         media_body=media,
         fields="id, webViewLink",
         supportsAllDrives=True,
-    ).execute()
+    )
+    res = _execute_resumable(request)
     return res["id"]
 
 
 # ────────────────────────────────────────────────────────────────────────
 # Strategy 3 — Sheets API create + populate.
 # ────────────────────────────────────────────────────────────────────────
+
+
+def _delete_orphan_sheet(drive, sheet_id: str) -> None:
+    """Best-effort cleanup of a half-created sheet so it doesn't leak."""
+    try:
+        drive.files().delete(
+            fileId=sheet_id, supportsAllDrives=True
+        ).execute()
+        print(
+            f"Cleaned up orphan sheet {sheet_id} after population failure",
+            file=sys.stderr,
+        )
+    except Exception as cleanup_err:  # noqa: BLE001
+        print(
+            f"Warning: could not clean up orphan sheet {sheet_id}: "
+            f"{type(cleanup_err).__name__}",
+            file=sys.stderr,
+        )
 
 
 def _create_via_sheets_api(
@@ -259,102 +372,122 @@ def _create_via_sheets_api(
 
     Returns the spreadsheetId. No openpyxl styling parity — this path
     exists for service accounts with zero Drive storage quota.
+
+    If population fails after `spreadsheets.create` succeeds, the
+    half-populated sheet is deleted before re-raising so we don't leak
+    orphan files in Drive.
     """
-    create_res = sheets.spreadsheets().create(
-        body={
-            "properties": {"title": name},
-            "sheets": [
-                {"properties": {"title": "Results"}},
-                {"properties": {"title": "Legend"}},
-            ],
-        }
-    ).execute()
+    create_res = _retry_with_backoff(
+        sheets.spreadsheets().create(
+            body={
+                "properties": {"title": name},
+                "sheets": [
+                    {"properties": {"title": "Results"}},
+                    {"properties": {"title": "Legend"}},
+                ],
+            }
+        ).execute
+    )
     sheet_id = create_res["spreadsheetId"]
     results_sheet_id = create_res["sheets"][0]["properties"]["sheetId"]
 
-    # Move to target folder.
-    if folder_id:
-        try:
-            drive.files().update(
-                fileId=sheet_id,
-                addParents=folder_id,
-                fields="id, parents",
-                supportsAllDrives=True,
-            ).execute()
-        except Exception as err:
-            print(f"Could not move to folder: {err}", file=sys.stderr)
+    try:
+        # Move to target folder.
+        if folder_id:
+            try:
+                _retry_with_backoff(
+                    drive.files().update(
+                        fileId=sheet_id,
+                        addParents=folder_id,
+                        fields="id, parents",
+                        supportsAllDrives=True,
+                    ).execute
+                )
+            except Exception as err:  # noqa: BLE001
+                print(f"Could not move to folder: {err}", file=sys.stderr)
 
-    # Write Results data.
-    sheets.spreadsheets().values().update(
-        spreadsheetId=sheet_id,
-        range="Results!A1",
-        valueInputOption="RAW",
-        body={"values": csv_rows},
-    ).execute()
+        # Write Results data.
+        _retry_with_backoff(
+            sheets.spreadsheets().values().update(
+                spreadsheetId=sheet_id,
+                range="Results!A1",
+                valueInputOption="RAW",
+                body={"values": csv_rows},
+            ).execute
+        )
 
-    # Write Legend data.
-    sheets.spreadsheets().values().update(
-        spreadsheetId=sheet_id,
-        range="Legend!A1",
-        valueInputOption="RAW",
-        body={"values": LEGEND_DATA},
-    ).execute()
+        # Write Legend data.
+        _retry_with_backoff(
+            sheets.spreadsheets().values().update(
+                spreadsheetId=sheet_id,
+                range="Legend!A1",
+                valueInputOption="RAW",
+                body={"values": LEGEND_DATA},
+            ).execute
+        )
 
-    # Apply basic formatting via batchUpdate.
-    sheets.spreadsheets().batchUpdate(
-        spreadsheetId=sheet_id,
-        body={
-            "requests": [
-                # Freeze first row + first 3 columns.
-                {
-                    "updateSheetProperties": {
-                        "properties": {
-                            "sheetId": results_sheet_id,
-                            "gridProperties": {
-                                "frozenRowCount": 1,
-                                "frozenColumnCount": 3,
-                            },
-                        },
-                        "fields": (
-                            "gridProperties.frozenRowCount,"
-                            "gridProperties.frozenColumnCount"
-                        ),
-                    }
-                },
-                # Bold header row.
-                {
-                    "repeatCell": {
-                        "range": {
-                            "sheetId": results_sheet_id,
-                            "startRowIndex": 0,
-                            "endRowIndex": 1,
-                        },
-                        "cell": {
-                            "userEnteredFormat": {
-                                "textFormat": {"bold": True}
+        # Clamp freeze + auto-resize bounds to the actual data width so a
+        # narrow frame doesn't trigger a 400 "frozenColumnCount > grid width".
+        ncols = len(csv_rows[0]) if csv_rows and csv_rows[0] else 1
+        frozen_cols = min(3, ncols)
+        end_index = max(ncols, 1)
+
+        # Apply basic formatting via batchUpdate.
+        _retry_with_backoff(
+            sheets.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={
+                    "requests": [
+                        # Freeze first row + first N (≤3) columns.
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": results_sheet_id,
+                                    "gridProperties": {
+                                        "frozenRowCount": 1,
+                                        "frozenColumnCount": frozen_cols,
+                                    },
+                                },
+                                "fields": (
+                                    "gridProperties.frozenRowCount,"
+                                    "gridProperties.frozenColumnCount"
+                                ),
                             }
                         },
-                        "fields": "userEnteredFormat.textFormat.bold",
-                    }
+                        # Bold header row.
+                        {
+                            "repeatCell": {
+                                "range": {
+                                    "sheetId": results_sheet_id,
+                                    "startRowIndex": 0,
+                                    "endRowIndex": 1,
+                                },
+                                "cell": {
+                                    "userEnteredFormat": {
+                                        "textFormat": {"bold": True}
+                                    }
+                                },
+                                "fields": "userEnteredFormat.textFormat.bold",
+                            }
+                        },
+                        # Auto-resize columns up to the actual data width.
+                        {
+                            "autoResizeDimensions": {
+                                "dimensions": {
+                                    "sheetId": results_sheet_id,
+                                    "dimension": "COLUMNS",
+                                    "startIndex": 0,
+                                    "endIndex": end_index,
+                                }
+                            }
+                        },
+                    ]
                 },
-                # Auto-resize columns. Was 55 in legacy JS; bumped to 67 to
-                # cover the wider final_results schema introduced in step 4c.1
-                # (EAN/UPC/GTIN appended). Sheets API tolerates indices past
-                # the actual grid width, so this is safe even if the source
-                # frame is narrower.
-                {
-                    "autoResizeDimensions": {
-                        "dimensions": {
-                            "sheetId": results_sheet_id,
-                            "dimension": "COLUMNS",
-                            "startIndex": 0,
-                            "endIndex": 67,
-                        }
-                    }
-                },
-            ]
-        },
-    ).execute()
+            ).execute
+        )
+    except Exception:
+        _delete_orphan_sheet(drive, sheet_id)
+        raise
 
     return sheet_id
 
@@ -362,6 +495,26 @@ def _create_via_sheets_api(
 # ────────────────────────────────────────────────────────────────────────
 # Top-level orchestration.
 # ────────────────────────────────────────────────────────────────────────
+
+
+def _csv_rows_from_xlsx(xlsx_path: Path) -> list[list[str]]:
+    """Read the 'Results' sheet of the styled XLSX and return rows-of-strings.
+
+    Used as the Strategy 3 input when the caller doesn't pre-render
+    csv_rows — guarantees the Sheets-API fallback can always run, rather
+    than silently skipping it (the legacy default behaviour).
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(str(xlsx_path), read_only=True, data_only=True)
+    try:
+        ws = wb["Results"] if "Results" in wb.sheetnames else wb.active
+        rows: list[list[str]] = []
+        for row in ws.iter_rows(values_only=True):
+            rows.append(["" if v is None else str(v) for v in row])
+        return rows
+    finally:
+        wb.close()
 
 
 def push_to_gsheets(
@@ -375,13 +528,16 @@ def push_to_gsheets(
     """Push the styled XLSX to Google Drive. Returns the Sheet/file id.
 
     Walks the three-strategy fallback chain. Writes the resulting id to
-    `id_file_path` if provided. Raises FileNotFoundError if either the
-    xlsx or the service-account key is missing. Raises PushFailedError
-    if all three strategies fail.
+    `id_file_path` if provided (atomically — only after the new upload
+    succeeds, so a failed run doesn't orphan the previous sheet). Raises
+    FileNotFoundError if either the xlsx or the service-account key is
+    missing. Raises PushFailedError if all three strategies fail.
 
-    `csv_rows` is only used for Strategy 3 (the Sheets API fallback). If
-    not provided, Strategy 3 is skipped — the legacy JS reads the CSV
-    from disk; here we let the caller pre-render via `csv_rows_for_upload`.
+    `csv_rows` is used for Strategy 3 (the Sheets API fallback). If not
+    provided, the rows are read from the XLSX itself so Strategy 3 can
+    always run.
+
+    Title is truncated to 200 chars to stay within Sheets API limits.
     """
     xlsx_path = Path(xlsx_path)
     key_path = Path(key_path)
@@ -396,27 +552,28 @@ def push_to_gsheets(
 
     drive, sheets = _build_clients(key_path)
 
-    # Read previous id, then attempt cleanup.
-    previous_id = None
+    # Read (but don't yet delete) the previous id. We defer deletion
+    # until the new upload succeeds — this avoids the half-deleted state
+    # where prev-sheet is gone but the new upload also failed.
+    previous_id: str | None = None
     id_file = Path(id_file_path) if id_file_path else None
     if id_file and id_file.exists():
         previous_id = id_file.read_text(encoding="utf-8").strip() or None
-    _delete_previous_sheet(drive, previous_id)
 
     title = (
         f"{niche.replace('-', ' ').title()} Final Results — "
         f"{date.today().isoformat()}"
     )
+    title = title[:200]
 
-    # Strategy 1: xlsx-conversion upload.
+    new_id: str | None = None
+    success_msg: str | None = None
+
+    # Strategy 1: xlsx-conversion upload. Fall through on quota error.
     try:
-        sheet_id = _upload_with_conversion(drive, xlsx_path, title, folder_id)
-        if id_file:
-            id_file.write_text(sheet_id, encoding="utf-8")
-        print(f"Uploaded (xlsx conversion): {title}")
-        print(f"Sheet ID: {sheet_id}")
-        return sheet_id
-    except Exception as err:
+        new_id = _upload_with_conversion(drive, xlsx_path, title, folder_id)
+        success_msg = f"Uploaded (xlsx conversion): {title}"
+    except Exception as err:  # noqa: BLE001
         if not _is_quota_error(err):
             raise
         print(
@@ -425,46 +582,75 @@ def push_to_gsheets(
         )
 
     # Strategy 2: raw xlsx upload.
-    try:
-        file_id = _upload_raw_xlsx(drive, xlsx_path, title, folder_id)
-        if id_file:
-            id_file.write_text(file_id, encoding="utf-8")
-        print(f"Uploaded (raw xlsx, not converted): {title}")
-        print(f"File ID: {file_id}")
-        print("Note: file is xlsx in Drive. Open in Google Sheets to view.")
-        return file_id
-    except Exception as err:
-        print(f"Raw upload also failed: {err}", file=sys.stderr)
-
-    # Strategy 3: Sheets API create + populate (only if csv_rows supplied).
-    if csv_rows is not None:
+    if new_id is None:
         try:
-            sheet_id = _create_via_sheets_api(
-                drive, sheets, csv_rows, title, folder_id
+            new_id = _upload_raw_xlsx(drive, xlsx_path, title, folder_id)
+            success_msg = (
+                f"Uploaded (raw xlsx, not converted): {title}\n"
+                "Note: file is xlsx in Drive. Open in Google Sheets to view."
             )
-            if id_file:
-                id_file.write_text(sheet_id, encoding="utf-8")
-            print(f"Uploaded (Sheets API fallback): {title}")
-            print(f"Sheet ID: {sheet_id}")
-            print("Note: styling is basic. Free up Drive quota for full styling.")
-            return sheet_id
-        except Exception as err:
-            print(f"Sheets API fallback also failed: {err}", file=sys.stderr)
+        except Exception as err:  # noqa: BLE001
+            print(
+                f"Raw upload also failed: {type(err).__name__}: {err}",
+                file=sys.stderr,
+            )
 
-    # All strategies exhausted.
-    print("", file=sys.stderr)
-    print("=== UPLOAD FAILED ===", file=sys.stderr)
-    print(
-        "All three upload strategies exhausted. The service account may have "
-        "zero Drive storage quota (common for Cloud-only service accounts).",
-        file=sys.stderr,
-    )
-    print(
-        f"Manual fallback: drag {xlsx_path} into "
-        f"https://drive.google.com/drive/folders/{folder_id}",
-        file=sys.stderr,
-    )
-    raise PushFailedError("All Google Drive / Sheets upload strategies failed.")
+    # Strategy 3: Sheets API create + populate. Render csv_rows from the
+    # xlsx if not supplied so this path always has data — the legacy
+    # default behaviour silently skipped Strategy 3 here.
+    if new_id is None:
+        if csv_rows is None:
+            try:
+                csv_rows = _csv_rows_from_xlsx(xlsx_path)
+            except Exception as err:  # noqa: BLE001
+                print(
+                    f"Could not read xlsx for Strategy 3: {type(err).__name__}",
+                    file=sys.stderr,
+                )
+                csv_rows = None
+        if csv_rows is not None:
+            try:
+                new_id = _create_via_sheets_api(
+                    drive, sheets, csv_rows, title, folder_id
+                )
+                success_msg = (
+                    f"Uploaded (Sheets API fallback): {title}\n"
+                    "Note: styling is basic. Free up Drive quota for full styling."
+                )
+            except Exception as err:  # noqa: BLE001
+                print(
+                    f"Sheets API fallback also failed: {type(err).__name__}",
+                    file=sys.stderr,
+                )
+
+    if new_id is None:
+        # All strategies exhausted. Leave previous_id alone — better to
+        # keep the stale sheet visible than orphan everything.
+        print("", file=sys.stderr)
+        print("=== UPLOAD FAILED ===", file=sys.stderr)
+        print(
+            "All three upload strategies exhausted. The service account may have "
+            "zero Drive storage quota (common for Cloud-only service accounts).",
+            file=sys.stderr,
+        )
+        print(
+            f"Manual fallback: drag {xlsx_path} into "
+            f"https://drive.google.com/drive/folders/{folder_id}",
+            file=sys.stderr,
+        )
+        raise PushFailedError("All Google Drive / Sheets upload strategies failed.")
+
+    # New upload succeeded. Now safe to clean up the previous sheet and
+    # persist the new id atomically.
+    _delete_previous_sheet(drive, previous_id)
+    if id_file:
+        tmp = id_file.with_suffix(id_file.suffix + ".tmp")
+        tmp.write_text(new_id, encoding="utf-8")
+        tmp.replace(id_file)
+    if success_msg:
+        print(success_msg)
+    print(f"Sheet ID: {new_id}")
+    return new_id
 
 
 # ────────────────────────────────────────────────────────────────────────

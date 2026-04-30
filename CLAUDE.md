@@ -6,34 +6,58 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-04-29 (continuing same session)
-**Currently working on:** Step 4c (Skill 5 build output) is now FULLY ported to Python — all three sub-steps shipped this session. Step 4c.3 (GSheets push) is the open PR. Once it merges, the legacy Keepa pipeline at `fba_engine/_legacy_keepa/` has no remaining unported code paths used by the active strategies.
-**Status:** PRs #10 (4b decision), #12 (4c.1 merge), #13 (4c.2 xlsx) merged. PR open for 4c.3 (push_to_gsheets).
+**Last updated:** 2026-04-30
+**Currently working on:** Cross-cutting code review of all 5 ported steps (`ip_risk`, `decision_engine`, `build_output`, `build_xlsx`, `push_to_gsheets`) — independent reviewers found 13 HIGH defects + 1 MEDIUM. All addressed in a single follow-up branch.
+**Status:** All step 4 sub-steps merged to main (PRs #8/#10/#12/#13/#14). Code-review followups branch open.
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                  # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live SP-API
 cd shared/lib/python && pytest tests/ sourcing_engine/tests/ # 68/68
-pytest fba_engine/steps/tests/                               # 384/384 (67 ip_risk + 155 decision + 60 build_output + 65 build_xlsx + 37 push_gsheets)
+pytest fba_engine/steps/tests/                               # 416/416 (71 ip_risk + 157 decision + 65 build_output + 71 build_xlsx + 52 push_gsheets)
 ```
 
 ### What landed this session
 
-**Step 4b — Decision Engine port** (PR #10, MERGED): 1:1 port of `phase6_decision.js` (651 LOC) → 155 pytest cases. Two-sheet Excel shortlist via openpyxl.
+**Code-review followups** (branch open): independent per-module review surfaced
+13 HIGH defects across the 5 step modules + 1 MEDIUM in decision_engine. All
+fixed with regression tests (+32 tests net):
 
-**Step 4c.1 — Build Output merge** (PR #12, MERGED): 1:1 port of `phase5_build.js` (~330 LOC) → 60 pytest cases. Reviewer surfaced 2 MEDIUM porting bugs (sort key divergences) + 1 latent pd.NA crash; all addressed.
-
-**Step 4c.2 — XLSX styling** (PR #13, MERGED): port of `build_final_xlsx.js` (529 LOC) via openpyxl → 65 pytest cases. Two deliberate JS divergences (64→67 column extension; Trade Price NUMERIC_COLS fix). Reviewer surfaced coverage gap; addressed with 9 extra branch-specific tests.
-
-**Step 4c.3 — Google Sheets push** (PR open):
-- Port of `push_to_gsheets.js` (311 LOC) at `fba_engine/steps/push_to_gsheets.py` (~440 LOC).
-- 3-strategy fallback chain: xlsx-conversion upload → raw-xlsx upload → Sheets API create+populate.
-- Uses `google-api-python-client` + `google-auth` (already installed in env; lazy-imported in `_build_clients` so the module loads cleanly on systems without the deps).
-- 37 pytest cases all using mocked googleapis (no network).
-- Reviewer flagged 1 HIGH (`_is_quota_error` would silently miss real `HttpError 403` because httplib2 may surface status as a string) + 3 MEDIUMs (full-chain test, `PushFailedError` test, sequencing test) + LOWs (em-dash in title, datetime import location). All addressed.
+- `ip_risk`: top-10 stats sort coerces numerics so `Monthly Gross Profit`
+  with non-numeric strings doesn't lex-sort ("9" > "10"). `_yes_token`
+  switched from a regex with implicit fullmatch anchoring to an explicit
+  `lower() in {"y","yes"}` check.
+- `decision_engine`: `calc_target_buy_price` returns `""` when the lane
+  buffer fully consumes the max buy price (legacy leaked `"GBP0.00"`).
+- `build_output`: NaN/inf-safe `bought_int` (was `int(nan)` → ValueError).
+  CSV writes are atomic via `<path>.tmp` + rename. Output CSVs use
+  `utf-8-sig` to round-trip cleanly with the read encoding (Excel BOM).
+  `working/` no longer created on missing-input exit.
+- `build_xlsx`: schema validation in `compute_workbook` (conditional fills
+  use hard-coded col indices, so a reordered frame would silently paint
+  wrong cells). Header borders restored on rows 2 + 3 (lost styling vs
+  legacy JS). Cols 40 (FBA Seller Count) + 42 (BB Amazon %) added to
+  `NUMERIC_COLS` / `PCT_COLS` — same JS-bug class as the documented
+  col-61 fix.
+- `push_to_gsheets`: 5 HIGH fixes — chunked resumable uploads with
+  per-chunk retry; `_retry_with_backoff` helper for transient (429/5xx)
+  errors; tightened `_is_quota_error` to canonical phrases (no false
+  positives on "API quota check timed out"); orchestrator now reads
+  csv_rows from the xlsx itself if not supplied so Strategy 3 always
+  has data; orphan-sheet cleanup if Strategy 3 population fails after
+  create succeeds; previous-sheet delete deferred until AFTER new
+  upload succeeds (no more half-deleted state).
 
 ### Prior session highlights (kept for context)
+
+**Step 4b — Decision Engine port** (PR #10, MERGED): 1:1 port of `phase6_decision.js` (651 LOC) → 155 pytest cases.
+
+**Step 4c.1 — Build Output merge** (PR #12, MERGED): 1:1 port of `phase5_build.js` (~330 LOC) → 60 pytest cases.
+
+**Step 4c.2 — XLSX styling** (PR #13, MERGED): port of `build_final_xlsx.js` (529 LOC) via openpyxl → 65 pytest cases.
+
+**Step 4c.3 — Google Sheets push** (PR #14, MERGED): Port of `push_to_gsheets.js` (311 LOC) → 37 pytest cases.
 
 **PRs #6–#9** (prior session): doc-drift fixes, MCP M1-M4 + L1-L7 follow-ups
 (110/110 vitest), step 4a IP Risk port (67 pytest), handoff doc. All merged.
@@ -50,15 +74,16 @@ those quotes when writing to `settings.json`. Bash `source` now works on the fil
 | 6 — Decision Engine | 651 | **MERGED PR #10** (step 4b) |
 | 5.1 — Build Output (merge logic) | ~330 | **MERGED PR #12** (step 4c.1) |
 | 5.2 — Build Output (XLSX styling) | 529 | **MERGED PR #13** (step 4c.2) |
-| 5.3 — Build Output (GSheets push) | 311 | **PR open** (step 4c.3, this session) |
+| 5.3 — Build Output (GSheets push) | 311 | **MERGED PR #14** (step 4c.3) |
 | 3 — Scoring | 0 (SKILL.md) | **Scope decision needed**: extract a canonical scoring step, or keep agent-driven? Per-niche scripts get generated under `data/{niche}/working/`. |
 | 1 — Keepa Finder | 0 (browser) | **Separate scoping**: Keepa API integration vs Playwright vs keep as Claude Code skill |
 | 2 — SellerAmp | 0 (browser) | Same scoping question as Skill 1 |
 
-**Blockers:** None remaining for step 4. Once 4c.3 merges, the only outstanding
-items are the (deferred) `_helpers.py` extraction across step files, Skill 3
-scope decision (extract canonical scoring step or keep agent-driven?), and
-the browser-vs-API scoping for Skills 1 + 2.
+**Blockers:** None remaining for step 4. Outstanding items: the (deferred)
+`_helpers.py` extraction across step files, Skill 3 scope decision (extract
+canonical scoring step or keep agent-driven?), and the browser-vs-API scoping
+for Skills 1 + 2. Code-review followups of MEDIUM severity are tracked in
+the PR description for the followups branch (LOWs deferred).
 
 ### Workflow notes (cumulative across sessions)
 - **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.

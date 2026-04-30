@@ -200,7 +200,7 @@ def _coerce_num(raw: object) -> float:
 
 def _yes_token(raw: object) -> bool:
     """A+ Content present: matches /^(y|yes)$/i."""
-    return bool(re.fullmatch(r"(?i)y|yes", str(raw or "").strip()))
+    return str(raw or "").strip().lower() in {"y", "yes"}
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -376,15 +376,24 @@ def build_stats(df: pd.DataFrame, niche: str) -> str:
         "SYNTHETIC": int((df["Brand Type"] == "SYNTHETIC").sum()),
     }
 
-    sort_cols = ["IP Risk Score"]
-    if "Monthly Gross Profit" in df.columns:
-        sort_cols.append("Monthly Gross Profit")
-    if "ASIN" in df.columns:
+    # Coerce numeric sort columns so non-numeric strings don't lex-sort
+    # ("9" > "10"). ASIN is left as string for ascending tie-break.
+    sort_frame = df.copy()
+    sort_frame["__ip_score_sort"] = pd.to_numeric(
+        sort_frame["IP Risk Score"], errors="coerce"
+    ).fillna(0)
+    sort_cols = ["__ip_score_sort"]
+    sort_asc = [False]
+    if "Monthly Gross Profit" in sort_frame.columns:
+        sort_frame["__mgp_sort"] = pd.to_numeric(
+            sort_frame["Monthly Gross Profit"], errors="coerce"
+        ).fillna(0)
+        sort_cols.append("__mgp_sort")
+        sort_asc.append(False)
+    if "ASIN" in sort_frame.columns:
         sort_cols.append("ASIN")
-    sort_asc = [False] * len(sort_cols)
-    if "ASIN" in sort_cols:
-        sort_asc[-1] = True
-    top10 = df.sort_values(sort_cols, ascending=sort_asc).head(10)
+        sort_asc.append(True)
+    top10 = sort_frame.sort_values(sort_cols, ascending=sort_asc).head(10)
 
     top10_lines = []
     for i, (_, row) in enumerate(top10.iterrows(), start=1):

@@ -277,12 +277,21 @@ def get_target_buffer(lane: object) -> float:
 
 
 def calc_target_buy_price(max_buy_price: float, lane: object) -> float | str:
-    """Lower of (90% discount, max minus lane buffer). 0/negative max -> ""."""
+    """Lower of (90% discount, max minus lane buffer).
+
+    Returns "" when no useful target exists — i.e. when max_buy_price is
+    zero/negative, OR when the lane buffer would consume the entire max
+    (computed value <= 0). Legacy JS leaked a "GBP0.00" Target Buy Price
+    in this case; Python clears it so the output column stays meaningful.
+    """
     if not max_buy_price or max_buy_price <= 0:
         return ""
     discount = max_buy_price * TARGET_BUY_DISCOUNT
     buffered = max_buy_price - get_target_buffer(lane)
-    return max(0, min(discount, buffered))
+    target = min(discount, buffered)
+    if target <= 0:
+        return ""
+    return target
 
 
 # ────────────────────────────────────────────────────────────────────────
