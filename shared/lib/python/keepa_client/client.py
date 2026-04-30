@@ -133,6 +133,11 @@ class KeepaClient:
             "key": self._api_key,
             "domain": self._config.api.marketplace,
             "asin": asin,
+            # `stats=90` populates `stats.current[]` + `stats.avg90[]` in
+            # the response, which is what `KeepaProduct.market_snapshot()`
+            # consumes. Adds ~1 token per call but unlocks the keepa_enrich
+            # step's whole purpose. See `models.py` for the index map.
+            "stats": 90,
         }
         try:
             payload = self._request("/product", params)
@@ -218,6 +223,10 @@ class KeepaClient:
                 "key": self._api_key,
                 "domain": self._config.api.marketplace,
                 "asin": ",".join(chunk),
+                # `stats=90` matches `get_product` — required for
+                # `KeepaProduct.market_snapshot()` to populate
+                # current/avg90 prices in the keepa_enrich step.
+                "stats": 90,
             }
             try:
                 payload = self._request("/product", params)
@@ -291,7 +300,7 @@ class KeepaClient:
         bursting through the quota), then refund the diff once we read
         the response. Over time the bucket converges on the true ledger.
         """
-        estimate = self._estimate_for(path)
+        estimate = self._estimate_for(path, params)
         self._bucket.acquire(estimate)
 
         url = f"{self._config.api.base_url}{path}"
@@ -329,12 +338,26 @@ class KeepaClient:
 
         raise KeepaApiError(f"Keepa {path} exhausted retries")
 
-    def _estimate_for(self, path: str) -> int:
+    def _estimate_for(self, path: str, params: dict[str, Any]) -> int:
         """Conservative pre-call token estimate per endpoint.
 
         Used by `_request` to drain the bucket BEFORE the API call (Keepa's
         actual `tokensConsumed` is only known after). Estimates are
         deliberately high to avoid bursting through the quota wall;
         `_request` reconciles back to the true ledger via `bucket.refund`.
+
+        ``/product`` cost scales with the number of ASINs requested (the
+        ``asin`` param is comma-separated for the batch path) AND with the
+        ``stats=N`` flag (+1 per product). Without the per-ASIN scaling
+        the bucket would silently over-issue under heavy batch load and
+        rely on Keepa returning HTTP 429.
         """
-        return 50 if path.startswith("/seller") else 6
+        if path.startswith("/seller"):
+            return 50
+        # Per-product Keepa cost: 1 base + 1 stats (when stats= is set).
+        asin_param = params.get("asin", "")
+        n_asins = max(1, asin_param.count(",") + 1) if asin_param else 1
+        per_product = 1 + (1 if "stats" in params else 0)
+        # +5 base overhead per call (matches the legacy single-ASIN
+        # estimate of 6 = 1 product + 5 overhead).
+        return 5 + n_asins * per_product
