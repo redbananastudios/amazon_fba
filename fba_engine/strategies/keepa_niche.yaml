@@ -13,15 +13,26 @@
 
 name: keepa_niche
 description: >
-  Amazon-listing-first niche discovery: enriches a Phase-3 shortlist with
-  IP risk signals, builds the 67-column final results frame, and assigns
-  BUY / NEGOTIATE / WATCH / KILL verdicts.
+  Amazon-listing-first niche discovery: scores a Phase-2 enriched
+  shortlist across 4 dimensions + assigns Verdict (Phase 3), enriches
+  with IP risk signals (Phase 4), builds the 67-column final results
+  frame (Phase 5), and assigns BUY / NEGOTIATE / WATCH / KILL verdicts
+  (Phase 6).
 
 input:
-  path: "{base}/working/{niche_snake}_phase3_shortlist.csv"
+  # Default input is the Phase-2 enriched CSV (post-SellerAmp / post-MCP
+  # enrichment). Strategies that already have a Phase-3 shortlist with
+  # scoring done can override `input.path` to skip directly to ip_risk.
+  path: "{base}/working/{niche_snake}_phase2_enriched.csv"
   encoding: utf-8-sig
 
 steps:
+  # Phase 3: scoring + verdict (15 columns appended). Reads BSR /
+  # FBA seller count / ROI / etc. from Phase 2 enrichment, computes
+  # 4 dimension scores + composite + lane scores + verdict.
+  - name: scoring
+    module: fba_engine.steps.scoring
+
   # Phase 4: IP risk scoring (9 columns appended).
   - name: ip_risk
     module: fba_engine.steps.ip_risk
