@@ -1,0 +1,336 @@
+"""YAML strategy runner.
+
+Loads a strategy YAML describing an ordered chain of pipeline steps
+(modules under `fba_engine.steps.*`), then pipes a DataFrame through each
+step's `run_step(df, config) -> df` contract. Variable substitution
+(``{niche}``, ``{base}``, etc.) lets the same strategy file run across
+niches without per-niche copies.
+
+The contract every step exposes is:
+
+    def run_step(df: pd.DataFrame, config: dict) -> pd.DataFrame: ...
+
+The runner does **not** know which steps emit side-outputs (XLSX files,
+GSheets uploads, supplier-skeleton CSVs). Steps that need to write side-
+outputs read the relevant paths from the `config` dict — the runner just
+passes through whatever the YAML specified, with `{name}` interpolation
+applied to string values.
+
+Standalone CLI invocation:
+
+    python -m fba_engine.strategies.runner \\
+        --strategy fba_engine/strategies/keepa_niche.yaml \\
+        --context niche=kids-toys base=fba_engine/data/niches/kids-toys
+"""
+from __future__ import annotations
+
+import argparse
+import importlib
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+import yaml
+
+from fba_engine.steps._helpers import atomic_write
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Errors.
+# ────────────────────────────────────────────────────────────────────────
+
+
+class StrategyConfigError(ValueError):
+    """The strategy YAML is malformed, references a missing module, or is
+    missing a required configuration key."""
+
+
+class StrategyExecutionError(RuntimeError):
+    """A step's `run_step` raised. The wrapped exception is preserved as
+    the cause; the message identifies which step failed."""
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Definitions.
+# ────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class StepDef:
+    """One step in a strategy chain."""
+
+    name: str            # logical name shown in errors (e.g. "ip_risk")
+    module: str          # importable module path (e.g. "fba_engine.steps.ip_risk")
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class StrategyDef:
+    """A loaded strategy definition. Immutable after `load_strategy`."""
+
+    name: str
+    description: str
+    steps: list[StepDef]
+    input_path: str | None = None       # interpolation-friendly
+    input_encoding: str = "utf-8-sig"
+    output_csv: str | None = None       # interpolation-friendly
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Variable interpolation.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def interpolate(value: Any, context: dict[str, Any]) -> Any:
+    """Substitute ``{name}`` placeholders from `context` into a string value.
+
+    Non-strings pass through unchanged. Missing context keys raise
+    ``StrategyConfigError`` with the offending key in the message — silent
+    pass-through would leave literal ``{niche}`` in output paths.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        return value.format(**context)
+    except KeyError as err:
+        missing = err.args[0] if err.args else "?"
+        raise StrategyConfigError(
+            f"interpolation: missing context key '{missing}' in value {value!r}"
+        ) from err
+
+
+def _interpolate_config(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Apply `interpolate` to every value in a step config.
+
+    **Note**: substitution is one level deep. Nested mappings or lists pass
+    through unchanged. If a future step needs interpolation inside a list
+    of paths or a sub-dict, extend this helper to recurse — but assert at
+    the YAML load step so a typo doesn't silently leave `{niche}` in a
+    nested value.
+    """
+    return {k: interpolate(v, context) for k, v in config.items()}
+
+
+# ────────────────────────────────────────────────────────────────────────
+# YAML loading.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def load_strategy(yaml_path: Path | str) -> StrategyDef:
+    """Read a strategy YAML and return a `StrategyDef`. Validates required keys.
+
+    Raises FileNotFoundError if the file is missing, StrategyConfigError if
+    the YAML is structurally invalid.
+    """
+    yaml_path = Path(yaml_path)
+    if not yaml_path.exists():
+        raise FileNotFoundError(f"strategy YAML not found: {yaml_path}")
+
+    with yaml_path.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+
+    if not isinstance(data, dict):
+        raise StrategyConfigError(
+            f"{yaml_path}: top-level YAML must be a mapping, got {type(data).__name__}"
+        )
+
+    if "name" not in data:
+        raise StrategyConfigError(f"{yaml_path}: required field 'name' missing")
+    if "steps" not in data:
+        raise StrategyConfigError(f"{yaml_path}: required field 'steps' missing")
+
+    raw_steps = data["steps"] or []
+    if not isinstance(raw_steps, list):
+        raise StrategyConfigError(
+            f"{yaml_path}: 'steps' must be a list, got {type(raw_steps).__name__}"
+        )
+
+    steps: list[StepDef] = []
+    for i, raw in enumerate(raw_steps):
+        if not isinstance(raw, dict):
+            raise StrategyConfigError(
+                f"{yaml_path}: step #{i} must be a mapping, got {type(raw).__name__}"
+            )
+        if "name" not in raw:
+            raise StrategyConfigError(
+                f"{yaml_path}: step #{i} missing required field 'name'"
+            )
+        if "module" not in raw:
+            raise StrategyConfigError(
+                f"{yaml_path}: step '{raw['name']}' missing required field 'module'"
+            )
+        steps.append(
+            StepDef(
+                name=str(raw["name"]),
+                module=str(raw["module"]),
+                config=dict(raw.get("config") or {}),
+            )
+        )
+
+    input_block = data.get("input") or {}
+    output_block = data.get("output") or {}
+
+    return StrategyDef(
+        name=str(data["name"]),
+        description=str(data.get("description", "")),
+        input_path=input_block.get("path"),
+        input_encoding=str(input_block.get("encoding", "utf-8-sig")),
+        steps=steps,
+        output_csv=output_block.get("csv"),
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Execution.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _load_step_module(step: StepDef):
+    """Import a step module and verify it exposes a callable `run_step`."""
+    try:
+        module = importlib.import_module(step.module)
+    except ModuleNotFoundError as err:
+        raise StrategyConfigError(
+            f"step '{step.name}': cannot import module '{step.module}': {err}"
+        ) from err
+    run_step = getattr(module, "run_step", None)
+    if not callable(run_step):
+        raise StrategyConfigError(
+            f"step '{step.name}': module '{step.module}' has no callable "
+            f"run_step() (got {type(run_step).__name__})"
+        )
+    return module
+
+
+def run_strategy(
+    strategy: StrategyDef,
+    context: dict[str, Any],
+    df_in: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Execute the strategy. Returns the DataFrame after the final step.
+
+    If `df_in` is None, the runner reads the strategy's input_path
+    (interpolated against `context`). If both are None, raises
+    StrategyConfigError.
+
+    Each step's config has its string values interpolated before the step
+    runs — so `config: {niche: "{niche}"}` resolves to whatever
+    `context["niche"]` is at runtime.
+
+    The final DataFrame is also written to `strategy.output_csv` (also
+    interpolated) if that key is set.
+    """
+    df = _resolve_input_df(strategy, context, df_in)
+
+    for step in strategy.steps:
+        module = _load_step_module(step)
+        resolved_config = _interpolate_config(step.config, context)
+        try:
+            df = module.run_step(df, resolved_config)
+        except Exception as err:
+            raise StrategyExecutionError(
+                f"step '{step.name}' ({step.module}) failed: "
+                f"{type(err).__name__}: {err}"
+            ) from err
+
+    if strategy.output_csv:
+        out_path = Path(interpolate(strategy.output_csv, context))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic tmp+rename — matches the convention used by build_output's
+        # CSV writes so a crash mid-write doesn't leave a partial file for
+        # downstream consumers (chained strategies, scheduled re-runs).
+        atomic_write(
+            out_path,
+            lambda p: df.to_csv(p, index=False, encoding="utf-8-sig"),
+        )
+
+    return df
+
+
+def _resolve_input_df(
+    strategy: StrategyDef,
+    context: dict[str, Any],
+    df_in: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Use df_in if provided; otherwise read from strategy.input_path."""
+    if df_in is not None:
+        return df_in
+    if strategy.input_path is None:
+        raise StrategyConfigError(
+            "no input: strategy has no 'input.path' and no df_in was provided"
+        )
+    path = Path(interpolate(strategy.input_path, context))
+    if not path.exists():
+        raise StrategyConfigError(f"input CSV not found: {path}")
+    return pd.read_csv(
+        path, dtype=str, keep_default_na=False, encoding=strategy.input_encoding
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# CLI.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _parse_context_pairs(pairs: list[str]) -> dict[str, str]:
+    """Parse `key=value key=value` CLI args into a context dict."""
+    context: dict[str, str] = {}
+    for p in pairs:
+        if "=" not in p:
+            raise SystemExit(f"--context entry must be key=value, got: {p!r}")
+        key, _, value = p.partition("=")
+        if not key:
+            raise SystemExit(f"--context entry has empty key: {p!r}")
+        context[key] = value
+    return context
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run a YAML strategy: an ordered chain of pipeline steps "
+            "exposing `run_step(df, config) -> df`."
+        )
+    )
+    parser.add_argument(
+        "--strategy", required=True, type=Path,
+        help="Path to the strategy YAML file.",
+    )
+    parser.add_argument(
+        "--context", nargs="*", default=[],
+        metavar="KEY=VALUE",
+        help="Context variables for {placeholder} interpolation in YAML strings.",
+    )
+    args = parser.parse_args(argv)
+
+    context = _parse_context_pairs(args.context)
+
+    # Wrap the load + run in clean stderr error reporting so operators see
+    # a one-line message instead of a Python traceback for the common
+    # config / missing-file failures.
+    try:
+        strategy = load_strategy(args.strategy)
+    except (FileNotFoundError, StrategyConfigError) as err:
+        print(f"Error loading strategy: {err}", file=sys.stderr)
+        return 1
+    print(f"Loaded strategy: {strategy.name} ({len(strategy.steps)} steps)")
+
+    try:
+        df = run_strategy(strategy, context=context)
+    except StrategyConfigError as err:
+        print(f"Error in strategy config: {err}", file=sys.stderr)
+        return 1
+    except StrategyExecutionError as err:
+        print(f"Strategy step failed: {err}", file=sys.stderr)
+        return 2
+
+    print(f"Strategy complete: {len(df)} rows, {len(df.columns)} columns")
+    if strategy.output_csv:
+        print(f"Output CSV: {interpolate(strategy.output_csv, context)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

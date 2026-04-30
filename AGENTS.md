@@ -118,6 +118,7 @@ Baseline counts as of step 4b:
 | shared lib (config_loader, roi_gate) | 26 | 0 | clean |
 | canonical engine | 42 | 0 | clean (was 23 pre-MCP; +19 preflight tests) |
 | pipeline steps (`fba_engine/steps/`) | 421 | 0 | 4a IP risk (71) + 4b decision (157) + 4c.1 build output (65) + 4c.2 build xlsx (71) + 4c.3 push gsheets (57) |
+| strategies (`fba_engine/strategies/`) | 23 | 0 | YAML strategy runner (step 5) — interpolation + chain execution + end-to-end keepa_niche |
 | abgee adapter | 12 | 0 | clean |
 | connect-beauty adapter | 15 | 0 | clean |
 | shure adapter | 9 | 3 | pre-existing — `test_ingest.py` expects abgee PDF format |
