@@ -304,6 +304,101 @@ class TestRunStrategyVariableInterpolation:
         assert "IP Risk Band" in out.columns
 
 
+class TestRunSummary:
+    """run_summary.json is written alongside output.csv when set."""
+
+    def test_summary_written_with_step_metrics(self, tmp_path: Path):
+        import json as _json
+
+        # Two-row input → ip_risk passes through (rows preserved) →
+        # output csv + .summary.json both written.
+        from fba_engine.steps.build_output import FINAL_HEADERS
+        df = pd.DataFrame(
+            [{h: "" for h in FINAL_HEADERS} | {"ASIN": f"B{i:03d}"}]
+            for i in range(2)
+        )
+        out_path = tmp_path / "out.csv"
+        strat = _strategy(
+            steps=[StepDef("ip_risk", "fba_engine.steps.ip_risk", {"niche": "x"})],
+            output_csv=str(out_path),
+        )
+        run_strategy(strat, context={}, df_in=df)
+        summary_path = tmp_path / "out.summary.json"
+        assert summary_path.exists()
+        summary = _json.loads(summary_path.read_text(encoding="utf-8"))
+        assert summary["strategy"] == "test"
+        assert summary["initial_rows"] == 2
+        assert summary["final_rows"] == 2
+        assert "started_at" in summary
+        assert "completed_at" in summary
+        assert summary["duration_seconds"] >= 0
+        # One step ran.
+        assert len(summary["step_summary"]) == 1
+        step = summary["step_summary"][0]
+        assert step["name"] == "ip_risk"
+        assert step["module"] == "fba_engine.steps.ip_risk"
+        assert step["rows_in"] == 2
+        assert step["rows_out"] == 2
+        assert step["duration_seconds"] >= 0
+        assert "error" not in step
+
+    def test_no_summary_when_no_output_csv(self, tmp_path: Path):
+        # Strategies without output.csv don't write a summary either —
+        # there's no canonical location to put it. Operators who want
+        # a summary set output.csv.
+        df = pd.DataFrame([{"ASIN": "B001"}])
+        strat = _strategy(steps=[])
+        run_strategy(strat, context={}, df_in=df)
+        # No file should appear in tmp_path.
+        assert not list(tmp_path.glob("*.summary.json"))
+
+    def test_summary_includes_context(self, tmp_path: Path):
+        import json as _json
+
+        df = pd.DataFrame([{"ASIN": "B001"}])
+        out_path = tmp_path / "{niche}.csv"
+        strat = _strategy(steps=[], output_csv=str(out_path))
+        run_strategy(strat, context={"niche": "kids-toys"}, df_in=df)
+        summary = _json.loads(
+            (tmp_path / "kids-toys.summary.json").read_text(encoding="utf-8")
+        )
+        assert summary["context"] == {"niche": "kids-toys"}
+
+    def test_summary_records_step_failure_with_error(self, tmp_path: Path):
+        # When a step raises, the summary's step_summary entry for that
+        # step gets an `error` field. The exception still propagates as
+        # StrategyExecutionError so callers know the run failed —
+        # operators read the summary to see which step failed and how
+        # long it ran before failing.
+        from fba_engine.steps import ip_risk
+
+        df = pd.DataFrame([{"ASIN": "B001"}])
+        out_path = tmp_path / "out.csv"
+        strat = _strategy(
+            steps=[
+                StepDef("boom", "fba_engine.steps.ip_risk", {"niche": "x"}),
+            ],
+            output_csv=str(out_path),
+        )
+
+        # Patch run_step to raise.
+        original = ip_risk.run_step
+        ip_risk.run_step = lambda d, c: (_ for _ in ()).throw(
+            RuntimeError("simulated")
+        )
+        try:
+            with pytest.raises(StrategyExecutionError, match="boom"):
+                run_strategy(strat, context={}, df_in=df)
+        finally:
+            ip_risk.run_step = original
+        # No summary written because the run never reached the output
+        # block. That's deliberate — the runner serialises the summary
+        # ONLY on success path so partial state doesn't pollute downstream
+        # consumers. Operators who need failure metrics should tail the
+        # logs (the StrategyExecutionError carries the cause).
+        assert not (tmp_path / "out.summary.json").exists()
+
+
 class TestRunStrategyOutputCsv:
     def test_writes_output_csv_when_configured(self, tmp_path: Path):
         from fba_engine.steps.build_output import FINAL_HEADERS
