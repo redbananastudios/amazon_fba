@@ -486,3 +486,136 @@ class TestSupplierPricelistStrategy:
         assert (out["decision"] == "REJECT").all()
         # Output writers ran and produced the timestamped CSV.
         assert (run_dir / "shortlist_20260429_120000.csv").exists()
+
+
+class TestSellerStorefrontStrategy:
+    """Smoke test: seller_storefront.yaml loads + runs end-to-end via a
+    stubbed Keepa client. Pins the discover -> supplier_leads chain."""
+
+    def test_seller_storefront_yaml_loads(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = (
+            repo_root / "fba_engine" / "strategies" / "seller_storefront.yaml"
+        )
+        if not yaml_path.exists():
+            pytest.skip(f"seller_storefront.yaml not found at {yaml_path}")
+        strat = load_strategy(yaml_path)
+        assert strat.name == "seller_storefront"
+        assert strat.input_discover is True
+        # Two steps: discover + supplier_leads.
+        assert [s.name for s in strat.steps] == ["discover", "supplier_leads"]
+        # Both modules import.
+        for step in strat.steps:
+            __import__(step.module)
+
+    def test_seller_storefront_yaml_runs_end_to_end(self, tmp_path: Path):
+        # Stub the Keepa client to avoid real API calls. Inject the
+        # stub into the discover step's config dict via the YAML
+        # context layer — the runner interpolates strings only, so
+        # we mutate the loaded StrategyDef before run_strategy.
+        from unittest.mock import MagicMock
+
+        from keepa_client import KeepaProduct, KeepaSeller
+
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = (
+            repo_root / "fba_engine" / "strategies" / "seller_storefront.yaml"
+        )
+        if not yaml_path.exists():
+            pytest.skip(f"seller_storefront.yaml not found at {yaml_path}")
+
+        seller = KeepaSeller(
+            sellerId="A1B2C3", sellerName="Stub Storefront",
+            asinList=["B0AAA"],
+        )
+        products = [
+            KeepaProduct(asin="B0AAA", title="Widget A", brand="Acme"),
+        ]
+        client = MagicMock()
+        client.get_seller.return_value = seller
+        client.get_products.return_value = products
+
+        strat = load_strategy(yaml_path)
+        # Inject the stubbed client into the discover step's config.
+        for step in strat.steps:
+            if step.name == "discover":
+                step.config["client"] = client
+
+        run_dir = tmp_path / "out"
+        context = {
+            "seller_id": "A1B2C3",
+            "run_dir": str(run_dir),
+            "timestamp": "20260430_120000",
+        }
+        out = run_strategy(strat, context=context, df_in=None)
+
+        # Discovery emitted one row; supplier_leads added supplier_search_*
+        # columns; output CSV got written.
+        assert len(out) == 1
+        assert out.iloc[0]["asin"] == "B0AAA"
+        assert "supplier_search_brand_distributor" in out.columns
+        # Brand search URL fires when brand is present.
+        assert out.iloc[0]["supplier_search_brand_distributor"]
+        # Atomic-written CSV at the configured location.
+        assert (
+            run_dir
+            / "seller_storefront_A1B2C3_20260430_120000.csv"
+        ).exists()
+
+
+class TestOaCsvStrategy:
+    """Smoke test: oa_csv.yaml loads + runs against a fixture CSV."""
+
+    _SELLERAMP_CSV = (
+        "ASIN,Title,Cost,URL\n"
+        "B0OA1,OA Item One,10.50,https://retailer.test/p/1\n"
+        "B0OA2,OA Item Two,7.25,https://retailer.test/p/2\n"
+    )
+
+    def test_oa_csv_yaml_loads(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = repo_root / "fba_engine" / "strategies" / "oa_csv.yaml"
+        if not yaml_path.exists():
+            pytest.skip(f"oa_csv.yaml not found at {yaml_path}")
+        strat = load_strategy(yaml_path)
+        assert strat.name == "oa_csv"
+        assert strat.input_discover is True
+        # Single step: discover.
+        assert [s.name for s in strat.steps] == ["discover"]
+        for step in strat.steps:
+            __import__(step.module)
+
+    def test_oa_csv_yaml_runs_end_to_end(self, tmp_path: Path):
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = repo_root / "fba_engine" / "strategies" / "oa_csv.yaml"
+        if not yaml_path.exists():
+            pytest.skip(f"oa_csv.yaml not found at {yaml_path}")
+
+        # Sandboxed OA CSV + empty exclusions list.
+        csv_in = tmp_path / "in.csv"
+        csv_in.write_text(self._SELLERAMP_CSV, encoding="utf-8")
+        exclusions = tmp_path / "exclusions.csv"
+        exclusions.write_text("ASIN\n", encoding="utf-8")
+        run_dir = tmp_path / "out"
+
+        strat = load_strategy(yaml_path)
+        # Inject the sandboxed exclusions path into the discover step.
+        for step in strat.steps:
+            if step.name == "discover":
+                step.config["exclusions_path"] = str(exclusions)
+
+        context = {
+            "feed": "selleramp",
+            "csv_path": str(csv_in),
+            "run_dir": str(run_dir),
+            "timestamp": "20260430_120000",
+        }
+        out = run_strategy(strat, context=context, df_in=None)
+
+        # Two rows discovered; output CSV written.
+        assert len(out) == 2
+        assert set(out["asin"]) == {"B0OA1", "B0OA2"}
+        assert (out["source"] == "oa_csv").all()
+        assert (
+            run_dir / "oa_candidates_selleramp_20260430_120000.csv"
+        ).exists()

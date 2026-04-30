@@ -1,0 +1,47 @@
+# Strategy: oa_csv
+# Online-arbitrage candidate-list pipeline. Reads a third-party OA
+# export (SellerAmp 2DSorter / Tactical Arbitrage / OAXray), filters
+# against the global exclusions list, writes a leads CSV.
+#
+# Run via:
+#   python -m fba_engine.strategies.runner \
+#       --strategy fba_engine/strategies/oa_csv.yaml \
+#       --context feed=selleramp \
+#                 csv_path=fba_engine/data/strategies/oa_csv/selleramp/2dsorter-export.csv \
+#                 run_dir=fba_engine/data/strategies/oa_csv/selleramp \
+#                 timestamp=20260430_120000
+#
+# Scope note: OA buyers go directly to the retail URL (already in the
+# discovery output as `retail_url`), so the supplier_leads step is
+# redundant here — the strategy is just discover → output.
+#
+# Full calculate→decide chaining requires a Keepa-by-ASIN enrichment
+# step (`keepa_enrich`) which fetches market_price / fees /
+# sales_estimate per ASIN. That step is future work — the existing
+# `resolve` step is EAN-keyed and assumes supplier-pricelist input,
+# which doesn't fit OA's pre-resolved ASINs.
+
+name: oa_csv
+description: >
+  Online-arbitrage leads — read a third-party OA candidate CSV,
+  filter exclusions, emit a leads CSV with ASIN + retail_cost_inc_vat
+  + retail_url.
+
+# `input.discover: true` — discovery step reads the OA CSV directly
+# from `csv_path` config; the runner passes an empty df_in.
+input:
+  discover: true
+
+steps:
+  # Stage 01 — discover: parse the OA CSV via the named importer.
+  - name: discover
+    module: fba_engine.steps.oa_csv
+    config:
+      feed: "{feed}"
+      csv_path: "{csv_path}"
+      # exclusions_path is optional — defaults to
+      # fba_engine/data/niches/exclusions.csv. Override for sandboxed
+      # runs by passing `exclusions_path: "..."` in context.
+
+output:
+  csv: "{run_dir}/oa_candidates_{feed}_{timestamp}.csv"
