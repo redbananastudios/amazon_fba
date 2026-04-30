@@ -3,7 +3,7 @@
 This module consolidates Keepa access that was previously ad-hoc `requests`
 calls scattered through `_legacy_keepa/`. Exports:
 
-  - `KeepaClient`        — the API client (single-ASIN product + seller)
+  - `KeepaClient`        — the API client (single + batch product, seller)
   - `KeepaConfig`        — typed config loaded from `shared/config/keepa_client.yaml`
   - `load_keepa_config`  — reads + validates the YAML config file
   - `KeepaProduct`       — pydantic model for /product responses
@@ -12,8 +12,11 @@ calls scattered through `_legacy_keepa/`. Exports:
   - `DiskCache`          — exposed for testing
   - `KeepaApiError`      — Keepa returned a non-200 response after retries
 
-Per `docs/PRD-sourcing-strategies.md` §7. Batch ASIN lookups + stale-on-
-error are deferred to a follow-up PR.
+All three lookup methods (``get_product``, ``get_products``,
+``get_seller``) fall back to expired cached data when the API fails
+after retries — see ``client.py`` for the stale-on-error contract.
+
+Per `docs/PRD-sourcing-strategies.md` §7.
 """
 from .cache import DiskCache
 from .client import KeepaApiError, KeepaClient
