@@ -1,0 +1,46 @@
+# Strategy: keepa_niche
+# Composes the ported Phase 4-6 steps into a single chain.
+#
+# Run via:
+#   python -m fba_engine.strategies.runner \
+#       --strategy fba_engine/strategies/keepa_niche.yaml \
+#       --context niche=kids-toys niche_snake=kids_toys \
+#                 base=fba_engine/data/niches/kids-toys
+#
+# Phase 1 (Keepa Finder) and Phase 2 (SellerAmp) still run via the legacy
+# Claude Code skills under fba_engine/_legacy_keepa/skills/. This strategy
+# starts from the Phase-3 shortlist they produce.
+
+name: keepa_niche
+description: >
+  Amazon-listing-first niche discovery: enriches a Phase-3 shortlist with
+  IP risk signals, builds the 67-column final results frame, and assigns
+  BUY / NEGOTIATE / WATCH / KILL verdicts.
+
+input:
+  path: "{base}/working/{niche_snake}_phase3_shortlist.csv"
+  encoding: utf-8-sig
+
+steps:
+  # Phase 4: IP risk scoring (9 columns appended).
+  - name: ip_risk
+    module: fba_engine.steps.ip_risk
+    config:
+      niche: "{niche}"
+
+  # Phase 5: build_output merge — produces the canonical 67-column
+  # final_results frame, dropping confirmed private-label rows.
+  #
+  # Note: run_step returns ONLY the final_df. The supplier-skeleton CSV
+  # and reject-PL CSV that the standalone CLI also emits are not produced
+  # by this YAML path; if you need them, run build_output via its own
+  # CLI alongside the strategy.
+  - name: build_output
+    module: fba_engine.steps.build_output
+
+  # Phase 6: decision engine — appends 11 decision-layer columns.
+  - name: decision_engine
+    module: fba_engine.steps.decision_engine
+
+output:
+  csv: "{base}/working/{niche_snake}_phase6_decisions.csv"

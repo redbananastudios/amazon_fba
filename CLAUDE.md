@@ -6,9 +6,9 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-04-30
-**Currently working on:** Step 4 (Keepa pipeline JS→Python port) is fully complete. All 5 step modules merged, all cross-cutting code-review defects fixed, helpers consolidated. No outstanding implementation work — next moves are scoping decisions or new feature scopes.
-**Status:** Main is at PR #17. 421 step tests + 68 shared lib tests + 110 MCP vitest tests all green.
+**Last updated:** 2026-04-30 (later in same session)
+**Currently working on:** Step 5 (YAML strategy runner) just shipped. Step 4 + step 5 of the engine refactor are now both complete. The `keepa_niche` pipeline is fully expressible as a single YAML and runs end-to-end through ported Python steps.
+**Status:** Main is at PR #18. 444 Python tests + 110 MCP vitest tests all green.
 
 **Latest tests baseline:**
 ```bash
@@ -16,6 +16,7 @@ cd services/amazon-fba-fees-mcp && npm test                  # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration  # 5/5 live SP-API
 cd shared/lib/python && pytest tests/ sourcing_engine/tests/ # 68/68
 pytest fba_engine/steps/tests/                               # 421/421 (71 ip_risk + 157 decision + 65 build_output + 71 build_xlsx + 57 push_gsheets)
+pytest fba_engine/strategies/tests/                          # 23/23 (YAML runner)
 ```
 
 ### What landed today (2026-04-30)
@@ -25,6 +26,8 @@ pytest fba_engine/steps/tests/                               # 421/421 (71 ip_ri
 **PR #16 — Strategy 3 reads from CSV** (this session, MERGED): fixed a HIGH-severity regression PR #15 introduced. `_csv_rows_from_xlsx` was reading title + group-header rows from the styled XLSX, polluting the Sheets-API fallback Sheet. New `_csv_rows_from_path` prefers a sibling CSV (matches legacy JS); xlsx fallback now skips the 2-row styling prelude. +5 tests.
 
 **PR #17 — Helpers extraction** (this session, MERGED): consolidated 6 duplicated helpers (`coerce_str`, `parse_money`, `clamp`, `round_half_up`, `is_missing`, `atomic_write`) into `fba_engine/steps/_helpers.py`. Net -107 LOC across step files. Behavioural improvements landed alongside: `decision_engine.parse_money` now `pd.NA`-safe; `push_to_gsheets` id-file write now goes through `atomic_write` with crash cleanup. Zero test changes.
+
+**Step 5 — YAML strategy runner** (later this session, PR open): new `fba_engine/strategies/` with `runner.py` (~310 LOC), `keepa_niche.yaml`, and 23 pytest cases. Composes ported step modules via the `run_step(df, config) -> df` contract. Variable interpolation (`{niche}`, `{base}`, etc.), `StrategyConfigError` vs `StrategyExecutionError` taxonomy, atomic CSV write via shared `atomic_write` helper, callable-checked step loading, friendly CLI error reporting. Smoke test confirmed: 3-step `keepa_niche` chain end-to-end produces 78-column output (44 input + 9 ip_risk + 14 build_output reshape + 11 decision_engine), verdict NEGOTIATE on the clean fixture row. Pre-PR code-reviewer surfaced 5 LOWs (verdict pin, atomic write, callable check, interpolation depth comment, CLI error wrapping) — all addressed before PR open.
 
 ### Prior session highlights (kept for context)
 
@@ -55,11 +58,12 @@ those quotes when writing to `settings.json`. Bash `source` now works on the fil
 | (cross-cutting) — Code-review followups | — | **MERGED PR #15** (13 HIGH + 1 MEDIUM defects fixed) |
 | (fix) — Strategy 3 reads from CSV | — | **MERGED PR #16** (HIGH regression in #15 fixed) |
 | (refactor) — `_helpers.py` extraction | — | **MERGED PR #17** (6 helpers consolidated) |
+| Step 5 — YAML strategy runner | — | **PR open** (this session) — `fba_engine/strategies/runner.py` + `keepa_niche.yaml` + 23 tests |
 | 3 — Scoring | 0 (SKILL.md) | **Scope decision needed**: extract a canonical scoring step, or keep agent-driven? Per-niche scripts get generated under `data/{niche}/working/`. |
 | 1 — Keepa Finder | 0 (browser) | **Separate scoping**: Keepa API integration vs Playwright vs keep as Claude Code skill |
 | 2 — SellerAmp | 0 (browser) | Same scoping question as Skill 1 |
 
-**Blockers:** None remaining for step 4 — it's complete. The remaining
+**Blockers:** None remaining for steps 4 + 5 — both complete. The remaining
 roadmap items all need *scoping decisions* before any implementation:
 
 1. **Skill 3 (scoring)**: `skills/skill-3-scoring/` is just a SKILL.md — no
@@ -74,11 +78,12 @@ roadmap items all need *scoping decisions* before any implementation:
    Claude Code skill that the agent invokes via the browser. Decision drives
    whether they get ports at all.
 
-3. **Step 5 (YAML strategy runner)**: per the original architecture plan,
-   the `run_step(df, config)` contract on every ported step is meant to be
-   composed by a YAML runner under `fba_engine/strategies/`. Not started.
-   Unblocked by step 4 completion — this is the natural next-natural-task
-   if Peter wants to keep moving on the engine refactor.
+3. **`supplier_pricelist` strategy YAML**: the canonical engine at
+   `shared/lib/python/sourcing_engine/` doesn't yet expose a
+   `run_step(df, config) -> df` contract — it's a top-down `main.py`
+   orchestrator. Refactoring it into composable steps so it can also be
+   expressed as a strategy YAML is a meaningful project but unblocked by
+   step 5 landing. Lower priority than the scoping decisions above.
 
 **Open low-priority polish (not blocking):**
 - Resumable upload progress logging dropped in PR #15 (`_status` discarded)
