@@ -1,0 +1,23 @@
+# Supplier-leads search-template configuration.
+# Drives Skill 99 v1 — for every shortlisted ASIN, generate Google search
+# URLs that take an operator to the most likely supplier hits.
+#
+# See docs/PRD-sourcing-strategies.md §8.3.
+
+search_templates:
+  - id: brand_distributor
+    label: "Brand distributor UK"
+    template: "{brand} distributor UK"
+    skip_if_brand_missing: true
+
+  - id: product_wholesale
+    label: "Product wholesale"
+    template: "{product_name} wholesale"
+    skip_if_brand_missing: false
+
+  - id: brand_trade
+    label: "Brand trade account"
+    template: "{brand} trade account"
+    skip_if_brand_missing: true
+
+search_engine_url: "https://www.google.com/search?q="
