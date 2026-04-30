@@ -61,6 +61,94 @@ class TestKeepaProductModel:
         with pytest.raises(Exception):  # pydantic.ValidationError
             KeepaProduct.model_validate({"title": "no asin"})
 
+    def test_market_snapshot_extracts_canonical_columns(self):
+        # Stats current[] is keyed by Keepa's CSV index enum:
+        #   0=AMAZON, 3=SALES (rank), 10=NEW_FBA, 11=COUNT_NEW, 18=BUY_BOX
+        # Values are integer cents; -1 means "no current value".
+        payload = {
+            "asin": "B0FULL",
+            "title": "Full Stats Product",
+            "brand": "Acme",
+            "stats": {
+                "current": [
+                    1499,  # 0 AMAZON: £14.99
+                    1399,  # 1 NEW
+                    -1,    # 2 USED
+                    5234,  # 3 SALES rank
+                    -1, -1, -1, -1, -1, -1,
+                    1450,  # 10 NEW_FBA: £14.50
+                    5,     # 11 COUNT_NEW (offers)
+                    -1, -1, -1, -1, -1, -1,
+                    1525,  # 18 BUY_BOX: £15.25
+                ],
+                "avg90": [
+                    1500, 1400, -1, 5000,
+                    -1, -1, -1, -1, -1, -1,
+                    1475,
+                    4,
+                    -1, -1, -1, -1, -1, -1,
+                    1510,  # avg90 BUY_BOX: £15.10
+                ],
+            },
+            "monthlySold": 250,
+        }
+        product = KeepaProduct.model_validate(payload)
+        snap = product.market_snapshot()
+        assert snap["asin"] == "B0FULL"
+        assert snap["amazon_price"] == 14.99
+        assert snap["new_fba_price"] == 14.50
+        assert snap["buy_box_price"] == 15.25
+        assert snap["buy_box_avg90"] == 15.10
+        assert snap["fba_seller_count"] == 5
+        assert snap["sales_rank"] == 5234
+        assert snap["monthly_sales_estimate"] == 250
+
+    def test_market_snapshot_handles_missing_stats(self):
+        # For ASINs Keepa hasn't tracked yet, stats is missing.
+        # market_snapshot must return a dict with None values, not crash.
+        payload = {"asin": "B0BARE", "title": "Bare", "brand": "X"}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["asin"] == "B0BARE"
+        assert snap["amazon_price"] is None
+        assert snap["buy_box_price"] is None
+        assert snap["fba_seller_count"] is None
+        assert snap["monthly_sales_estimate"] is None
+
+    def test_market_snapshot_treats_minus_one_as_none(self):
+        # Keepa uses -1 to mean "no current value" in stats.current[].
+        # The snapshot must convert these to None rather than emitting
+        # negative-cent prices that downstream calculate would treat
+        # as a real (negative) market price.
+        payload = {
+            "asin": "B0NEG",
+            "stats": {"current": [-1] * 19},
+            "monthlySold": -1,
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        for k in (
+            "amazon_price", "new_fba_price", "buy_box_price",
+            "fba_seller_count", "sales_rank", "monthly_sales_estimate",
+        ):
+            assert snap[k] is None, f"{k} should be None for -1 sentinel"
+
+    def test_market_snapshot_handles_short_current_array(self):
+        # Keepa sometimes returns a stats.current shorter than the full
+        # 30-index range — older products or partial caches. Indexing
+        # past the end must fail soft with None.
+        payload = {
+            "asin": "B0SHORT",
+            "stats": {"current": [1500, 1400, -1, 5000]},  # only first 4
+            "monthlySold": 100,
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["amazon_price"] == 15.00
+        assert snap["sales_rank"] == 5000
+        # Indices 10, 11, 18 don't exist in this array.
+        assert snap["new_fba_price"] is None
+        assert snap["fba_seller_count"] is None
+        assert snap["buy_box_price"] is None
+        assert snap["monthly_sales_estimate"] == 100
+
 
 class TestKeepaSellerModel:
     def test_seller_with_asin_list(self):
@@ -620,6 +708,90 @@ class TestKeepaClientGetProduct:
         client.get_product("B0CACHE")
         client.get_product("B0CACHE")
         assert get_mock.call_count == 1
+
+    @patch("keepa_client.client.requests.get")
+    def test_get_product_requests_stats_90(self, get_mock, tmp_path: Path):
+        # Pinning `stats=90` is critical: keepa_enrich.market_snapshot
+        # reads stats.current[] / stats.avg90[]. Forgetting to request
+        # stats here would silently emit None-filled enrichment columns
+        # and break the calculate->decide chain.
+        get_mock.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "tokensConsumed": 6,
+                "products": [{"asin": "B0SAMPLE", "title": "T"}],
+            },
+        )
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        client.get_product("B0SAMPLE")
+        params = get_mock.call_args.kwargs["params"]
+        assert params.get("stats") == 90
+
+    @patch("keepa_client.client.requests.get")
+    def test_get_products_batch_requests_stats_90(
+        self, get_mock, tmp_path: Path
+    ):
+        # Same contract for the batch path.
+        get_mock.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "tokensConsumed": 12,
+                "products": [
+                    {"asin": "B0A", "title": "A"},
+                    {"asin": "B0B", "title": "B"},
+                ],
+            },
+        )
+        client = KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+        client.get_products(["B0A", "B0B"])
+        params = get_mock.call_args.kwargs["params"]
+        assert params.get("stats") == 90
+
+
+class TestEstimateScaling:
+    """Pin the per-ASIN + stats overhead in `_estimate_for`. Without
+    scaling, the token bucket silently over-issues under heavy batch
+    load and falls back to Keepa's HTTP 429 retries.
+    """
+
+    def _client(self, tmp_path: Path) -> KeepaClient:
+        return KeepaClient(api_key="fake", config=_config_for_test(tmp_path))
+
+    def test_seller_endpoint_unchanged(self, tmp_path: Path):
+        client = self._client(tmp_path)
+        assert client._estimate_for(
+            "/seller", {"seller": "A1", "storefront": 1}
+        ) == 50
+
+    def test_single_product_no_stats_legacy_estimate(self, tmp_path: Path):
+        # Pre-PR contract: 6 = 5 base + 1 product.
+        client = self._client(tmp_path)
+        est = client._estimate_for("/product", {"asin": "B0SOLO"})
+        assert est == 6
+
+    def test_single_product_with_stats_costs_one_more(self, tmp_path: Path):
+        client = self._client(tmp_path)
+        est = client._estimate_for(
+            "/product", {"asin": "B0SOLO", "stats": 90}
+        )
+        # 5 base + 1 product * (1 + 1 stats) = 7
+        assert est == 7
+
+    def test_batch_scales_per_asin(self, tmp_path: Path):
+        client = self._client(tmp_path)
+        # 100 ASINs comma-separated; 5 base + 100 * 2 = 205 (with stats).
+        asin_param = ",".join(f"B{i:04d}" for i in range(100))
+        est = client._estimate_for(
+            "/product", {"asin": asin_param, "stats": 90}
+        )
+        assert est == 5 + 100 * 2  # 205
+
+    def test_batch_without_stats_still_scales(self, tmp_path: Path):
+        client = self._client(tmp_path)
+        asin_param = ",".join(["B0A", "B0B", "B0C"])
+        est = client._estimate_for("/product", {"asin": asin_param})
+        # 5 base + 3 products * 1 (no stats) = 8.
+        assert est == 8
 
 
 # ---------------------------------------------------------------------------
