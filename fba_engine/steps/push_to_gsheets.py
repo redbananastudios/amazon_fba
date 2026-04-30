@@ -44,6 +44,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from fba_engine.steps._helpers import atomic_write
+
 # ────────────────────────────────────────────────────────────────────────
 # Constants — pinned to the legacy values for direct migration.
 # ────────────────────────────────────────────────────────────────────────
@@ -692,12 +694,10 @@ def push_to_gsheets(
         raise PushFailedError("All Google Drive / Sheets upload strategies failed.")
 
     # New upload succeeded. Now safe to clean up the previous sheet and
-    # persist the new id atomically.
+    # persist the new id atomically (shared helper from steps._helpers).
     _delete_previous_sheet(drive, previous_id)
     if id_file:
-        tmp = id_file.with_suffix(id_file.suffix + ".tmp")
-        tmp.write_text(new_id, encoding="utf-8")
-        tmp.replace(id_file)
+        atomic_write(id_file, lambda p: p.write_text(new_id, encoding="utf-8"))
     if success_msg:
         print(success_msg)
     print(f"Sheet ID: {new_id}")

@@ -40,6 +40,12 @@ import openpyxl.styles
 import openpyxl.utils
 import pandas as pd
 
+from fba_engine.steps._helpers import (
+    clamp,
+    coerce_str as _coerce_str,
+    parse_money,
+)
+
 # ────────────────────────────────────────────────────────────────────────
 # Constants — kept identical to the legacy JS so verdict counts match.
 # ────────────────────────────────────────────────────────────────────────
@@ -94,23 +100,22 @@ SHORTLIST_COLUMNS: list[tuple[str, int]] = [
 
 # ────────────────────────────────────────────────────────────────────────
 # Coercion helpers — pure, NaN-safe.
+#
+# `coerce_str`, `parse_money`, `clamp` are imported from `_helpers` at the
+# top of this file. `parse_money` and `clamp` are re-exported (i.e. visible
+# as `decision_engine.parse_money` etc.) because `test_decision_engine.py`
+# imports them by that name. The remaining helpers below are
+# decision-engine-specific and stay local.
 # ────────────────────────────────────────────────────────────────────────
-
-
-def _coerce_str(raw: object) -> str:
-    """Coerce a cell value to a clean string. None and pandas NaN -> ""."""
-    if raw is None:
-        return ""
-    if isinstance(raw, float) and math.isnan(raw):
-        return ""
-    return str(raw).strip()
 
 
 def _to_num(value: object) -> float:
     """JS-style Number() coercion. NaN/None/empty/garbage -> 0.
 
     Used for the score-ladder helpers where the JS code relies on
-    `Number(x) || fallback` to demote bad input to a sentinel.
+    `Number(x) || fallback` to demote bad input to a sentinel. Distinct
+    from `parse_money`: this DOES NOT strip GBP/symbols — callers feed
+    already-numeric values.
     """
     if value is None:
         return 0.0
@@ -123,25 +128,6 @@ def _to_num(value: object) -> float:
     if math.isnan(n):
         return 0.0
     return n
-
-
-def parse_money(value: object) -> float:
-    """Mirror the JS parseMoney: strip GBP and any non-[0-9.-] chars, parse, NaN->0.
-
-    Used for currency-like cells that may carry "GBP10.50", "£5", or even
-    "10.5" depending on the upstream phase.
-    """
-    if isinstance(value, float) and math.isnan(value):
-        return 0.0
-    s = str(value or "")
-    s = re.sub(r"GBP", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"[^0-9.\-]", "", s).strip()
-    if not s:
-        return 0.0
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
 
 
 def parse_pct(value: object) -> float:
@@ -185,10 +171,6 @@ def as_upper(value: object) -> str:
 def is_truthy_y(value: object) -> bool:
     """Y / YES / TRUE (case-insensitive) -> True."""
     return as_upper(value) in {"Y", "YES", "TRUE"}
-
-
-def clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
 
 
 # ────────────────────────────────────────────────────────────────────────

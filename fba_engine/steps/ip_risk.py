@@ -41,6 +41,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from fba_engine.steps._helpers import (
+    clamp,
+    coerce_str as _coerce_str,
+    parse_money as _coerce_num,
+)
+
 # ────────────────────────────────────────────────────────────────────────
 # Constants — kept identical to the legacy JS so band counts match.
 # ────────────────────────────────────────────────────────────────────────
@@ -169,33 +175,6 @@ def brand_type(raw_brand: object, review_count: float, rating: float) -> str:
     ):
         return "SYNTHETIC"
     return "GENERIC"
-
-
-def clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
-
-
-def _coerce_str(raw: object) -> str:
-    """Coerce a cell value to a clean string. Treats None and pandas NaN
-    (a truthy float, so `raw or ""` doesn't catch it) as empty."""
-    if raw is None:
-        return ""
-    if isinstance(raw, float) and math.isnan(raw):
-        return ""
-    return str(raw).strip()
-
-
-def _coerce_num(raw: object) -> float:
-    """Mirror the JS num() helper: strip GBP and non-numeric chars, parse float, NaN→0."""
-    if isinstance(raw, float) and math.isnan(raw):
-        return 0.0
-    s = str(raw or "")
-    s = re.sub(r"GBP", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"[^0-9.\-]", "", s).strip()
-    try:
-        return float(s) if s else 0.0
-    except ValueError:
-        return 0.0
 
 
 def _yes_token(raw: object) -> bool:
