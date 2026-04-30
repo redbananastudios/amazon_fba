@@ -1,31 +1,24 @@
 # Strategy: oa_csv
-# Online-arbitrage candidate-list pipeline. Reads a third-party OA
-# export (SellerAmp 2DSorter / Tactical Arbitrage / OAXray), filters
-# against the global exclusions list, writes a leads CSV.
+# Online-arbitrage full pipeline. Reads a third-party OA export
+# (SellerAmp 2DSorter / Tactical Arbitrage / OAXray), filters
+# exclusions, enriches each ASIN with Keepa market data, calculates
+# fees + profit, decides SHORTLIST/REVIEW/REJECT, writes the verdict
+# CSV.
 #
 # Run via:
+#   export KEEPA_API_KEY=...
 #   python -m fba_engine.strategies.runner \
 #       --strategy fba_engine/strategies/oa_csv.yaml \
 #       --context feed=selleramp \
 #                 csv_path=fba_engine/data/strategies/oa_csv/selleramp/2dsorter-export.csv \
 #                 run_dir=fba_engine/data/strategies/oa_csv/selleramp \
 #                 timestamp=20260430_120000
-#
-# Scope note: OA buyers go directly to the retail URL (already in the
-# discovery output as `retail_url`), so the supplier_leads step is
-# redundant here — the strategy is just discover → output.
-#
-# Full calculate→decide chaining requires a Keepa-by-ASIN enrichment
-# step (`keepa_enrich`) which fetches market_price / fees /
-# sales_estimate per ASIN. That step is future work — the existing
-# `resolve` step is EAN-keyed and assumes supplier-pricelist input,
-# which doesn't fit OA's pre-resolved ASINs.
 
 name: oa_csv
 description: >
-  Online-arbitrage leads — read a third-party OA candidate CSV,
-  filter exclusions, emit a leads CSV with ASIN + retail_cost_inc_vat
-  + retail_url.
+  Online-arbitrage decision pipeline — read a third-party OA candidate
+  CSV, filter exclusions, enrich with Keepa market data, decide
+  SHORTLIST/REVIEW/REJECT per ASIN.
 
 # `input.discover: true` — discovery step reads the OA CSV directly
 # from `csv_path` config; the runner passes an empty df_in.
@@ -34,6 +27,9 @@ input:
 
 steps:
   # Stage 01 — discover: parse the OA CSV via the named importer.
+  # Emits canonical schema: asin, source, feed, retail_url, buy_cost
+  # (renamed from importer-side `retail_cost_inc_vat` per PRD §6.4),
+  # retail_name.
   - name: discover
     module: fba_engine.steps.oa_csv
     config:
@@ -43,5 +39,22 @@ steps:
       # fba_engine/data/niches/exclusions.csv. Override for sandboxed
       # runs by passing `exclusions_path: "..."` in context.
 
+  # Stage 03 — keepa_enrich: fetch market_price / sales_rank / etc.
+  # per ASIN via the Keepa /product batch API. ASINs Keepa hasn't
+  # tracked get None-filled market columns; calculate REJECTs them
+  # downstream as "No valid market price".
+  - name: keepa_enrich
+    module: fba_engine.steps.keepa_enrich
+
+  # Stage 04 — calculate: fees + conservative price + profit + risk
+  # flags. Reads buy_cost (from discover) + market columns (from
+  # keepa_enrich). REJECTs rows with no usable market price.
+  - name: calculate
+    module: fba_engine.steps.calculate
+
+  # Stage 05 — decide: SHORTLIST / REVIEW / REJECT verdicts.
+  - name: decide
+    module: fba_engine.steps.decide
+
 output:
-  csv: "{run_dir}/oa_candidates_{feed}_{timestamp}.csv"
+  csv: "{run_dir}/oa_decisions_{feed}_{timestamp}.csv"

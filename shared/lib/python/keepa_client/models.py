@@ -77,10 +77,17 @@ class KeepaProduct(BaseModel):
         """Extract the canonical engine's market-data columns from `stats`.
 
         Returns a dict shaped to match `sourcing_engine.pipeline.match._build_match`
-        + the columns `calculate.calculate_economics` consumes. Values are
-        in pounds (cents/100), with -1 sentinels and missing-stats both
-        coerced to None so downstream code can rely on the
-        ``v is None or v <= 0`` pattern.
+        + the columns `calculate.calculate_economics` consumes directly.
+        Values are in pounds (cents/100), with -1 sentinels and
+        missing-stats both coerced to None so downstream code can rely
+        on the ``v is None or v <= 0`` pattern.
+
+        Naming aligns with what `calculate` reads, NOT the legacy
+        Keepa-CSV-export column names. The legacy `load_market_data`
+        path emits ``monthly_sales_estimate``; `_build_match` then
+        renames it to ``sales_estimate`` for `calculate`. Here we skip
+        the intermediate name and emit ``sales_estimate`` directly so
+        ``keepa_enrich → calculate`` chains without a rename hop.
 
         Returns market-data columns only — descriptive fields like title
         and brand belong to the discovery step (oa_csv, seller_storefront)
@@ -99,7 +106,7 @@ class KeepaProduct(BaseModel):
             # CSV-export schema (`load_market_data` → "New Offer Count: Current").
             "fba_seller_count": _stat_int(self.stats, _CSV_COUNT_NEW),
             "sales_rank": _stat_int(self.stats, _CSV_SALES_RANK),
-            "monthly_sales_estimate": _coerce_positive_int(self.monthly_sold),
+            "sales_estimate": _coerce_positive_int(self.monthly_sold),
         }
 
 

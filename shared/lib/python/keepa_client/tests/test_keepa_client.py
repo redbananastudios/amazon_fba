@@ -101,7 +101,7 @@ class TestKeepaProductModel:
         assert snap["buy_box_avg90"] == 15.10
         assert snap["fba_seller_count"] == 5
         assert snap["sales_rank"] == 5234
-        assert snap["monthly_sales_estimate"] == 250
+        assert snap["sales_estimate"] == 250
 
     def test_market_snapshot_handles_missing_stats(self):
         # For ASINs Keepa hasn't tracked yet, stats is missing.
@@ -112,7 +112,7 @@ class TestKeepaProductModel:
         assert snap["amazon_price"] is None
         assert snap["buy_box_price"] is None
         assert snap["fba_seller_count"] is None
-        assert snap["monthly_sales_estimate"] is None
+        assert snap["sales_estimate"] is None
 
     def test_market_snapshot_treats_minus_one_as_none(self):
         # Keepa uses -1 to mean "no current value" in stats.current[].
@@ -127,7 +127,7 @@ class TestKeepaProductModel:
         snap = KeepaProduct.model_validate(payload).market_snapshot()
         for k in (
             "amazon_price", "new_fba_price", "buy_box_price",
-            "fba_seller_count", "sales_rank", "monthly_sales_estimate",
+            "fba_seller_count", "sales_rank", "sales_estimate",
         ):
             assert snap[k] is None, f"{k} should be None for -1 sentinel"
 
@@ -147,7 +147,7 @@ class TestKeepaProductModel:
         assert snap["new_fba_price"] is None
         assert snap["fba_seller_count"] is None
         assert snap["buy_box_price"] is None
-        assert snap["monthly_sales_estimate"] == 100
+        assert snap["sales_estimate"] == 100
 
 
 class TestKeepaSellerModel:
