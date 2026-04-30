@@ -685,3 +685,66 @@ class TestEdgeCases:
         final_df, _, _ = compute_phase5(df)
         # Unknown verdict gets sentinel rank (99); YES (rank 1) comes first.
         assert list(final_df["ASIN"])[0] == "B0KNOWN"
+
+
+class TestBoughtFiniteness:
+    """Regression: bought_int must not crash on NaN/inf."""
+
+    def test_inf_bought_per_month_does_not_crash(self):
+        # Upstream arithmetic could in principle propagate inf into the
+        # numeric column. Even when input is a string, _parse_money
+        # handles it; the explicit guard matters when bought is a real
+        # float that happens to be infinite.
+        df = pd.DataFrame([_make_phase4_row(**{"Bought per Month": "inf"})])
+        final_df, _, _ = compute_phase5(df)
+        # Should not raise; result is some non-crashing value.
+        assert len(final_df) == 1
+
+    def test_nan_bought_per_month_does_not_crash(self):
+        df = pd.DataFrame([_make_phase4_row(**{"Bought per Month": "nan"})])
+        final_df, _, _ = compute_phase5(df)
+        assert len(final_df) == 1
+
+
+class TestRunCli:
+    """Regression: end-to-end run() writes outputs atomically with utf-8-sig
+    encoding so non-ASCII brands round-trip cleanly back through pd.read_csv."""
+
+    def _setup_input(self, base: Path, niche_snake: str) -> Path:
+        working = base / "working"
+        working.mkdir(parents=True, exist_ok=True)
+        input_path = working / f"{niche_snake}_phase4_ip_risk.csv"
+        df = pd.DataFrame([_make_phase4_row(Brand="Café Ø")])
+        df.to_csv(input_path, index=False, encoding="utf-8-sig")
+        return input_path
+
+    def test_run_writes_utf8_sig_round_trip(self, tmp_path: Path):
+        from fba_engine.steps.build_output import run as run_cli
+        self._setup_input(tmp_path, "kids_toys")
+        run_cli("kids-toys", tmp_path)
+        out_path = tmp_path / "kids_toys_final_results.csv"
+        assert out_path.exists()
+        # Read back with utf-8-sig — BOM stripped — Brand column
+        # preserves non-ASCII characters cleanly.
+        round_trip = pd.read_csv(out_path, dtype=str, encoding="utf-8-sig")
+        assert "Café Ø" in round_trip["Brand"].iloc[0]
+        # Verify BOM was actually written (atomic write didn't drop it).
+        with open(out_path, "rb") as fh:
+            head = fh.read(3)
+        assert head == b"\xef\xbb\xbf"
+
+    def test_run_does_not_create_working_when_input_missing(self, tmp_path: Path):
+        from fba_engine.steps.build_output import run as run_cli
+        # No setup — input does not exist.
+        with pytest.raises(SystemExit):
+            run_cli("kids-toys", tmp_path)
+        # working/ should NOT have been created on the missing-input path.
+        assert not (tmp_path / "working").exists()
+
+    def test_run_atomic_write_does_not_leave_tmp_files(self, tmp_path: Path):
+        from fba_engine.steps.build_output import run as run_cli
+        self._setup_input(tmp_path, "kids_toys")
+        run_cli("kids-toys", tmp_path)
+        # No leftover .tmp siblings.
+        leftovers = list(tmp_path.rglob("*.tmp"))
+        assert leftovers == []

@@ -137,16 +137,21 @@ COL_WIDTHS: dict[int, int] = {
     67: 16,  # GTIN
 }
 
-# Numeric columns (1-based) — formatted as numbers. Note: col 61 (Trade Price)
-# was missing from the legacy JS NUMERIC_COLS even though it's in GBP_COLS,
-# meaning Trade Price would never get GBP-formatted. The Python port adds
-# 61 to NUMERIC_COLS so the GBP format actually applies once Skill 99
-# populates Trade Price values.
+# Numeric columns (1-based) — formatted as numbers. Three deliberate fixes
+# vs the legacy JS, all of the same class (numeric col missing from
+# NUMERIC_COLS so its number_format never applies):
+#   - col 61 (Trade Price): legacy was in GBP_COLS only, so the GBP format
+#     never fired. Added to NUMERIC_COLS.
+#   - col 40 (FBA Seller Count): pure integer count — was rendered as a
+#     left-aligned string. Added.
+#   - col 42 (Buy Box Amazon %): a percentage value — was missing from
+#     both NUMERIC_COLS and PCT_COLS, so '"10%"'-style strings never got
+#     numeric coercion or % formatting. Added to both.
 NUMERIC_COLS: frozenset[int] = frozenset(
     {10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 23, 24, 26, 27, 28, 29, 30, 31,
-     32, 33, 34, 35, 36, 37, 38, 50, 61, 62}
+     32, 33, 34, 35, 36, 37, 38, 40, 42, 50, 61, 62}
 )
-PCT_COLS: frozenset[int] = frozenset({31, 62})
+PCT_COLS: frozenset[int] = frozenset({31, 42, 62})
 GBP_COLS: frozenset[int] = frozenset({20, 23, 24, 26, 27, 28, 29, 30, 32, 33, 61})
 
 # Excel number formats.
@@ -425,6 +430,9 @@ def _write_title_row(ws, niche: str, product_count: int, last_col: int) -> None:
 
 
 def _write_group_headers(ws) -> None:
+    # White thin sides give visual separation between groups (matches JS).
+    white_side = openpyxl.styles.Side(style="thin", color="FFFFFFFF")
+    group_border = openpyxl.styles.Border(left=white_side, right=white_side)
     for g in GROUPS:
         ws.merge_cells(
             start_row=2, start_column=g["start"],
@@ -439,10 +447,17 @@ def _write_group_headers(ws) -> None:
         cell.alignment = openpyxl.styles.Alignment(
             horizontal="center", vertical="center"
         )
+        cell.border = group_border
     ws.row_dimensions[2].height = 22
 
 
 def _write_column_headers(ws, headers: list[str]) -> None:
+    # Medium grey bottom + thin navy sides — matches the legacy JS row-3 style.
+    bottom_side = openpyxl.styles.Side(style="medium", color="FF7F8C8D")
+    side_side = openpyxl.styles.Side(style="thin", color="FF34495E")
+    header_border = openpyxl.styles.Border(
+        bottom=bottom_side, left=side_side, right=side_side
+    )
     for i, h in enumerate(headers, start=1):
         cell = ws.cell(3, i)
         cell.value = h
@@ -453,6 +468,7 @@ def _write_column_headers(ws, headers: list[str]) -> None:
         cell.alignment = openpyxl.styles.Alignment(
             horizontal="center", vertical="center", wrap_text=True
         )
+        cell.border = header_border
     ws.row_dimensions[3].height = 36
 
 
@@ -552,12 +568,39 @@ def compute_workbook(df: pd.DataFrame, niche: str) -> openpyxl.Workbook:
 
     Pure: does not mutate the input. Caller is responsible for `wb.save(path)`
     or `build_xlsx(...)` for the file-write contract.
+
+    Validates the input frame's schema — the conditional-fill logic
+    addresses cells by hard-coded column index (col 7 = Verdict, col 12 =
+    Composite Score, etc.), so a reordered frame would silently paint
+    fills on the wrong cells.
     """
+    # Late import to avoid a circular dep — both modules are sibling steps
+    # at the same package level.
+    from fba_engine.steps.build_output import FINAL_HEADERS
+
+    headers = list(df.columns)
+    if headers != FINAL_HEADERS:
+        # Identify the first divergence to make the error actionable.
+        diffs = []
+        for i, (got, want) in enumerate(zip(headers, FINAL_HEADERS), start=1):
+            if got != want:
+                diffs.append(f"col {i}: got {got!r}, expected {want!r}")
+                if len(diffs) >= 3:
+                    break
+        if len(headers) != len(FINAL_HEADERS):
+            diffs.append(
+                f"length mismatch: got {len(headers)}, expected "
+                f"{len(FINAL_HEADERS)}"
+            )
+        raise ValueError(
+            "compute_workbook: input frame schema does not match "
+            "FINAL_HEADERS. " + "; ".join(diffs or ["unknown divergence"])
+        )
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Results"
 
-    headers = list(df.columns)
     last_col = len(headers)
 
     _write_title_row(ws, niche, len(df), last_col)

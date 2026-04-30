@@ -293,9 +293,19 @@ class TestCalcTargetBuyPrice:
         # max=10, PROFIT: discount=9, buffer=10-2.5=7.5 -> min=7.5.
         assert calc_target_buy_price(10, "PROFIT") == 7.5
 
-    def test_clamped_at_zero(self):
-        # max=1, BALANCED: discount=0.9, buffer=1-2=-1 -> max(0, min(0.9,-1))=0.
-        assert calc_target_buy_price(1, "BALANCED") == 0
+    def test_returns_empty_when_buffer_consumes_full_max(self):
+        # max=1, BALANCED: discount=0.9, buffer=1-2=-1 -> min=-1 <= 0
+        # -> "" (deliberate fix: legacy leaked "GBP0.00" here).
+        assert calc_target_buy_price(1, "BALANCED") == ""
+
+    def test_returns_empty_when_buffer_exactly_consumes_max(self):
+        # max=2, BALANCED (buffer=2): buffered=0, discount=1.8 -> min=0
+        # -> "" (no useful Target Buy Price).
+        assert calc_target_buy_price(2, "BALANCED") == ""
+
+    def test_profit_lane_returns_empty_for_small_max(self):
+        # max=2, PROFIT (buffer=2.5): buffered=-0.5 -> "".
+        assert calc_target_buy_price(2, "PROFIT") == ""
 
 
 class TestClamp:

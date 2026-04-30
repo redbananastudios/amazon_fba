@@ -641,3 +641,75 @@ class TestEdgeCases:
         # "afro-hair" → "Afro Hair" in title.
         title = ws.cell(1, 1).value
         assert "Afro Hair" in title
+
+
+class TestSchemaValidation:
+    """Regression: hard-coded conditional-fill column indices mean a
+    reordered frame would silently paint fills on the wrong cells."""
+
+    def test_reordered_frame_raises(self):
+        # Swap two adjacent columns — same length, same columns, wrong order.
+        bad_headers = list(FINAL_HEADERS)
+        bad_headers[6], bad_headers[7] = bad_headers[7], bad_headers[6]
+        rows = [{h: "" for h in bad_headers}]
+        df = pd.DataFrame(rows, columns=bad_headers)
+        with pytest.raises(ValueError, match="schema does not match"):
+            compute_workbook(df, niche="kids-toys")
+
+    def test_short_frame_raises(self):
+        bad_headers = FINAL_HEADERS[:50]
+        rows = [{h: "" for h in bad_headers}]
+        df = pd.DataFrame(rows, columns=bad_headers)
+        with pytest.raises(ValueError, match="schema does not match"):
+            compute_workbook(df, niche="kids-toys")
+
+
+class TestHeaderBorders:
+    """Regression: row-2 group headers and row-3 column headers must have
+    visible borders matching the legacy JS styling."""
+
+    def test_group_header_has_white_side_borders(self):
+        df = _make_final_df()
+        wb = compute_workbook(df, niche="kids-toys")
+        ws = wb["Results"]
+        cell = ws.cell(2, 1)  # First group's start cell.
+        assert cell.border.left.style == "thin"
+        assert cell.border.right.style == "thin"
+        # Colour normalisation across openpyxl versions: accept "FFFFFFFF"
+        # or "00FFFFFF" (RGB / ARGB pair) — the visual is the same.
+        assert (cell.border.left.color.value or "").upper().endswith("FFFFFF")
+
+    def test_column_header_has_bottom_border(self):
+        df = _make_final_df()
+        wb = compute_workbook(df, niche="kids-toys")
+        ws = wb["Results"]
+        cell = ws.cell(3, 1)
+        assert cell.border.bottom.style == "medium"
+        assert cell.border.left.style == "thin"
+
+
+class TestNumericColsExtended:
+    """Regression: cols 40 (FBA Seller Count) and 42 (BB Amazon %) must
+    apply numeric formatting — the legacy JS missed these."""
+
+    def test_fba_seller_count_col_40_formatted_as_number(self):
+        rows = [{h: "" for h in FINAL_HEADERS}]
+        rows[0][FINAL_HEADERS[39]] = "5"  # col 40, 1-based
+        df = pd.DataFrame(rows, columns=FINAL_HEADERS)
+        wb = compute_workbook(df, niche="kids-toys")
+        ws = wb["Results"]
+        cell = ws.cell(4, 40)
+        # Should be coerced to a number, not left as a string.
+        assert cell.value == 5
+        assert cell.number_format == "#,##0"
+
+    def test_bb_amazon_pct_col_42_formatted_as_percent(self):
+        rows = [{h: "" for h in FINAL_HEADERS}]
+        rows[0][FINAL_HEADERS[41]] = "10%"  # col 42, 1-based
+        df = pd.DataFrame(rows, columns=FINAL_HEADERS)
+        wb = compute_workbook(df, niche="kids-toys")
+        ws = wb["Results"]
+        cell = ws.cell(4, 42)
+        # _parse_numeric strips '%' and gives 10.0; PCT format applies.
+        assert cell.value == 10
+        assert cell.number_format == '0.0"%"'

@@ -91,32 +91,148 @@ class TestCsvRowsForUpload:
 
 
 class TestIsQuotaError:
-    def test_403_status_treated_as_quota(self):
-        # SimpleNamespace mimics httplib2.Response shape more faithfully than
-        # MagicMock — googleapiclient.errors.HttpError surfaces resp.status
-        # via that attribute (sometimes int, sometimes string).
-        err = Exception("forbidden")
+    """The matcher is intentionally tight: `_is_quota_error` must match
+    only canonical Google quota phrases (storageQuotaExceeded, quotaExceeded)
+    OR HTTP 403 with a 'storage' hint. Bare 'quota' substrings, rate-limit
+    errors, and 403-without-storage are NOT storage-quota — they should
+    fall through to other handlers (retry / re-raise)."""
+
+    def test_storage_quota_phrase_matches(self):
+        err = Exception("storageQuotaExceeded for service account")
+        assert _is_quota_error(err) is True
+
+    def test_quota_exceeded_phrase_matches(self):
+        err = Exception("quotaExceeded: limit reached")
+        assert _is_quota_error(err) is True
+
+    def test_403_with_storage_hint_matches(self):
+        err = Exception("403 Forbidden — storage limit reached")
         err.resp = SimpleNamespace(status=403)
         assert _is_quota_error(err) is True
 
-    def test_403_status_as_string_treated_as_quota(self):
-        # httplib2 has historically surfaced status as a string. Reviewer
-        # HIGH-1: int-coerce so we don't silently miss this in production.
-        err = Exception("forbidden")
+    def test_403_status_as_string_with_storage_hint_matches(self):
+        # httplib2 sometimes surfaces status as string — int-coerce.
+        err = Exception("storage limit")
         err.resp = SimpleNamespace(status="403")
         assert _is_quota_error(err) is True
 
-    def test_message_with_storage_quota(self):
-        err = Exception("storageQuota exceeded for service account")
-        assert _is_quota_error(err) is True
+    def test_bare_403_without_storage_hint_does_not_match(self):
+        # Permission denied is 403 but is NOT storage-quota; should
+        # propagate, not fall through silently.
+        err = Exception("Forbidden: caller lacks permission")
+        err.resp = SimpleNamespace(status=403)
+        assert _is_quota_error(err) is False
 
-    def test_message_with_quota(self):
-        err = Exception("Daily quota reached")
-        assert _is_quota_error(err) is True
+    def test_rate_limit_phrase_does_not_match(self):
+        # Rate limits are transient — handled by retry, NOT by strategy
+        # fallthrough.
+        err = Exception("userRateLimitExceeded")
+        assert _is_quota_error(err) is False
+
+    def test_unrelated_substring_quota_does_not_match(self):
+        # "API quota check timed out" used to false-positive on the bare
+        # 'quota' substring matcher.
+        err = Exception("API quota check timed out")
+        assert _is_quota_error(err) is False
 
     def test_unrelated_error_returns_false(self):
         err = Exception("network timeout")
         assert _is_quota_error(err) is False
+
+
+class TestIsTransient:
+    """Regression: transient errors must trigger the retry helper."""
+
+    def test_429_is_transient(self):
+        from fba_engine.steps.push_to_gsheets import _is_transient
+        err = Exception("Too Many Requests")
+        err.resp = SimpleNamespace(status=429)
+        assert _is_transient(err) is True
+
+    def test_503_is_transient(self):
+        from fba_engine.steps.push_to_gsheets import _is_transient
+        err = Exception("Service Unavailable")
+        err.resp = SimpleNamespace(status=503)
+        assert _is_transient(err) is True
+
+    def test_rate_limit_phrase_is_transient(self):
+        from fba_engine.steps.push_to_gsheets import _is_transient
+        err = Exception("userRateLimitExceeded")
+        assert _is_transient(err) is True
+
+    def test_404_is_not_transient(self):
+        from fba_engine.steps.push_to_gsheets import _is_transient
+        err = Exception("not found")
+        err.resp = SimpleNamespace(status=404)
+        assert _is_transient(err) is False
+
+    def test_storage_quota_is_not_transient(self):
+        from fba_engine.steps.push_to_gsheets import _is_transient
+        err = Exception("storageQuotaExceeded")
+        assert _is_transient(err) is False
+
+
+class TestRetryWithBackoff:
+    """Regression: transient errors should be retried with exponential
+    backoff before giving up; non-transient errors must not be retried."""
+
+    def test_succeeds_first_try(self):
+        from fba_engine.steps.push_to_gsheets import _retry_with_backoff
+        calls = {"n": 0}
+        def fn():
+            calls["n"] += 1
+            return "ok"
+        sleeps = []
+        assert _retry_with_backoff(fn, sleep=sleeps.append) == "ok"
+        assert calls["n"] == 1
+        assert sleeps == []
+
+    def test_retries_on_transient_then_succeeds(self):
+        from fba_engine.steps.push_to_gsheets import _retry_with_backoff
+        err = Exception("Service Unavailable")
+        err.resp = SimpleNamespace(status=503)
+        calls = {"n": 0}
+        def fn():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise err
+            return "ok"
+        sleeps = []
+        assert _retry_with_backoff(
+            fn, base_delay=1.0, sleep=sleeps.append
+        ) == "ok"
+        assert calls["n"] == 3
+        assert sleeps == [1.0, 2.0]  # backoff 2^0, 2^1
+
+    def test_does_not_retry_non_transient(self):
+        from fba_engine.steps.push_to_gsheets import _retry_with_backoff
+        err = Exception("Forbidden")
+        err.resp = SimpleNamespace(status=403)
+        calls = {"n": 0}
+        def fn():
+            calls["n"] += 1
+            raise err
+        sleeps = []
+        with pytest.raises(Exception, match="Forbidden"):
+            _retry_with_backoff(fn, sleep=sleeps.append)
+        assert calls["n"] == 1
+        assert sleeps == []
+
+    def test_gives_up_after_max_attempts(self):
+        from fba_engine.steps.push_to_gsheets import _retry_with_backoff
+        err = Exception("Service Unavailable")
+        err.resp = SimpleNamespace(status=503)
+        calls = {"n": 0}
+        def fn():
+            calls["n"] += 1
+            raise err
+        sleeps = []
+        with pytest.raises(Exception, match="Service Unavailable"):
+            _retry_with_backoff(
+                fn, max_attempts=3, base_delay=1.0, sleep=sleeps.append
+            )
+        assert calls["n"] == 3
+        assert sleeps == [1.0, 2.0]  # final attempt raises, no sleep after
 
 
 # ---------------------------------------------------------------------------
@@ -159,11 +275,15 @@ class TestDeletePreviousSheet:
 class TestUploadWithConversion:
     def test_returns_sheet_id_on_success(self, tmp_path: Path):
         drive = MagicMock()
-        # Simulate a happy-path response.
-        drive.files.return_value.create.return_value.execute.return_value = {
-            "id": "SHEET123",
-            "webViewLink": "https://docs.google.com/spreadsheets/d/SHEET123/edit",
-        }
+        # Resumable uploads pump via next_chunk() -> (status, response).
+        # response is None for in-progress chunks, dict on completion.
+        drive.files.return_value.create.return_value.next_chunk.return_value = (
+            None,
+            {
+                "id": "SHEET123",
+                "webViewLink": "https://docs.google.com/spreadsheets/d/SHEET123/edit",
+            },
+        )
         xlsx = tmp_path / "test.xlsx"
         xlsx.write_bytes(b"PKfake-xlsx")  # minimal placeholder
         sheet_id = _upload_with_conversion(
@@ -173,9 +293,9 @@ class TestUploadWithConversion:
 
     def test_uses_sheets_mimetype_for_file_metadata(self, tmp_path: Path):
         drive = MagicMock()
-        drive.files.return_value.create.return_value.execute.return_value = {
-            "id": "S1", "webViewLink": "url"
-        }
+        drive.files.return_value.create.return_value.next_chunk.return_value = (
+            None, {"id": "S1", "webViewLink": "url"}
+        )
         xlsx = tmp_path / "x.xlsx"
         xlsx.write_bytes(b"x")
         _upload_with_conversion(drive, xlsx, name="N", folder_id="F")
@@ -192,9 +312,9 @@ class TestUploadWithConversion:
 class TestUploadRawXlsx:
     def test_returns_file_id_on_success(self, tmp_path: Path):
         drive = MagicMock()
-        drive.files.return_value.create.return_value.execute.return_value = {
-            "id": "FILE_ABC", "webViewLink": "url"
-        }
+        drive.files.return_value.create.return_value.next_chunk.return_value = (
+            None, {"id": "FILE_ABC", "webViewLink": "url"}
+        )
         xlsx = tmp_path / "x.xlsx"
         xlsx.write_bytes(b"x")
         file_id = _upload_raw_xlsx(drive, xlsx, name="N", folder_id="F")
@@ -202,9 +322,9 @@ class TestUploadRawXlsx:
 
     def test_uses_xlsx_mimetype_no_conversion(self, tmp_path: Path):
         drive = MagicMock()
-        drive.files.return_value.create.return_value.execute.return_value = {
-            "id": "F1", "webViewLink": "url"
-        }
+        drive.files.return_value.create.return_value.next_chunk.return_value = (
+            None, {"id": "F1", "webViewLink": "url"}
+        )
         xlsx = tmp_path / "x.xlsx"
         xlsx.write_bytes(b"x")
         _upload_raw_xlsx(drive, xlsx, name="N", folder_id="F")
@@ -300,26 +420,39 @@ def _build_drive_clients_mock(
     `strategy_1` controls how Strategy 1 (xlsx-conversion) responds:
       - "ok"     -> returns CONVERTED_SHEET (Strategy 1 wins; 2 + 3 not called).
       - "quota"  -> Strategy 1 raises a storage-quota error, Strategy 2 succeeds.
-      - "fatal"  -> Strategy 1 raises a non-quota error (used to verify the
-                    chain re-raises without falling through). Use a message
-                    that does NOT contain the substring 'quota' to avoid the
-                    legacy substring matcher misclassifying it.
+      - "fatal"  -> Strategy 1 raises a non-quota, non-transient error (used
+                    to verify the chain re-raises without falling through).
+
+    Uploads now use resumable chunked uploads, so the create chain is
+    pumped via `next_chunk()` returning `(status, response)` tuples.
     """
     drive = MagicMock()
     sheets = MagicMock()
 
     create_chain = drive.files.return_value.create.return_value
     if strategy_1 == "ok":
-        create_chain.execute.return_value = {
-            "id": "CONVERTED_SHEET", "webViewLink": "url"
-        }
+        create_chain.next_chunk.return_value = (
+            None, {"id": "CONVERTED_SHEET", "webViewLink": "url"}
+        )
     elif strategy_1 == "quota":
-        err = Exception("storageQuota exceeded")
-        create_chain.execute.side_effect = [
-            err, {"id": "RAW_FILE", "webViewLink": "url"},
-        ]
+        # Strategy 1 chunk loop raises quota; Strategy 2 chunk loop succeeds.
+        # Each new request creates a fresh `.create.return_value` mock instance
+        # — but MagicMock's attribute caching means we need a side_effect that
+        # tracks call count.
+        err = Exception("storageQuotaExceeded")
+        call_count = {"n": 0}
+
+        def chunk_side_effect(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise err
+            return (None, {"id": "RAW_FILE", "webViewLink": "url"})
+
+        create_chain.next_chunk.side_effect = chunk_side_effect
     elif strategy_1 == "fatal":
-        create_chain.execute.side_effect = Exception("auth failure")
+        # Non-transient AuthError-style failure — must not be retried, must
+        # not fall through to Strategy 2.
+        create_chain.next_chunk.side_effect = Exception("auth failure")
     else:
         raise ValueError(f"unknown strategy_1 mode: {strategy_1!r}")
 
@@ -437,14 +570,17 @@ class TestPushToGsheets:
     def test_full_chain_quota_then_raw_fail_then_sheets_api_succeeds(
         self, build_clients_mock, tmp_path: Path
     ):
-        # Reviewer M4: end-to-end test of the full 3-strategy chain.
-        # Strategy 1 raises quota → Strategy 2 fails → Strategy 3 succeeds.
+        # End-to-end: Strategy 1 raises quota → Strategy 2 fails → Strategy 3
+        # succeeds. After the fix, csv_rows can be omitted — the orchestrator
+        # reads them from the xlsx itself so Strategy 3 always has data.
         drive = MagicMock()
         sheets = MagicMock()
-        # Strategy 1 quota error, Strategy 2 also fails (e.g. raw upload disabled).
-        drive.files.return_value.create.return_value.execute.side_effect = [
-            Exception("storageQuota exceeded"),  # strategy 1
-            Exception("raw upload failed"),       # strategy 2
+        # Resumable upload chunks: first call raises storageQuotaExceeded,
+        # second call (Strategy 2 raw) raises a non-quota, non-transient error.
+        next_chunk = drive.files.return_value.create.return_value.next_chunk
+        next_chunk.side_effect = [
+            Exception("storageQuotaExceeded"),  # Strategy 1
+            Exception("raw upload failed"),     # Strategy 2 (non-transient)
         ]
         # Strategy 3 (Sheets API) succeeds.
         sheets.spreadsheets.return_value.create.return_value.execute.return_value = {
@@ -465,12 +601,12 @@ class TestPushToGsheets:
     def test_all_strategies_fail_raises_push_failed_error(
         self, build_clients_mock, tmp_path: Path
     ):
-        # Reviewer M5: full failure path raises PushFailedError, not silently
-        # exits. Strategy 1 quota, 2 fails, 3 fails.
+        # Strategy 1 quota → 2 fails → 3 fails → PushFailedError.
         drive = MagicMock()
         sheets = MagicMock()
-        drive.files.return_value.create.return_value.execute.side_effect = [
-            Exception("storageQuota exceeded"),
+        next_chunk = drive.files.return_value.create.return_value.next_chunk
+        next_chunk.side_effect = [
+            Exception("storageQuotaExceeded"),
             Exception("raw upload failed"),
         ]
         sheets.spreadsheets.return_value.create.return_value.execute.side_effect = (
@@ -487,11 +623,12 @@ class TestPushToGsheets:
             )
 
     @patch("fba_engine.steps.push_to_gsheets._build_clients")
-    def test_delete_previous_runs_before_upload(
+    def test_delete_previous_runs_after_successful_upload(
         self, build_clients_mock, tmp_path: Path
     ):
-        # Reviewer M6: sequencing — previous-sheet delete must precede upload,
-        # so a stale id-file doesn't survive a successful new upload.
+        # Behaviour change vs legacy: previous-sheet delete is deferred until
+        # AFTER the new upload succeeds. This prevents the half-deleted state
+        # where prev is gone but new upload also failed.
         drive, sheets = _build_drive_clients_mock(strategy_1="ok")
         build_clients_mock.return_value = (drive, sheets)
         xlsx = tmp_path / "x.xlsx"
@@ -499,7 +636,6 @@ class TestPushToGsheets:
         id_file = tmp_path / "prev.txt"
         id_file.write_text("PREV_ID")
 
-        # Track the order of drive.files() child-method calls.
         manager = MagicMock()
         manager.attach_mock(drive.files.return_value.delete, "delete")
         manager.attach_mock(drive.files.return_value.create, "create")
@@ -510,16 +646,17 @@ class TestPushToGsheets:
             id_file_path=id_file,
         )
 
-        # delete must appear before create in mock_calls order.
+        # create must appear before delete in mock_calls order.
         names = [c[0] for c in manager.mock_calls if c[0] in {"delete", "create"}]
-        assert names.index("delete") < names.index("create")
+        assert names.index("create") < names.index("delete")
 
     @patch("fba_engine.steps.push_to_gsheets._build_clients")
-    def test_id_file_only_written_after_successful_upload(
+    def test_previous_id_preserved_when_upload_fails(
         self, build_clients_mock, tmp_path: Path
     ):
-        # Reviewer M6: id-file write must happen AFTER upload returns. If
-        # the upload raises, the id-file should NOT contain a stale or new id.
+        # If the upload chain fails entirely, the previous sheet must NOT
+        # be deleted — better to keep the stale sheet visible than orphan
+        # everything.
         drive, sheets = _build_drive_clients_mock(strategy_1="fatal")
         build_clients_mock.return_value = (drive, sheets)
         xlsx = tmp_path / "x.xlsx"
@@ -532,12 +669,120 @@ class TestPushToGsheets:
                 key_path=_make_dummy_key(tmp_path),
                 id_file_path=id_file,
             )
-        # The previous delete attempt removes OLD_ID from Drive but the file
-        # contents are not changed by push_to_gsheets when upload fails.
-        # Either OLD_ID still present OR file was untouched — but it was NOT
-        # overwritten with a new id.
-        contents = id_file.read_text(encoding="utf-8").strip()
-        assert contents == "OLD_ID"
+        # id-file unchanged.
+        assert id_file.read_text(encoding="utf-8").strip() == "OLD_ID"
+        # delete must not have been called (no prev-sheet teardown on failure).
+        drive.files.return_value.delete.assert_not_called()
+
+    @patch("fba_engine.steps.push_to_gsheets._build_clients")
+    def test_strategy_3_runs_without_csv_rows_supplied(
+        self, build_clients_mock, tmp_path: Path
+    ):
+        # Regression for HIGH-9: caller does NOT supply csv_rows. The
+        # orchestrator must read them from the xlsx itself so Strategy 3
+        # can run — the legacy default silently skipped Strategy 3 here.
+        import openpyxl
+        drive = MagicMock()
+        sheets = MagicMock()
+        next_chunk = drive.files.return_value.create.return_value.next_chunk
+        next_chunk.side_effect = [
+            Exception("storageQuotaExceeded"),  # Strategy 1
+            Exception("raw upload failed"),     # Strategy 2
+        ]
+        sheets.spreadsheets.return_value.create.return_value.execute.return_value = {
+            "spreadsheetId": "FB_ID",
+            "sheets": [{"properties": {"sheetId": 1, "title": "Results"}}],
+        }
+        build_clients_mock.return_value = (drive, sheets)
+
+        # Real openpyxl xlsx with a Results sheet.
+        xlsx = tmp_path / "x.xlsx"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Results"
+        ws.append(["ASIN", "Brand"])
+        ws.append(["B001", "Acme"])
+        wb.save(xlsx)
+
+        result = push_to_gsheets(
+            xlsx_path=xlsx, niche="kids-toys",
+            key_path=_make_dummy_key(tmp_path),
+            csv_rows=None,  # explicit — must NOT skip Strategy 3
+        )
+        assert result == "FB_ID"
+
+    @patch("fba_engine.steps.push_to_gsheets._build_clients")
+    def test_strategy_3_orphan_sheet_cleanup_on_population_failure(
+        self, build_clients_mock, tmp_path: Path
+    ):
+        # Regression for HIGH-13: if Strategy 3's create succeeds but a
+        # subsequent populate fails, the half-empty sheet must be deleted
+        # so it doesn't leak in Drive.
+        drive = MagicMock()
+        sheets = MagicMock()
+        next_chunk = drive.files.return_value.create.return_value.next_chunk
+        next_chunk.side_effect = [
+            Exception("storageQuotaExceeded"),
+            Exception("raw upload failed"),
+        ]
+        sheets.spreadsheets.return_value.create.return_value.execute.return_value = {
+            "spreadsheetId": "ORPHAN_ID",
+            "sheets": [{"properties": {"sheetId": 1, "title": "Results"}}],
+        }
+        # values.update fails after spreadsheet was created.
+        sheets.spreadsheets.return_value.values.return_value.update.return_value.execute.side_effect = (
+            Exception("populate failed")
+        )
+        build_clients_mock.return_value = (drive, sheets)
+        xlsx = tmp_path / "x.xlsx"
+        xlsx.write_bytes(b"x")
+        with pytest.raises(PushFailedError):
+            push_to_gsheets(
+                xlsx_path=xlsx, niche="kids-toys",
+                key_path=_make_dummy_key(tmp_path),
+                csv_rows=[["ASIN"], ["B001"]],
+            )
+        # Orphan delete attempted on the half-created sheet.
+        delete_op = drive.files.return_value.delete
+        delete_op.assert_called_once()
+        assert delete_op.call_args.kwargs["fileId"] == "ORPHAN_ID"
+
+    @patch("fba_engine.steps.push_to_gsheets._build_clients")
+    def test_strategy_3_clamps_freeze_for_narrow_frames(
+        self, build_clients_mock, tmp_path: Path
+    ):
+        # Regression for HIGH-9 / MEDIUM-9: if csv_rows has fewer than 3
+        # columns, frozenColumnCount must clamp — Sheets API rejects a
+        # frozen count larger than the grid width.
+        drive = MagicMock()
+        sheets = MagicMock()
+        next_chunk = drive.files.return_value.create.return_value.next_chunk
+        next_chunk.side_effect = [
+            Exception("storageQuotaExceeded"),
+            Exception("raw upload failed"),
+        ]
+        sheets.spreadsheets.return_value.create.return_value.execute.return_value = {
+            "spreadsheetId": "OK_ID",
+            "sheets": [{"properties": {"sheetId": 1, "title": "Results"}}],
+        }
+        build_clients_mock.return_value = (drive, sheets)
+        xlsx = tmp_path / "x.xlsx"
+        xlsx.write_bytes(b"x")
+        push_to_gsheets(
+            xlsx_path=xlsx, niche="kids-toys",
+            key_path=_make_dummy_key(tmp_path),
+            csv_rows=[["only_one"]],  # 1 column, narrower than frozen=3
+        )
+        # Inspect the batchUpdate request for clamped frozenColumnCount.
+        batch_kwargs = (
+            sheets.spreadsheets.return_value.batchUpdate.call_args.kwargs
+        )
+        requests = batch_kwargs["body"]["requests"]
+        freeze_req = next(r for r in requests if "updateSheetProperties" in r)
+        frozen = freeze_req["updateSheetProperties"]["properties"][
+            "gridProperties"
+        ]["frozenColumnCount"]
+        assert frozen == 1  # clamped from 3 down to ncols
 
 
 # ---------------------------------------------------------------------------

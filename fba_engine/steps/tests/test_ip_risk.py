@@ -610,3 +610,76 @@ class TestEdgeCaseInputs:
     def test_pure_punctuation_brand_falls_through_to_short(self):
         # "!!!" → compact="" → len <= 3 → SYNTHETIC.
         assert brand_type("!!!", review_count=0, rating=0) == "SYNTHETIC"
+
+
+class TestStatsSortRobustness:
+    """Regression: top-10 sort must coerce numerics to avoid lex-sort
+    pitfalls where '9' > '10'."""
+
+    def _frame(self, monthly_gross_profits):
+        rows = []
+        for i, mgp in enumerate(monthly_gross_profits):
+            rows.append({
+                "ASIN": f"B{i:09d}",
+                "Brand": f"Brand {i}",
+                "IP Risk Score": 5,
+                "IP Risk Band": "Medium",
+                "Brand Seller Match": "NO",
+                "Fortress Listing": "NO",
+                "Brand Type": "GENERIC",
+                "A+ Content Present": "NO",
+                "Brand Store Present": "UNLIKELY",
+                "Category Risk Level": "LOW",
+                "IP Reason": "",
+                "Monthly Gross Profit": mgp,
+            })
+        return pd.DataFrame(rows)
+
+    def test_top10_sort_handles_string_monthly_gross_profit(self):
+        # Lex sort would put "9" before "10". Numeric coercion must put
+        # "10" first. With identical IP Risk Score, this is the tiebreak.
+        df = self._frame(["9", "10", "8"])
+        out = build_stats(df, niche="kids-toys")
+        # Find the top-10 block and check ordering of MGP appears as 10,9,8.
+        # ASIN ordering: "10" → B...01, "9" → B...00, "8" → B...02
+        i_10 = out.find("B000000001")
+        i_9 = out.find("B000000000")
+        i_8 = out.find("B000000002")
+        assert i_10 != -1 and i_9 != -1 and i_8 != -1
+        assert i_10 < i_9 < i_8, (
+            f"Expected numeric-coerced order 10>9>8, got positions "
+            f"{i_10}, {i_9}, {i_8}"
+        )
+
+    def test_top10_sort_handles_non_numeric_mgp_strings(self):
+        # Non-numeric strings should coerce to 0, not crash.
+        df = self._frame(["100", "abc", "50"])
+        out = build_stats(df, niche="kids-toys")
+        # Order should be 100 (B000), 50 (B002), abc→0 (B001).
+        i_100 = out.find("B000000000")
+        i_50 = out.find("B000000002")
+        i_abc = out.find("B000000001")
+        assert i_100 < i_50 < i_abc
+
+
+class TestYesToken:
+    """Regression: A+ Content presence detection."""
+
+    def test_recognises_y_and_yes_case_insensitively(self):
+        from fba_engine.steps.ip_risk import _yes_token
+        assert _yes_token("y")
+        assert _yes_token("Y")
+        assert _yes_token("yes")
+        assert _yes_token("YES")
+        assert _yes_token(" yes ")
+
+    def test_rejects_substrings_and_unrelated_tokens(self):
+        from fba_engine.steps.ip_risk import _yes_token
+        # Critical: "yesterday" must NOT match — guards against the
+        # earlier unanchored-alternation regex.
+        assert not _yes_token("yesterday")
+        assert not _yes_token("yep")
+        assert not _yes_token("ya")
+        assert not _yes_token("n")
+        assert not _yes_token("")
+        assert not _yes_token(None)
