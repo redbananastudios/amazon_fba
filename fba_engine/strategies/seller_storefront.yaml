@@ -1,0 +1,48 @@
+# Strategy: seller_storefront
+# Wholesale leads pipeline. Walks a competing FBA seller's storefront
+# via Keepa, attaches per-row supplier-search URLs, writes a leads CSV.
+#
+# Run via:
+#   export KEEPA_API_KEY=...
+#   python -m fba_engine.strategies.runner \
+#       --strategy fba_engine/strategies/seller_storefront.yaml \
+#       --context seller_id=A1B2C3D4E5 \
+#                 run_dir=fba_engine/data/strategies/seller_storefront/A1B2C3D4E5 \
+#                 timestamp=20260430_120000
+#
+# The strategy stops at "leads list" — buy_cost is unknown until the
+# user finds suppliers. Pipe the output CSV into a manual supplier
+# match, then a supplier_pricelist run for the full
+# resolve→calculate→decide pipeline.
+
+name: seller_storefront
+description: >
+  Wholesale leads — discover ASINs from a competing FBA seller's
+  storefront via Keepa, append supplier-search URLs (Skill 99), emit
+  a leads CSV. No buy_cost / decision: this is leads-only, by design.
+
+# `input.discover: true` — first step creates the DataFrame from the
+# Keepa API; the runner passes an empty df_in.
+input:
+  discover: true
+
+steps:
+  # Stage 01 — discover: walk the seller's storefront.
+  - name: discover
+    module: fba_engine.steps.seller_storefront
+    config:
+      seller_id: "{seller_id}"
+
+  # Stage 07 — supplier_leads: append supplier_search_* URLs.
+  # Reads brand + product_name from each row and renders the configured
+  # search templates (Brand distributor UK, Brand trade account, Product
+  # wholesale). Rows with empty brand fall back to the product-only
+  # template per `shared/config/supplier_leads.yaml`.
+  - name: supplier_leads
+    module: fba_engine.steps.supplier_leads
+    config:
+      output_md_path: "{run_dir}/supplier_leads_{seller_id}_{timestamp}.md"
+      niche: "{seller_id}"
+
+output:
+  csv: "{run_dir}/seller_storefront_{seller_id}_{timestamp}.csv"
