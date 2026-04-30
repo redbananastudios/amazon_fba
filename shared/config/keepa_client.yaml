@@ -1,0 +1,26 @@
+# Keepa API client configuration.
+# Tier: $49/month "Power User" — 20 tokens/min sustained.
+# See docs/PRD-sourcing-strategies.md §7.2.
+
+api:
+  base_url: https://api.keepa.com
+  marketplace: 2     # 2 = UK
+  request_timeout_seconds: 30
+
+rate_limit:
+  tokens_per_minute: 20
+  burst: 100
+  retry_on_429:
+    max_retries: 3
+    backoff_base_seconds: 5
+    backoff_jitter_seconds: 2
+
+cache:
+  root: .cache/keepa
+  ttl_seconds:
+    product: 86400      # 24h
+    seller: 604800      # 7d
+    category: 2592000   # 30d
+
+batching:
+  product_batch_size: 100   # Keepa /product max
