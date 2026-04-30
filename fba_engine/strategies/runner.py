@@ -75,6 +75,7 @@ class StrategyDef:
     steps: list[StepDef]
     input_path: str | None = None       # interpolation-friendly
     input_encoding: str = "utf-8-sig"
+    input_discover: bool = False        # first step creates the DataFrame
     output_csv: str | None = None       # interpolation-friendly
 
 
@@ -172,11 +173,24 @@ def load_strategy(yaml_path: Path | str) -> StrategyDef:
     input_block = data.get("input") or {}
     output_block = data.get("output") or {}
 
+    # `discover` must be a YAML boolean (`true` / `false`), not a
+    # quoted string — `bool("false")` is True, which silently flips
+    # the wrong contract. Reject anything that isn't a real bool so
+    # the YAML author sees the typo at load time.
+    discover_raw = input_block.get("discover", False)
+    if not isinstance(discover_raw, bool):
+        raise StrategyConfigError(
+            f"{yaml_path}: input.discover must be a YAML boolean "
+            f"(true/false), got {type(discover_raw).__name__}: "
+            f"{discover_raw!r}"
+        )
+
     return StrategyDef(
         name=str(data["name"]),
         description=str(data.get("description", "")),
         input_path=input_block.get("path"),
         input_encoding=str(input_block.get("encoding", "utf-8-sig")),
+        input_discover=discover_raw,
         steps=steps,
         output_csv=output_block.get("csv"),
     )
@@ -254,9 +268,19 @@ def _resolve_input_df(
     context: dict[str, Any],
     df_in: pd.DataFrame | None,
 ) -> pd.DataFrame:
-    """Use df_in if provided; otherwise read from strategy.input_path."""
+    """Use df_in if provided; otherwise read from strategy.input_path.
+
+    When the strategy's ``input.discover`` flag is set, returns an
+    empty DataFrame — the first step is expected to be a discovery
+    step that creates the rows from supplier files / API calls and
+    ignores the input df. The legacy "must have an input" guard rail
+    still applies for non-discover strategies so a typo in
+    ``input.path`` doesn't silently run on empty data.
+    """
     if df_in is not None:
         return df_in
+    if strategy.input_discover:
+        return pd.DataFrame()
     if strategy.input_path is None:
         raise StrategyConfigError(
             "no input: strategy has no 'input.path' and no df_in was provided"
