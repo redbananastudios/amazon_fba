@@ -30,6 +30,8 @@ import openpyxl.styles
 import openpyxl.utils
 import pandas as pd
 
+from fba_engine.steps._helpers import coerce_str as _coerce_str
+
 # ────────────────────────────────────────────────────────────────────────
 # Style constants — ARGB hex strings, openpyxl-compatible.
 # ────────────────────────────────────────────────────────────────────────
@@ -227,19 +229,6 @@ def _parse_numeric(value: object) -> float | None:
     if math.isnan(n):
         return None
     return n
-
-
-def _coerce_str(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, float) and math.isnan(value):
-        return ""
-    try:
-        if pd.isna(value):
-            return ""
-    except (TypeError, ValueError):
-        pass
-    return str(value).strip()
 
 
 def _solid_fill(argb: str) -> openpyxl.styles.PatternFill:

@@ -35,6 +35,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from fba_engine.steps._helpers import (
+    atomic_write as _atomic_write,
+    coerce_str as _coerce_str,
+    is_missing as _is_missing,
+    parse_money as _parse_money,
+    round_half_up as _round_half_up,
+)
+
 # ────────────────────────────────────────────────────────────────────────
 # Constants — kept identical to the legacy JS so downstream column lookups
 # (Phase 6 decision engine, Phase 5 XLSX builder) keep matching by name.
@@ -126,59 +134,10 @@ _REQUIRED_INPUT_COLUMNS = (
 )
 
 # ────────────────────────────────────────────────────────────────────────
-# Coercion helpers — same shape as ip_risk.py / decision_engine.py.
-# Duplicated for now; reviewer flagged in step 4b that a shared
-# `fba_engine/steps/_helpers.py` should land once both ports are merged.
+# Coercion helpers — `_coerce_str`, `_parse_money`, `_round_half_up`,
+# `_is_missing`, and `_atomic_write` are imported from
+# `fba_engine.steps._helpers` at the top of this file.
 # ────────────────────────────────────────────────────────────────────────
-
-
-def _is_missing(raw: object) -> bool:
-    """True for any nullable sentinel: None, float NaN, pandas NA/NaT, np.nan."""
-    if raw is None:
-        return True
-    try:
-        # pd.isna handles pd.NA, pd.NaT, np.nan, float('nan'). It raises on
-        # pd.NA only inside boolean context (`bool(pd.NA)`); the call itself
-        # returns the array-aware result and is safe.
-        if pd.isna(raw):
-            return True
-    except (TypeError, ValueError):
-        # Some custom objects can fail pd.isna check; fall through.
-        pass
-    if isinstance(raw, float) and math.isnan(raw):
-        return True
-    return False
-
-
-def _coerce_str(raw: object) -> str:
-    if _is_missing(raw):
-        return ""
-    return str(raw).strip()
-
-
-def _parse_money(raw: object) -> float:
-    """Strip GBP and any non-[0-9.-] chars; parse float; NaN/garbage -> 0."""
-    if _is_missing(raw):
-        return 0.0
-    s = str(raw)
-    s = re.sub(r"GBP", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"[^0-9.\-]", "", s).strip()
-    if not s:
-        return 0.0
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
-
-
-def _round_half_up(value: float) -> int:
-    """JS Math.round equivalent (half-toward-+infinity).
-
-    Python's built-in round() is banker's (half-to-even), so 200.5 -> 200
-    instead of 201. Score values are non-negative, so floor(x + 0.5) is
-    sufficient.
-    """
-    return int(math.floor(value + 0.5))
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -568,22 +527,6 @@ def run_step(df: pd.DataFrame, config: dict) -> pd.DataFrame:
 # ────────────────────────────────────────────────────────────────────────
 # CLI — mirrors legacy phase5_build.js paths.
 # ────────────────────────────────────────────────────────────────────────
-
-
-def _atomic_write(path: Path, write_fn) -> None:
-    """Write to a `<path>.tmp` sibling then atomically rename. Prevents
-    consumers from seeing partial files if the run crashes mid-write."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        write_fn(tmp)
-    except Exception:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-        raise
-    tmp.replace(path)
 
 
 def run(niche: str, base: Path) -> None:
