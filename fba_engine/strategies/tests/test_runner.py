@@ -1156,3 +1156,107 @@ class TestKeepaFinderStrategy:
             out_dir
             / "keepa_finder_amazon_oos_wholesale_20260502_120000.csv"
         ).exists()
+
+
+class TestSellerStorefrontCsvStrategy:
+    """Smoke test: seller_storefront_csv.yaml loads + runs end-to-end.
+
+    Reuses the Keepa Product Finder column shape (the Browser export
+    is identical between Product Finder and Seller Storefront pages),
+    plus the seller_id context arg the storefront strategy threads
+    into discover step config and output filenames.
+    """
+
+    # Same Keepa Browser export columns as TestKeepaFinderStrategy.
+    _KEEPA_COLUMNS = TestKeepaFinderStrategy._KEEPA_COLUMNS
+
+    def test_seller_storefront_csv_yaml_loads(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = (
+            repo_root / "fba_engine" / "strategies" / "seller_storefront_csv.yaml"
+        )
+        if not yaml_path.exists():
+            pytest.skip(f"seller_storefront_csv.yaml not found at {yaml_path}")
+        strat = load_strategy(yaml_path)
+        assert strat.name == "seller_storefront_csv"
+        assert strat.input_discover is True
+        # Five steps mirror keepa_finder.yaml — discover swaps in the
+        # storefront-specific module, the rest are shared.
+        assert [s.name for s in strat.steps] == [
+            "discover", "enrich", "calculate", "decide", "supplier_leads",
+        ]
+        for step in strat.steps:
+            __import__(step.module)
+        # Discover step is the storefront-csv variant (not keepa_finder_csv).
+        discover_step = next(s for s in strat.steps if s.name == "discover")
+        assert discover_step.module == "fba_engine.steps.seller_storefront_csv"
+        # Enrich is in leads mode (matches keepa_finder).
+        enrich_step = next(s for s in strat.steps if s.name == "enrich")
+        assert enrich_step.config.get("include") == "leads"
+
+    def test_seller_storefront_csv_yaml_runs_end_to_end(self, tmp_path: Path):
+        """Synthetic Keepa Storefront CSV → enrich (no-op without creds) →
+        calculate → decide → supplier_leads → output CSV. Verifies that
+        every row gets the seller_id tag and a decision verdict, and
+        that {seller_id} interpolation lands in the output filename."""
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = (
+            repo_root / "fba_engine" / "strategies" / "seller_storefront_csv.yaml"
+        )
+        if not yaml_path.exists():
+            pytest.skip(f"seller_storefront_csv.yaml not found at {yaml_path}")
+
+        # Two rows in this competitor's storefront. Shape mirrors a real
+        # Keepa Browser → Seller Lookup → Storefront export. ASINs are
+        # exactly 10 chars per Amazon's canonical format — anything else
+        # gets dropped silently by the keepa_finder_csv 10-char check.
+        csv_in = tmp_path / "keepa_storefront.csv"
+        rows = [
+            TestKeepaFinderStrategy._row(
+                "B0STORE001", "Henry Vacuum Bags Pack of 10", "10.69",
+            ),
+            TestKeepaFinderStrategy._row(
+                "B0STORE002", "Numatic Replacement Hose 2.5m", "14.39",
+            ),
+        ]
+        pd.DataFrame(rows, columns=self._KEEPA_COLUMNS).to_csv(
+            csv_in, index=False, encoding="utf-8-sig",
+        )
+        exclusions = tmp_path / "exclusions.csv"
+        exclusions.write_text("ASIN\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+
+        strat = load_strategy(yaml_path)
+        for s in strat.steps:
+            if s.name == "discover":
+                s.config["exclusions_path"] = str(exclusions)
+
+        seller_id = "AR5NTANTFUHVI"
+        context = {
+            "csv_path": str(csv_in),
+            "seller_id": seller_id,
+            "output_dir": str(out_dir),
+            "timestamp": "20260501_120000",
+        }
+        out = run_strategy(strat, context=context, df_in=None)
+
+        # Both rows surface — wholesale flow + leads mode means no rejections
+        # for missing market data, just verdicts on the SP-API-enriched info.
+        assert len(out) == 2
+        assert set(out["asin"]) == {"B0STORE001", "B0STORE002"}
+
+        # Storefront-specific tagging.
+        assert (out["source"] == "seller_storefront").all()
+        assert (
+            out["discovery_strategy"] == f"seller_storefront_{seller_id}"
+        ).all()
+        assert (out["seller_id"] == seller_id).all()
+
+        # Decision verdicts from the canonical pipeline.
+        valid = {"SHORTLIST", "REVIEW", "REJECT"}
+        assert all(d in valid for d in out["decision"]), out["decision"].tolist()
+
+        # Output filename interpolates {seller_id} + {timestamp}.
+        assert (
+            out_dir / f"seller_storefront_{seller_id}_20260501_120000.csv"
+        ).exists()

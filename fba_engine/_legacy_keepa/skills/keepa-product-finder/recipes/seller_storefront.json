@@ -1,0 +1,8 @@
+{
+  "name": "seller_storefront",
+  "description": "Browser-driven competitor storefront walk. Load this when running the seller_storefront_csv strategy against a Keepa Browser → Seller Lookup → Storefront export. Sales-volume gates lowered to 0 so every storefront row surfaces — the value of storefront walking is competitive intelligence, not viability gating, so we want to see what the seller carries even at low BSR.",
+  "decide_overrides": {
+    "min_sales_review": 0,
+    "min_sales_shortlist": 0
+  }
+}
