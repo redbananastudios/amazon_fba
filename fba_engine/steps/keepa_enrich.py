@@ -79,6 +79,7 @@ def enrich_with_keepa(
     client: KeepaClient | None = None,
     config_path: Path | str | None = None,
     overwrite: bool = False,
+    with_offers: bool = False,
 ) -> pd.DataFrame:
     """Append Keepa market columns to `df`, joined by ASIN.
 
@@ -124,7 +125,7 @@ def enrich_with_keepa(
         client = _build_client(config_path)
 
     asins_unique = list(dict.fromkeys(df[asin_col].dropna().astype(str)))
-    products = client.get_products(asins_unique)
+    products = client.get_products(asins_unique, with_offers=with_offers)
     by_asin = {p.asin: p.market_snapshot() for p in products}
 
     # Build the snapshot DataFrame in input row order. `by_asin.get`
@@ -154,13 +155,26 @@ def run_step(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
       - ``client``: pre-built KeepaClient (test injection)
       - ``config_path``: override the default keepa_client.yaml path
       - ``overwrite``: re-enrich even when canonical columns are present
+      - ``with_offers``: request the live offer list (default False).
+        +4 tokens per ASIN but unlocks the lowest-live-FBA market-price
+        path. Single-ASIN strategies typically want True; bulk
+        storefront walks default False to keep token spend down.
     """
+    # YAML interpolation produces strings — accept both bool and the
+    # canonical truthy strings ("true", "1") so the strategy YAML can
+    # use either style.
+    raw_with_offers = config.get("with_offers", False)
+    if isinstance(raw_with_offers, str):
+        with_offers = raw_with_offers.strip().lower() in ("true", "1", "yes")
+    else:
+        with_offers = bool(raw_with_offers)
     return enrich_with_keepa(
         df,
         asin_col=config.get("asin_col", "asin"),
         client=config.get("client"),
         config_path=config.get("config_path"),
         overwrite=bool(config.get("overwrite", False)),
+        with_offers=with_offers,
     )
 
 

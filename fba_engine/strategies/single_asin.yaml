@@ -38,8 +38,18 @@ steps:
   # Populates buy_box_price, buy_box_avg90, fba_seller_count,
   # sales_estimate, etc. — the canonical fields calculate.py reads.
   # Requires KEEPA_API_KEY env var.
+  #
+  # `with_offers: true` requests Keepa's live offer list (+4 tokens per
+  # ASIN). Critical for single-ASIN verdicts: Keepa's `stats.current[18]`
+  # (BUY_BOX) and `stats.current[10]` (NEW_FBA) return -1 sentinels for
+  # many real-world ASINs even when active FBA offers exist. The offers
+  # list is the authoritative source — without it the engine can't see
+  # the actual market price and falls through to Amazon's offer (often
+  # dormant inventory priced well above the real Buy Box).
   - name: keepa_enrich
     module: fba_engine.steps.keepa_enrich
+    config:
+      with_offers: true
 
   # Stage 03 — enrich: SP-API leads-mode preflight (restrictions /
   # FBA eligibility / catalog brand / catalog hazmat). Silently no-ops
