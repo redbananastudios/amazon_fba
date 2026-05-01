@@ -15,7 +15,7 @@ OUTPUT_COLUMNS = [
     "decision", "decision_reason", "risk_flags",
     # SP-API preflight columns (informational only — appended at end per spec).
     # Populated when MCP CLI is built and SP_API creds are set; None otherwise.
-    "restriction_status", "restriction_reasons",
+    "restriction_status", "restriction_reasons", "restriction_links",
     "fba_eligible", "fba_ineligibility",
     "live_buy_box", "live_buy_box_seller",
     "live_offer_count_new", "live_offer_count_fba",

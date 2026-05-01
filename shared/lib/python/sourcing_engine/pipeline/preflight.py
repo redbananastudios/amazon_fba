@@ -12,6 +12,10 @@ New columns added per row (None if missing/error):
 
     restriction_status      UNRESTRICTED | RESTRICTED | BRAND_GATED | CATEGORY_GATED
     restriction_reasons     Comma-joined reason codes
+    restriction_links       Semicolon-joined Apply-to-sell URLs (one per
+                            distinct SP-API reason). Click straight from
+                            the output to the Seller Central application
+                            page — saves looking up each ASIN by hand.
     fba_eligible            True / False
     fba_ineligibility       Comma-joined ineligibility codes
     live_buy_box            Real-time Buy Box landed price (GBP)
@@ -40,6 +44,7 @@ BATCH_SIZE = 20
 PREFLIGHT_COLUMNS = [
     "restriction_status",
     "restriction_reasons",
+    "restriction_links",
     "fba_eligible",
     "fba_ineligibility",
     "live_buy_box",
@@ -240,6 +245,20 @@ def _coerce_result(result: dict, original_row: dict) -> dict:
         codes = [r.get("reasonCode") for r in reasons if r.get("reasonCode")]
         if codes:
             out["restriction_reasons"] = ", ".join(codes)
+        # SP-API attaches an `Apply to sell` URL per gated reason. The
+        # MCP forwards it as ``r["link"]``. We surface it so the operator
+        # can click straight from the engine output to the application
+        # page — preferable to the previous workflow of looking up each
+        # ASIN in Seller Central by hand. Joined with `; ` so the column
+        # is one cell in CSV/XLSX. Multiple reasons sometimes point at
+        # the same URL — dedup while preserving order via dict.fromkeys.
+        # The truthiness filter (`if r.get("link")`) drops both ``None``
+        # and the empty-string SP-API edge case.
+        unique_links = list(
+            dict.fromkeys(r.get("link") for r in reasons if r.get("link"))
+        )
+        if unique_links:
+            out["restriction_links"] = "; ".join(unique_links)
 
     fba = result.get("fba") or {}
     if fba:
