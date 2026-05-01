@@ -1,15 +1,28 @@
 #!/usr/bin/env node
 /**
  * push_to_gsheets.js
- * Uploads {niche}_final_results.xlsx to Google Drive as a Google Sheet.
+ * Uploads an XLSX file to Google Drive as a Google Sheet.
  * Google auto-converts xlsx → Sheets, preserving styling.
  *
- * Usage: node push_to_gsheets.js --niche educational-toys
+ * Usage:
+ *   # Generic (preferred — used by the strategy runner):
+ *   node push_to_gsheets.js \
+ *     --xlsx /path/to/file.xlsx \
+ *     --title "Sheet Title" \
+ *     [--id-file /path/to/store-the-id.txt] \
+ *     [--folder <drive-folder-id>] \
+ *     [--key /path/to/service-account.json]
+ *
+ *   # Legacy (kept for the niche-driven keepa_niche pipeline):
+ *   node push_to_gsheets.js --niche educational-toys
  *
  * Requirements:
- *   - config/google-service-account.json (service account key)
- *   - GSHEETS_FOLDER_ID in CLAUDE.md or passed as --folder
- *   - npm install googleapis
+ *   - service account key (default: <repo>/fba_engine/_legacy_keepa/config/google-service-account.json)
+ *   - GOOGLE_DRIVE_FOLDER_ID env var or --folder argument
+ *   - googleapis npm package (npm install in fba_engine/_legacy_keepa/)
+ *
+ * Stdout contract: emits one line `URL: <https://docs.google.com/...>`
+ * on success — the runner parses this to surface the sheet URL.
  */
 
 const { google } = require('googleapis');
@@ -22,17 +35,48 @@ function flag(name) {
   return i !== -1 ? args[i + 1] : null;
 }
 
-const niche = flag('niche');
-if (!niche) { console.error('Usage: node push_to_gsheets.js --niche <niche>'); process.exit(1); }
-
-// Resolve project root relative to this script (skills/skill-5-build-output/ -> project root)
+// Resolve project root relative to this script (skills/skill-5-build-output/ → _legacy_keepa root)
 const BASE = path.resolve(__dirname, '..', '..');
-const DATA = path.join(BASE, 'data', niche);
-const nicheSnake = niche.replace(/-/g, '_');
-const xlsxPath = path.join(DATA, `${nicheSnake}_final_results.xlsx`);
-const idFile = path.join(DATA, `${nicheSnake}_gsheet_id.txt`);
+
+// Two invocation modes:
+//   1. Generic: --xlsx + --title + optional --id-file. Used by the
+//      keepa_finder strategy runner — no niche concept involved.
+//   2. Legacy: --niche, derives all paths from the niche directory.
+//      Kept for the keepa_niche / supplier_pricelist pipelines.
+const niche = flag('niche');
+const xlsxArg = flag('xlsx');
+const titleArg = flag('title');
+const idFileArg = flag('id-file');
+
+let xlsxPath, idFile, title;
+if (xlsxArg) {
+  // Generic mode
+  xlsxPath = path.resolve(xlsxArg);
+  if (!titleArg) {
+    console.error('--xlsx requires --title (the title to use for the Google Sheet).');
+    process.exit(1);
+  }
+  title = titleArg;
+  // id-file is optional in generic mode — when omitted, no previous-sheet
+  // cleanup happens (each run creates a fresh sheet).
+  idFile = idFileArg ? path.resolve(idFileArg) : null;
+} else if (niche) {
+  // Legacy mode
+  const DATA = path.join(BASE, 'data', niche);
+  const nicheSnake = niche.replace(/-/g, '_');
+  xlsxPath = path.join(DATA, `${nicheSnake}_final_results.xlsx`);
+  idFile = path.join(DATA, `${nicheSnake}_gsheet_id.txt`);
+  const nicheLabel = niche.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const date = new Date().toISOString().slice(0, 10);
+  title = titleArg || `${nicheLabel} Final Results — ${date}`;
+} else {
+  console.error('Usage: node push_to_gsheets.js --xlsx <path> --title <title> [--id-file <path>]');
+  console.error('   or: node push_to_gsheets.js --niche <niche>');
+  process.exit(1);
+}
+
 const keyPath = flag('key') || path.join(BASE, 'config', 'google-service-account.json');
-const folderId = flag('folder') || '1uFYiz7rYFm5ZJHgkXJh86jKaigK9H6yd';
+const folderId = flag('folder') || process.env.GOOGLE_DRIVE_FOLDER_ID || '1uFYiz7rYFm5ZJHgkXJh86jKaigK9H6yd';
 
 if (!fs.existsSync(xlsxPath)) {
   console.error(`XLSX not found: ${xlsxPath}`);
@@ -58,12 +102,17 @@ async function main() {
   const drive = google.drive({ version: 'v3', auth });
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const nicheLabel = niche.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  const date = new Date().toISOString().slice(0, 10);
-  const title = `${nicheLabel} Final Results — ${date}`;
+  // `title` is now computed at the top-level args block — both modes
+  // (generic --title / legacy --niche-derived) populate it before main()
+  // runs. The previous redeclaration here was a leftover from when the
+  // script was niche-only.
 
-  // Delete previous sheet if ID file exists
-  const previousId = fs.existsSync(idFile) ? fs.readFileSync(idFile, 'utf-8').trim() : null;
+  // Delete previous sheet if ID file exists. In generic mode (--xlsx
+  // without --id-file) idFile is null, so we skip the cleanup — each
+  // run creates a fresh sheet. The runner that writes the id_file is
+  // responsible for passing the same path on rerun.
+  const previousId = (idFile && fs.existsSync(idFile))
+    ? fs.readFileSync(idFile, 'utf-8').trim() : null;
   if (previousId) {
     try {
       await drive.files.delete({ fileId: previousId, supportsAllDrives: true });
@@ -96,11 +145,11 @@ async function main() {
 
     const sheetId = res.data.id;
     const sheetUrl = res.data.webViewLink;
-    fs.writeFileSync(idFile, sheetId);
+    if (idFile) fs.writeFileSync(idFile, sheetId);
     console.log(`Uploaded (xlsx conversion): ${title}`);
     console.log(`Sheet ID: ${sheetId}`);
     console.log(`URL: ${sheetUrl}`);
-    console.log(`ID saved to: ${idFile}`);
+    if (idFile) console.log(`ID saved to: ${idFile}`);
     return;
   } catch (err) {
     const errMsg = err.message || JSON.stringify(err.errors || '');
@@ -132,11 +181,11 @@ async function main() {
 
     const rawId = rawRes.data.id;
     const rawUrl = rawRes.data.webViewLink;
-    fs.writeFileSync(idFile, rawId);
+    if (idFile) fs.writeFileSync(idFile, rawId);
     console.log(`Uploaded (raw xlsx, not converted): ${title}`);
     console.log(`File ID: ${rawId}`);
     console.log(`URL: ${rawUrl}`);
-    console.log(`ID saved to: ${idFile}`);
+    if (idFile) console.log(`ID saved to: ${idFile}`);
     console.log('Note: File is xlsx format in Drive. Open in Google Sheets to view/edit.');
     return;
   } catch (rawErr) {
@@ -267,12 +316,12 @@ async function main() {
   });
 
   const sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
-  fs.writeFileSync(idFile, sheetId);
+  if (idFile) fs.writeFileSync(idFile, sheetId);
 
   console.log(`Uploaded (Sheets API fallback): ${title}`);
   console.log(`Sheet ID: ${sheetId}`);
   console.log(`URL: ${sheetUrl}`);
-  console.log(`ID saved to: ${idFile}`);
+  if (idFile) console.log(`ID saved to: ${idFile}`);
   console.log('Note: Styling is basic (Sheets API fallback). For full styling, free up Drive quota and re-run.');
   return;
   } catch (sheetsErr) {
