@@ -1,0 +1,83 @@
+# Strategy: keepa_finder
+# Generic Keepa Product Finder pipeline. Reads a CSV exported by the
+# upstream `$keepa-product-finder` skill (one of 4 named recipes —
+# amazon_oos_wholesale, brand_wholesale_scan, no_rank_hidden_gem,
+# stable_price_low_volatility), enriches each ASIN with SP-API
+# preflight (gating / FBA eligibility / hazmat / catalog brand),
+# calculates fees + profit + max_buy_price (wholesale flow), decides
+# SHORTLIST/REVIEW/REJECT, and emits the canonical CSV + supplier
+# search URLs.
+#
+# No Keepa API subscription required — the discovery half lives in
+# the browser-driven skill; this YAML wires up the engine half.
+#
+# Run via Cowork orchestration (see orchestration/runs/keepa_finder.yaml)
+# or manually:
+#
+#   python -m fba_engine.strategies.runner \
+#       --strategy fba_engine/strategies/keepa_finder.yaml \
+#       --context csv_path=./output/2026-05-02/keepa_amazon_oos.csv \
+#                 recipe=amazon_oos_wholesale \
+#                 output_dir=./output/2026-05-02 \
+#                 timestamp=20260502_120000
+
+name: keepa_finder
+description: >
+  Generic Keepa Product Finder pipeline. Ingests a recipe-driven CSV
+  export from the $keepa-product-finder skill, enriches via SP-API
+  (leads mode), calculates economics, decides verdicts, and writes
+  the canonical CSV + supplier_leads.md.
+
+# `input.discover: true` — the discover step creates the DataFrame
+# from `csv_path`; the runner passes an empty df_in.
+input:
+  discover: true
+
+steps:
+  # Stage 01 — discover: parse the Keepa Product Finder CSV and emit
+  # the canonical engine schema (asin, source, discovery_strategy,
+  # buy_box_price, new_fba_price, fba_seller_count, sales_estimate,
+  # amazon_status, buy_cost=0, moq=1, etc.). Applies global exclusions
+  # (categories + title keywords) from shared/config/global_exclusions.yaml
+  # and ASIN dedup against fba_engine/data/niches/exclusions.csv.
+  - name: discover
+    module: fba_engine.steps.keepa_finder_csv
+    config:
+      csv_path: "{csv_path}"
+      recipe: "{recipe}"
+      # metadata_path / exclusions_path / config_dir all optional —
+      # set them via `--context` if you need to override defaults.
+
+  # Stage 03 — enrich: SP-API preflight in leads mode (restrictions /
+  # FBA eligibility / catalog brand / catalog hazmat). Replaces what
+  # the legacy SellerAmp skill (Skill 2) used to provide for non-Buy-
+  # Box-% checks. Silently no-ops when SP-API creds aren't set so the
+  # chain is testable + Cowork-runnable in dev environments without
+  # creds.
+  - name: enrich
+    module: fba_engine.steps.enrich
+    config:
+      include: leads
+
+  # Stage 04 — calculate: fees + conservative price + profit + ROI
+  # + max_buy_price. With buy_cost=0 from discover, ROI returns None
+  # but max_buy_price is populated — the supplier-negotiation ceiling
+  # the operator takes to brand outreach.
+  - name: calculate
+    module: fba_engine.steps.calculate
+
+  # Stage 05 — decide: SHORTLIST / REVIEW / REJECT verdicts.
+  - name: decide
+    module: fba_engine.steps.decide
+
+  # Stage 07 — supplier_leads: append Brand-distributor / Product-
+  # wholesale / Brand-trade-account search URLs per row. The recipe
+  # name passes through as `niche` for output organisation.
+  - name: supplier_leads
+    module: fba_engine.steps.supplier_leads
+    config:
+      output_md_path: "{output_dir}/supplier_leads_{recipe}_{timestamp}.md"
+      niche: "{recipe}"
+
+output:
+  csv: "{output_dir}/keepa_finder_{recipe}_{timestamp}.csv"

@@ -22,18 +22,37 @@ from typing import Any
 import pandas as pd
 
 from fba_engine.steps._helpers import is_missing
-from sourcing_engine.pipeline.decision import decide as _decide_row
+from sourcing_engine.pipeline.decision import (
+    decide as _decide_row,
+    _resolve_thresholds as _resolve_decide_thresholds,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def decide_rows(df: pd.DataFrame) -> pd.DataFrame:
+def decide_rows(
+    df: pd.DataFrame, *, overrides: dict[str, Any] | None = None,
+) -> pd.DataFrame:
     """Set ``decision`` + ``decision_reason`` for each match row.
 
     REJECT rows from earlier stages are preserved as-is.
+
+    ``overrides`` (optional) — per-call threshold overrides forwarded
+    to ``sourcing_engine.pipeline.decision.decide``. See its module
+    docstring for supported keys (``min_sales_shortlist``,
+    ``min_sales_review``, ``min_profit``, ``target_roi``). Default
+    ``None`` keeps every call's existing behaviour intact.
     """
     if df.empty:
         return df
+
+    # Validate overrides ONCE up front — _resolve_thresholds raises
+    # ValueError on unknown keys / invariant violations. Surfacing the
+    # config bug at row 0 (or before iteration) is louder than letting
+    # it raise per-row inside the catch-all below. Also avoids
+    # re-validating the same dict on every row.
+    if overrides:
+        _resolve_decide_thresholds(overrides)
 
     output_rows: list[dict] = []
     for idx, row in df.iterrows():
@@ -61,7 +80,7 @@ def decide_rows(df: pd.DataFrame) -> pd.DataFrame:
                 "price_basis": row_dict.get("price_basis"),
                 "buy_cost": row_dict.get("buy_cost"),
             }
-            decision, reason = _decide_row(decision_input)
+            decision, reason = _decide_row(decision_input, overrides=overrides)
         except Exception:
             logger.exception(
                 "[%s] [ROW_%s] [%s] decide error",
@@ -78,5 +97,18 @@ def decide_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def run_step(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
-    """Runner-compatible wrapper. No config keys consumed."""
-    return decide_rows(df)
+    """Runner-compatible wrapper.
+
+    Recognised ``config`` keys:
+
+      - ``overrides``: dict of per-call threshold overrides. Supported
+        keys: ``min_sales_shortlist``, ``min_sales_review``,
+        ``min_profit`` (alias ``min_profit_absolute``), ``target_roi``.
+        Used by the keepa_finder strategy family — e.g.
+        ``no_rank_hidden_gem`` lowers ``min_sales_shortlist`` from 20
+        to 5 because no-rank ASINs have lower expected volume.
+        Unknown keys raise ValueError. Default = no overrides
+        (backwards-compat with every existing strategy).
+    """
+    overrides = config.get("overrides")
+    return decide_rows(df, overrides=overrides)

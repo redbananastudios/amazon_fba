@@ -7,6 +7,7 @@ All other modules import from here. Inline values in code or docs are forbidden.
 Loads from:
   shared/config/business_rules.yaml
   shared/config/decision_thresholds.yaml
+  shared/config/global_exclusions.yaml   (optional — falls back to empty exclusions)
 
 Locations resolved in this order:
   1. Path passed to load_config(config_dir=...)
@@ -95,6 +96,46 @@ class BusinessRules:
 
 
 @dataclass(frozen=True)
+class GlobalExclusions:
+    """Cross-strategy hard exclusions.
+
+    Loaded from ``shared/config/global_exclusions.yaml``. If the file is
+    missing, all fields default to permissive values (no exclusions).
+
+    Used by:
+      - Keepa Product Finder recipes (pre-export filter injection)
+      - ``fba_engine/steps/keepa_finder_csv.py`` (post-export safety net)
+    """
+
+    hazmat_strict: bool
+    categories_excluded: tuple[str, ...]
+    title_keywords_excluded: tuple[str, ...]
+
+    def title_is_excluded(self, title: str | None) -> bool:
+        """Return True if ``title`` contains any blacklisted keyword.
+
+        Case-insensitive substring match. Empty/None title returns False
+        (the engine's other validation catches missing-title rows).
+        """
+        if not title:
+            return False
+        haystack = title.casefold()
+        return any(kw.casefold() in haystack for kw in self.title_keywords_excluded)
+
+    def category_is_excluded(self, category: str | None) -> bool:
+        """Return True if ``category`` matches any excluded root.
+
+        Exact case-insensitive match against Keepa's "Categories: Root"
+        column. Subcategories are not implied — if you want to exclude
+        a sub-tree, add the root.
+        """
+        if not category:
+            return False
+        target = category.strip().casefold()
+        return any(c.strip().casefold() == target for c in self.categories_excluded)
+
+
+@dataclass(frozen=True)
 class DecisionThresholds:
     target_roi: float
     min_profit_absolute: float
@@ -178,9 +219,50 @@ def get_thresholds(config_dir: Path | None = None) -> DecisionThresholds:
     return _load_all(key)[1]
 
 
+@lru_cache(maxsize=1)
+def _load_global_exclusions(config_dir_str: str | None = None) -> GlobalExclusions:
+    """Load global_exclusions.yaml. Permissive defaults if file is absent.
+
+    Kept separate from ``_load_all`` so existing tests that mock the config
+    dir without this file keep working — global_exclusions is opt-in
+    infrastructure, not a hard dependency for the legacy supplier flow.
+    """
+    config_dir = _find_config_dir(Path(config_dir_str) if config_dir_str else None)
+    path = config_dir / "global_exclusions.yaml"
+
+    if not path.exists():
+        # Permissive defaults — every existing strategy keeps working.
+        return GlobalExclusions(
+            hazmat_strict=False,
+            categories_excluded=(),
+            title_keywords_excluded=(),
+        )
+
+    data = _load_yaml(path)
+    return GlobalExclusions(
+        hazmat_strict=bool(data.get("hazmat_strict", False)),
+        categories_excluded=tuple(str(c) for c in (data.get("categories_excluded") or [])),
+        title_keywords_excluded=tuple(
+            str(k) for k in (data.get("title_keywords_excluded") or [])
+        ),
+    )
+
+
+def get_global_exclusions(config_dir: Path | None = None) -> GlobalExclusions:
+    """Get cross-strategy hard exclusions. Cached.
+
+    Returns permissive defaults (no exclusions, hazmat_strict=False) when
+    ``global_exclusions.yaml`` is absent — preserves backward compatibility
+    for any caller running without the new config file.
+    """
+    key = str(config_dir.resolve()) if config_dir else None
+    return _load_global_exclusions(key)
+
+
 def reset_cache() -> None:
     """Clear the cache. Useful in tests that mutate config."""
     _load_all.cache_clear()
+    _load_global_exclusions.cache_clear()
 
 
 # --------------------------------------------------------------------------- #
@@ -232,8 +314,10 @@ __all__ = [
     # Typed accessors (preferred)
     "BusinessRules",
     "DecisionThresholds",
+    "GlobalExclusions",
     "get_business_rules",
     "get_thresholds",
+    "get_global_exclusions",
     "reset_cache",
     # Legacy constants (backward compat)
     "MIN_PROFIT",

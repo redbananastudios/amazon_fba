@@ -1,0 +1,196 @@
+# Cowork Run Definition: keepa_finder
+#
+# Two-task orchestration: a browser-driven Keepa Product Finder export
+# (Task 1) feeding the canonical engine pipeline (Task 2). One run
+# definition serves all four shipped Keepa Product Finder recipes —
+# the orchestrator selects the recipe at dispatch time.
+#
+# This is the **canonical pattern** for any future strategy that needs
+# a manual / browser-driven discovery step feeding the engine. Add a
+# new run definition file here per strategy; do not couple discovery
+# to the engine runner.
+#
+# Format note: this YAML is descriptive, not executable. Cowork (or
+# whatever orchestrator runs it) is expected to translate the
+# `tasks[]` block into its native task graph. The shape here mirrors
+# the mental model — explicit dependencies, prompts for AI tasks,
+# shell commands for engine tasks, expected outputs for verification.
+
+name: keepa_finder
+description: >
+  Discover ASINs from a Keepa Product Finder browser export, run them
+  through the canonical engine (resolve / enrich / calculate / decide
+  / supplier_leads), produce CSV + supplier_leads.md outputs.
+
+# ───────────────────────────────────────────────────────────────────────
+# Inputs the orchestrator must supply per run
+# ───────────────────────────────────────────────────────────────────────
+inputs:
+  recipe:
+    required: true
+    type: enum
+    one_of:
+      - amazon_oos_wholesale
+      - brand_wholesale_scan
+      - no_rank_hidden_gem
+      - stable_price_low_volatility
+    description: Named filter set in fba_engine/_legacy_keepa/skills/keepa-product-finder/recipes/
+
+  category:
+    required_unless_recipe: brand_wholesale_scan
+    type: string
+    example: "Toys & Games"
+    description: >
+      Amazon UK root category to scope the Keepa Product Finder query.
+      Required unless recipe=brand_wholesale_scan (which scopes by brand
+      list instead). The keepa-product-finder skill rejects "All
+      categories" — Keepa returns a random 10k subset, never useful.
+
+  brands:
+    required_if_recipe: brand_wholesale_scan
+    type: string
+    example: "LEGO,Hasbro,Mattel,Schleich"
+    description: >
+      Comma-separated brand list for brand_wholesale_scan. Resolved by
+      the keepa-product-finder skill via Keepa's autocomplete-brand
+      field (one click per brand, the skill handles it).
+
+  run_id:
+    type: string
+    auto: "{utc_timestamp:YYYYMMDD_HHmmSS}"
+    description: Unique run identifier. Tags output paths so reruns don't clobber prior runs.
+
+  output_root:
+    type: path
+    default: "./output/{run_id}"
+    description: All artifacts (export CSV, metadata sidecar, results, supplier_leads.md) land here.
+
+# ───────────────────────────────────────────────────────────────────────
+# Tasks dispatched in sequence
+# ───────────────────────────────────────────────────────────────────────
+tasks:
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Task 1: Discovery — browser-driven Keepa Product Finder export
+  # ─────────────────────────────────────────────────────────────────────
+  - id: discovery
+    type: claude_code_task
+
+    description: >
+      Invoke the $keepa-product-finder skill against an authenticated
+      Keepa browser session. The skill loads the recipe JSON, merges
+      global exclusions (hazmat + Clothing/Shoes/Jewellery + title
+      keyword blacklist from shared/config/global_exclusions.yaml),
+      builds the Keepa finder URL, applies UI-only filters via JS,
+      exports the result CSV, and writes recipe_metadata.json.
+
+    requirements:
+      - keepa.com browser session authenticated (user logged in)
+      - $keepa-product-finder skill available in the Claude Code instance
+      - Playwright (or equivalent) browser automation reachable
+      - shared/config/global_exclusions.yaml present
+
+    prompt: |
+      Use $keepa-product-finder with these arguments:
+        recipe = {recipe}
+        category = "{category}"     # only if recipe != brand_wholesale_scan
+        brands  = "{brands}"        # only if recipe == brand_wholesale_scan
+        output  = {output_root}/keepa_{recipe}.csv
+
+      The skill must:
+        1. Read the recipe JSON at fba_engine/_legacy_keepa/skills/keepa-product-finder/recipes/{recipe}.json
+        2. Merge `global_exclusions: "auto"` against shared/config/global_exclusions.yaml
+           (append isHazMat to ui_filters.boolean_no when hazmat_strict is true;
+           append each entry of categories_excluded to ui_filters.categories_exclude)
+        3. Build the Keepa Product Finder URL hash from url_filters + sort
+        4. Apply ui_filters via JS post-page-load
+        5. Export the result page (5000 rows by default)
+        6. Save the CSV to {output_root}/keepa_{recipe}.csv
+        7. Save recipe_metadata.json next to it (recipe, category, brands,
+           rows_exported, rendered_url, calculate_config, decide_overrides)
+
+      Report:
+        - rows exported
+        - the rendered Keepa URL (for manual rerun reference)
+        - any unverified field keys discovered + saved back to keepa-finder-values.md
+
+    expected_outputs:
+      - "{output_root}/keepa_{recipe}.csv"
+      - "{output_root}/recipe_metadata.json"
+
+    on_failure:
+      - retry_once: true
+      - if_keepa_session_expired: prompt_user_to_log_in
+      - if_skill_unavailable: abort_run     # Task 2 has nothing to chew on
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Task 2: Engine — canonical pipeline against the Task 1 export
+  # ─────────────────────────────────────────────────────────────────────
+  - id: engine
+    type: shell_command
+    depends_on: discovery
+
+    description: >
+      Run the keepa_finder strategy YAML through the canonical engine.
+      Reads {output_root}/keepa_{recipe}.csv (Task 1's export), enriches
+      via SP-API leads-mode (gating / FBA eligibility / hazmat / catalog
+      brand — silently no-ops without SP-API creds), calculates fees +
+      profit + max_buy_price (wholesale flow with buy_cost=0), decides
+      SHORTLIST/REVIEW/REJECT, attaches supplier_search URLs, writes
+      the canonical CSV + supplier_leads.md.
+
+    command: |
+      python run.py --strategy keepa_finder \
+        --csv {output_root}/keepa_{recipe}.csv \
+        --recipe {recipe} \
+        --output-dir {output_root} \
+        --timestamp {run_id}
+      # NB: dispatch via run.py (NOT `python -m fba_engine.strategies.runner`)
+      # so cli.strategy._apply_recipe_to_strategy applies the recipe's
+      # calculate_config and decide_overrides to the loaded StrategyDef
+      # before the runner executes. Calling the runner directly bypasses
+      # that wiring and silently drops every recipe-driven config knob —
+      # in particular `compute_stability_score` (amazon_oos / stable_price)
+      # and `decide_overrides` (no_rank_hidden_gem).
+
+    expected_outputs:
+      - "{output_root}/keepa_finder_{recipe}_{run_id}.csv"
+      - "{output_root}/supplier_leads_{recipe}_{run_id}.md"
+
+    expected_stdout:
+      # cli.strategy.main prints these lines on a successful run. The
+      # orchestrator can match against them for verification / surfacing.
+      - "strategy=keepa_finder recipe={recipe}"
+      - "rows: <int>"
+      - "  SHORTLIST : <int>"
+      - "  REVIEW    : <int>"
+      - "  REJECT    : <int>"
+      - "output_dir: {output_root}"
+
+    on_failure:
+      - retry_once: true
+      - if_csv_missing: abort_run
+      - if_csv_empty: surface_warning           # zero rows is data telling us
+                                                  # the recipe was too tight; not
+                                                  # an engine bug — report and stop
+
+# ───────────────────────────────────────────────────────────────────────
+# Notes for orchestrator authors
+# ───────────────────────────────────────────────────────────────────────
+notes:
+  - >
+    Task 1 (discovery) requires a stateful browser. If the Cowork
+    runtime can't host a browser session, this task must be dispatched
+    to a human operator — at which point Task 2 is the part that
+    automates cleanly.
+  - >
+    The recipe JSONs ship in fba_engine/_legacy_keepa/skills/keepa-product-finder/recipes/.
+    To add a new strategy, drop a new recipe JSON + add a docs/strategies/
+    entry; this run definition file is generic enough to consume any
+    of them via the `recipe` input.
+  - >
+    Decision-engine touches (compute_stability_score, decide_overrides)
+    are recipe-driven — the strategy YAML uses interpolation against
+    the engine context. Cowork should forward the recipe JSON's
+    calculate_config and decide_overrides as `--context` keys when
+    those flags are wired up in commit 9 (run.py CLI dispatch).

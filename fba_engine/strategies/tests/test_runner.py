@@ -768,3 +768,139 @@ class TestOaCsvStrategy:
         assert (
             run_dir / "oa_decisions_selleramp_20260430_120000.csv"
         ).exists()
+
+
+class TestKeepaFinderStrategy:
+    """Smoke test: keepa_finder.yaml loads + runs the full
+    discover → enrich (leads) → calculate → decide → supplier_leads
+    chain against a synthetic Keepa Product Finder CSV.
+
+    No SP-API creds required — enrich.run_step silently no-ops when
+    the MCP CLI isn't built / SP_API_CLIENT_ID isn't set, exactly
+    matching how the seller_storefront chain runs in test envs.
+    """
+
+    # Keepa Product Finder column names. Several contain commas
+    # ("New, 3rd Party FBA: Current") so the CSV must be properly
+    # quoted — we let pandas handle that via to_csv().
+    _KEEPA_COLUMNS = (
+        "ASIN", "Title", "Brand", "Manufacturer",
+        "Categories: Root", "Categories: Sub", "Categories: Tree",
+        "Product Codes: EAN", "Product Codes: UPC",
+        "Buy Box: Current", "Buy Box: 90 days avg.",
+        "New, 3rd Party FBA: Current",
+        "Amazon: Current", "FBA Pick&Pack Fee", "Referral Fee %",
+        "Bought in past month", "New FBA Offer Count: Current",
+        "Sales Rank: Current", "Sales Rank: 90 days avg.",
+        "Buy Box: % Amazon 90 days", "Buy Box: 90 days OOS",
+        "Buy Box: 30 days drop %", "Buy Box: 90 days drop %",
+    )
+
+    @classmethod
+    def _row(cls, asin: str, title: str, buy_box: str, sales: str = "150") -> dict:
+        """Build a row dict with the right column names (commas and all)."""
+        return {
+            "ASIN": asin, "Title": title, "Brand": "Acme",
+            "Manufacturer": "Acme Mfg",
+            "Categories: Root": "Toys & Games", "Categories: Sub": "Action",
+            "Categories: Tree": "Toys & Games > Figures > Sets",
+            "Product Codes: EAN": "5012345678901",
+            "Product Codes: UPC": "012345678905",
+            "Buy Box: Current": buy_box, "Buy Box: 90 days avg.": "26.50",
+            "New, 3rd Party FBA: Current": "25.49",
+            "Amazon: Current": "",                          # OFF_LISTING
+            "FBA Pick&Pack Fee": "3.35", "Referral Fee %": "15 %",
+            "Bought in past month": sales,
+            "New FBA Offer Count: Current": "5",
+            "Sales Rank: Current": "12345",
+            "Sales Rank: 90 days avg.": "13500",
+            "Buy Box: % Amazon 90 days": "0 %",
+            "Buy Box: 90 days OOS": "2",
+            "Buy Box: 30 days drop %": "3",
+            "Buy Box: 90 days drop %": "5",
+        }
+
+    def test_keepa_finder_yaml_loads(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = repo_root / "fba_engine" / "strategies" / "keepa_finder.yaml"
+        if not yaml_path.exists():
+            pytest.skip(f"keepa_finder.yaml not found at {yaml_path}")
+        strat = load_strategy(yaml_path)
+        assert strat.name == "keepa_finder"
+        assert strat.input_discover is True
+        # Five steps: discover → enrich (leads) → calculate → decide → supplier_leads.
+        assert [s.name for s in strat.steps] == [
+            "discover", "enrich", "calculate", "decide", "supplier_leads",
+        ]
+        # All step modules import.
+        for step in strat.steps:
+            __import__(step.module)
+        # Enrich is in leads mode (replaces SellerAmp for non-Buy-Box-% checks).
+        enrich_step = next(s for s in strat.steps if s.name == "enrich")
+        assert enrich_step.config.get("include") == "leads"
+
+    def test_keepa_finder_yaml_runs_end_to_end(self, tmp_path: Path):
+        """Full chain: synthetic Keepa CSV → enrich (no-op without creds) →
+        calculate → decide → supplier_leads → output CSV. Asserts every
+        row gets a decision and supplier_search columns are populated."""
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = repo_root / "fba_engine" / "strategies" / "keepa_finder.yaml"
+        if not yaml_path.exists():
+            pytest.skip(f"keepa_finder.yaml not found at {yaml_path}")
+
+        # Synthetic Keepa Product Finder export. Two rows:
+        #   - B0KEEPNORM: clean toy product — clears global exclusions
+        #   - B0DROPSHOE: title contains "Shoes" — global filter drops it
+        # pandas to_csv quotes column names containing commas (e.g.
+        # "New, 3rd Party FBA: Current") correctly — matches the real
+        # Keepa export format.
+        csv_in = tmp_path / "keepa_export.csv"
+        rows = [
+            self._row("B0KEEPNORM", "Acme Action Figure Set", "24.99"),
+            self._row("B0DROPSHOE", "Mens Running Shoes Size 10", "30.00"),
+        ]
+        pd.DataFrame(rows, columns=self._KEEPA_COLUMNS).to_csv(
+            csv_in, index=False, encoding="utf-8-sig",
+        )
+        exclusions = tmp_path / "exclusions.csv"
+        exclusions.write_text("ASIN\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+
+        strat = load_strategy(yaml_path)
+        # Inject sandbox exclusions path so we don't read the repo's
+        # canonical data/niches/exclusions.csv during tests.
+        for s in strat.steps:
+            if s.name == "discover":
+                s.config["exclusions_path"] = str(exclusions)
+
+        context = {
+            "csv_path": str(csv_in),
+            "recipe": "amazon_oos_wholesale",
+            "output_dir": str(out_dir),
+            "timestamp": "20260502_120000",
+        }
+        out = run_strategy(strat, context=context, df_in=None)
+
+        # Global exclusion dropped the shoe row at discover stage.
+        assert len(out) == 1
+        assert out.iloc[0]["asin"] == "B0KEEPNORM"
+
+        # Every surviving row carries a decision.
+        assert "decision" in out.columns
+        valid = {"SHORTLIST", "REVIEW", "REJECT"}
+        assert all(d in valid for d in out["decision"]), out["decision"].tolist()
+
+        # supplier_leads attached the brand-distributor column.
+        assert "supplier_search_brand_distributor" in out.columns
+        assert out.iloc[0]["supplier_search_brand_distributor"]
+
+        # max_buy_price populated (the wholesale-flow signal — buy_cost=0
+        # tells calculate to emit this as the negotiation ceiling).
+        assert "max_buy_price" in out.columns
+        assert out.iloc[0]["max_buy_price"] > 0
+
+        # Output CSV written at the configured path.
+        assert (
+            out_dir
+            / "keepa_finder_amazon_oos_wholesale_20260502_120000.csv"
+        ).exists()

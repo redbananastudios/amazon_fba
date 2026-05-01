@@ -1,0 +1,36 @@
+{
+  "name": "no_rank_hidden_gem",
+  "description": "Listings without a current sales rank but with steady review accumulation. Long-tail / low-competition plays. Volume is lower; margins should compensate.",
+  "thesis": "No-rank ASINs filtered by review count + review-count growth surface low-competition products that don't show up in BSR-driven scans.",
+  "marketplace": "GB",
+  "requires_category": true,
+  "requires_brands": false,
+
+  "url_filters": {
+    "BUY_BOX_SHIPPING_current": {"filterType": "number", "type": "inRange", "filter": 15, "filterTo": 50},
+    "COUNT_REVIEWS_current": {"filterType": "number", "type": "inRange", "filter": 10, "filterTo": 1000},
+    "totalOfferCount": {"filterType": "number", "type": "lessThanOrEqual", "filter": 5, "filterTo": null}
+  },
+
+  "ui_filters": {
+    "boolean_no": ["isAdultProduct"],
+    "checkboxes": ["noSalesRank"]
+  },
+
+  "sort": [{"colId": "COUNT_REVIEWS_current", "sort": "desc"}],
+  "rows_per_page": 5000,
+
+  "global_exclusions": "auto",
+
+  "decide_overrides": {
+    "min_sales_shortlist": 5,
+    "min_sales_review": 2
+  },
+
+  "notes": [
+    "noSalesRank checkbox key may need verification on first run — the skill should resolve via UI inspection and save-back to keepa-finder-values.md if the verified key differs.",
+    "Higher BUY_BOX floor (£15 vs £12 on other recipes): no-rank items have lower predicted volume so AOV needs to compensate.",
+    "totalOfferCount ≤ 5 = genuinely uncrowded; combined with review velocity proves the listing actually sells.",
+    "decide_overrides flow into 05_decide.config.overrides — relaxes the velocity floor for this strategy only (no-rank items will fail the default min_sales_shortlist = 20)."
+  ]
+}

@@ -1,0 +1,33 @@
+# Hard exclusions applied across every Keepa-driven sourcing strategy.
+#
+# Applied at two layers:
+#   1. Keepa Product Finder filter (recipe builder injects these into every
+#      query — `categories_excluded` populates the `categories_exclude` field
+#      with operator `isNoneOf`; `hazmat_strict` sets `isHazMat` boolean to No).
+#   2. Post-export safety net inside `keepa_finder_csv` step — drops any row
+#      whose title contains a `title_keywords_excluded` substring (case-
+#      insensitive), and drops rows where SP-API `catalog_hazmat=true` after
+#      enrich.
+#
+# To extend: add lines under the relevant key. No code change required.
+
+# When true, every recipe sets Keepa's `isHazMat: No` filter, AND the
+# post-enrich step drops rows where SP-API reports `catalog_hazmat: true`.
+hazmat_strict: true
+
+# Amazon UK root categories to exclude. Matched against the Keepa export's
+# "Categories: Root" column post-export, and injected into the
+# `categories_exclude` finder field pre-export. Names must match Keepa's
+# autocomplete dropdown text exactly.
+categories_excluded:
+  - "Clothing, Shoes & Jewellery"
+
+# Title keyword blacklist. Applied as case-insensitive substring match
+# against each row's title post-export. "shoe" catches "shoes"; "boot"
+# catches "boots". Drops the row entirely.
+title_keywords_excluded:
+  - clothing
+  - apparel
+  - shoe
+  - boot
+  - footwear

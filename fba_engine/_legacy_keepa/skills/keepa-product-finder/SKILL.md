@@ -59,6 +59,158 @@ Reasonable defaults:
 - Export `CSV` unless the user asks for another format.
 - Prefer one exported page sized to the requested count when Keepa supports that page size.
 
+## Recipes (Named Filter Sets)
+
+Recipes are pre-canned filter sets stored as JSON in `recipes/{name}.json`.
+Each recipe encodes one sourcing thesis (Amazon-OOS wholesale, brand scan,
+no-rank long-tail, stable-price low-volatility, etc.). Cowork and human
+operators invoke recipes by name instead of restating filters every run.
+
+Available recipes:
+
+- `amazon_oos_wholesale` — Amazon abandoned + 2-10 FBA + selling
+- `brand_wholesale_scan` — paste brand list, scan their full catalogue
+- `no_rank_hidden_gem` — no-rank long-tail with review velocity
+- `stable_price_low_volatility` — ±10% Buy Box stability over 90d
+
+### Invocation
+
+```
+use $keepa-product-finder recipe=amazon_oos_wholesale category="Toys & Games" output=./output/{run_id}/keepa_amazon_oos.csv
+use $keepa-product-finder recipe=brand_wholesale_scan brands="LEGO,Hasbro,Mattel" output=./output/{run_id}/keepa_brand_scan.csv
+```
+
+The recipe supplies `url_filters`, `ui_filters`, `sort`, and
+`rows_per_page`. The caller must supply:
+
+- `category` if the recipe declares `requires_category: true` (everything
+  except `brand_wholesale_scan`)
+- `brands` if the recipe declares `requires_brands: true`
+  (`brand_wholesale_scan` only)
+- `output` — absolute path or `./output/{run_id}/keepa_{recipe}.csv` style
+  relative path. The skill creates the parent directory.
+
+If a required input is missing, refuse to run and ask the caller for it.
+Do not invent a default category — Keepa's "All categories" returns a
+random 10k subset and silently corrupts results.
+
+### Recipe JSON shape
+
+```json
+{
+  "name": "<recipe_id>",
+  "description": "...",
+  "thesis": "...",
+  "marketplace": "GB",
+  "requires_category": true,
+  "requires_brands": false,
+
+  "url_filters": {
+    "<KeepaFieldKey>": {"filterType": "number", "type": "inRange", "filter": 20, "filterTo": 40}
+  },
+
+  "ui_filters": {
+    "boolean_no": ["isAdultProduct"],
+    "checkboxes": ["AMAZON_outOfStock"],
+    "brands_include": "${brands}"
+  },
+
+  "sort": [{"colId": "SALES_current", "sort": "asc"}],
+  "rows_per_page": 5000,
+
+  "global_exclusions": "auto",
+
+  "calculate_config": {"compute_stability_score": true},
+  "decide_overrides": {"min_sales_shortlist": 5}
+}
+```
+
+- `url_filters` go into the URL hash `f` block per the existing URL-First
+  Hybrid Workflow. Keys must be verified Keepa field names — if a key is
+  not in `references/keepa-finder-values.md`, resolve it via UI inspection
+  on first run and save back.
+- `ui_filters` are applied after page load via the JS workflow already
+  documented below.
+- `${placeholder}` syntax in `ui_filters` (e.g. `"brands_include": "${brands}"`)
+  is substituted from invocation args at render time.
+- `calculate_config` and `decide_overrides` are NOT applied by this skill —
+  they are forwarded to the engine YAML strategy when Cowork dispatches the
+  engine task. The skill writes them into `recipe_metadata.json` next to
+  the export CSV so the engine can pick them up.
+
+### Global exclusions auto-merge
+
+When `global_exclusions: "auto"` (default in every shipped recipe), the
+skill MUST read `shared/config/global_exclusions.yaml` at render time and
+merge:
+
+1. If `hazmat_strict: true` → append `"isHazMat"` to `ui_filters.boolean_no`.
+2. For each entry in `categories_excluded` → append to a synthesised
+   `ui_filters.categories_exclude` list, applied via the
+   `autocomplete-categories_exclude` field with `isNoneOf` operator.
+3. `title_keywords_excluded` is NOT applied here — it is a post-export
+   filter inside the engine's `keepa_finder_csv` step (this skill produces
+   the raw export; the engine does the keyword pruning).
+
+If `global_exclusions` is `"none"`, skip the merge entirely (rare —
+intended for diagnostic reruns).
+
+### Save-back rule (recipes)
+
+If a recipe references a Keepa field key that is not yet verified in
+`references/keepa-finder-values.md`, the skill MUST:
+
+1. Resolve the key via UI inspection on first use (find the matching
+   form field, capture its `id`/`name` attribute).
+2. Confirm filter behaviour (apply, observe result count change).
+3. Save the verified mapping back to `keepa-finder-values.md` per the
+   existing save-back rule.
+
+Recipes flag unverified keys in the `notes[]` array — treat any note
+mentioning "TBC" or "save-back" as a triggered save-back obligation.
+
+### Output sidecar
+
+Alongside the export CSV, write `recipe_metadata.json` containing:
+
+```json
+{
+  "recipe": "amazon_oos_wholesale",
+  "recipe_path": "fba_engine/_legacy_keepa/skills/keepa-product-finder/recipes/amazon_oos_wholesale.json",
+  "category": "Toys & Games",
+  "brands": null,
+  "rendered_url": "https://keepa.com/#!finder/<encoded>",
+  "rows_exported": 1234,
+  "exported_at": "2026-05-02T10:15:23Z",
+  "calculate_config": {"compute_stability_score": true},
+  "decide_overrides": null,
+  "global_exclusions_applied": {
+    "hazmat_strict": true,
+    "categories_excluded": ["Clothing, Shoes & Jewellery"]
+  }
+}
+```
+
+The downstream engine step (`keepa_finder_csv`) reads this sidecar to know
+which strategy_tag to apply and which engine config to forward.
+
+### Cowork orchestration
+
+When Cowork drives this end-to-end as one workflow, it dispatches two
+tasks (see `orchestration/runs/keepa_finder.yaml` for the full definition):
+
+**Task 1 — Discovery prompt:**
+> Use `$keepa-product-finder` with `recipe={recipe}` and `category={category}`
+> (or `brands={brands}`) to export to `./output/{run_id}/keepa_{recipe}.csv`.
+> Write the recipe sidecar metadata. Report rows exported.
+
+**Task 2 — Engine prompt:**
+> Run `python -m fba_engine.strategies.runner --strategy fba_engine/strategies/keepa_finder.yaml --context csv_path=./output/{run_id}/keepa_{recipe}.csv recipe={recipe} output_dir=./output/{run_id}/`.
+> Report SHORTLIST/REVIEW/REJECT counts.
+
+Each task is independently retryable. Task 2 fails fast if Task 1's output
+is missing or empty.
+
 ## Field Handling Model
 
 Treat each requested filter as one of three classes:
@@ -441,3 +593,9 @@ When the skill performs a lookup-only run, include:
 - Use `$keepa-product-finder` to interpret `Kids Toys`, resolve the correct category or subcategory IDs, build the finder URL, apply the remaining UI-only fields, and export 1000 results to `./exports`.
 - Use `$keepa-product-finder` to search Amazon.co.uk for products with price GBP 20 to GBP 30, 1 to 5 sellers, FBA only, no Amazon, then save the query URL and CSV to `./test`.
 - Use `$keepa-product-finder` to resolve plain-text values for `Brand`, `Languages`, and `Binding`, add the verified mappings to the reference file, and then run the export.
+
+### Recipe-driven (Cowork)
+
+- Use `$keepa-product-finder` with `recipe=amazon_oos_wholesale` and `category="Toys & Games"`, export to `./output/2026-05-02/keepa_amazon_oos.csv`. Apply global exclusions auto-merge. Report rows exported and write `recipe_metadata.json` next to the CSV.
+- Use `$keepa-product-finder` with `recipe=brand_wholesale_scan` and `brands="LEGO,Hasbro,Mattel,Schleich"`, export to `./output/2026-05-02/keepa_brand_scan.csv`.
+- Use `$keepa-product-finder` with `recipe=stable_price_low_volatility` and `category="Pet Supplies"`, export to `./output/2026-05-02/keepa_stable.csv`.

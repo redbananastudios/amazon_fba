@@ -6,19 +6,56 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-01 (Phase 3 complete — 4 PRs merged this session)
-**Currently working on:** Phase 3 scoping items resolved. `oa_csv` now produces full SHORTLIST/REVIEW/REJECT verdicts; `seller_storefront` enriches with SP-API gating/eligibility/hazmat/brand (SellerAmp dropped); `keepa_niche` chain has its missing Phase 3 (canonical scoring step replacing the agent-driven per-niche scripts).
-**Status:** Main is at PR #35 (commit `76fe945`). **820 Python tests + 110 MCP vitest = 930 total green.**
+**Last updated:** 2026-05-02 (Keepa Product Finder strategies — branch `feat/keepa-finder-strategies`, 10 commits)
+**Currently working on:** Implementation of `docs/PRD-keepa-sourcing-strategies.md` is complete. Four named recipes (`amazon_oos_wholesale`, `brand_wholesale_scan`, `no_rank_hidden_gem`, `stable_price_low_volatility`) ship as JSON filter sets consumed by the existing `$keepa-product-finder` skill — no Keepa API subscription required, no live-API path built. The skill exports a CSV; the engine ingests it through a new `keepa_finder_csv` discovery step + generic `keepa_finder.yaml` strategy. Cowork orchestrates the two-task flow (discovery + engine) per `orchestration/runs/keepa_finder.yaml`.
+**Status:** Branch ready for PR. **902 Python tests pass** (was 820; +82 new across the session). MCP suite untouched (110 unit + 5 integration still green).
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                          # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 820/820 in ~11s
+       fba_engine/strategies/tests/ cli/tests/                       # 902/902 in ~14s
 ```
 
-### What landed this session (2026-05-01, Phase 3)
+### What landed this session (2026-05-02, Keepa Product Finder strategies)
+
+**Approach:** browser-export-driven, not API-driven. Peter doesn't have a Keepa API subscription and the existing `$keepa-product-finder` skill (in `_legacy_keepa/skills/keepa-product-finder/`) already produces CSV exports from the Keepa Product Finder UI. This branch wires those exports into the canonical engine via a thin column-mapper step + 4 recipe JSONs that encode named filter sets.
+
+| Commit | Summary |
+|---|---|
+| 1 | `shared/config/global_exclusions.yaml` + `GlobalExclusions` loader. Three exclusions ship: hazmat, `Clothing, Shoes & Jewellery` root, title keywords (clothing/apparel/shoe/boot/footwear). Permissive defaults if file absent. |
+| 2 | 4 recipe JSONs in `_legacy_keepa/skills/keepa-product-finder/recipes/`. Each declares Keepa filter set + `global_exclusions: "auto"` + optional `calculate_config` / `decide_overrides`. |
+| 3 | `keepa-product-finder` SKILL.md update — Recipes section, recipe loading workflow, recipe_metadata.json sidecar, Cowork two-task prompt example. |
+| 4 | `fba_engine/steps/keepa_finder_csv.py` — column mapper (175-col Keepa export → canonical schema), ASIN dedup against `data/niches/exclusions.csv`, post-export keyword + category filter. Smoke test against real 10k-row `kids_toys_phase1_raw.csv`. |
+| 5 | `fba_engine/strategies/keepa_finder.yaml` — generic chain: discover → enrich (leads) → calculate → decide → supplier_leads. Discovery schema aligned with `04_calculate`'s expected column names (`buy_box_price`, `new_fba_price`, `referral_fee_pct` /100, `amazon_status` derived, wholesale defaults `buy_cost=0` + `moq=1`). |
+| 6 | `04_calculate` consumes `compute_stability_score` config flag. New `add_stability_score()` derives 0.0–1.0 score from Buy Box delta-30d/90d. Default off — backwards compat preserved. |
+| 7 | `05_decide` consumes `config["overrides"]` dict — generic per-call threshold override (no_rank_hidden_gem lowers `min_sales_shortlist` 20→5). `decide()` gains optional `overrides=` kwarg in the canonical engine. Unknown keys + invariant violations raise loud. |
+| 8 | `orchestration/runs/keepa_finder.yaml` — Cowork two-task definition (browser-driven discovery + engine). Generic across all 4 recipes. |
+| 9 | `run.py --strategy <name>` CLI dispatch via `cli/strategy.py`. Loads strategy YAML + recipe JSON, mutates StrategyDef so recipe configs flow to calculate/decide steps, runs the chain, prints verdict summary. End-to-end smoke against synthetic Keepa CSV. |
+| 10 | Per-recipe docs in `docs/strategies/` (4 markdown files); CLAUDE.md update. |
+
+**Test count delta:**
+- Commit 1: +11 (global_exclusions loader, helpers, missing-file fallback)
+- Commit 4: +30 (column mapping, exclusions, malformed input, sidecar, real-export smoke)
+- Commit 5: +6 (4 schema-alignment tests + 2 strategy YAML tests)
+- Commit 6: +8 (stability_score helper + run_step config plumbing)
+- Commit 7: +9 (override mechanism per key, invariants, alias, no-op)
+- Commit 9: +22 (argparse, YAML/recipe resolution, recipe→config wiring, full dispatch smoke)
+- **Total: +86 tests, 820 → 906 → 902** (the -4 net is because some tests in the keepa_finder_csv update changed shape — verified all 902 pass green).
+
+**Engine deltas summary** (additive, backwards-compat preserved):
+- `fba_config_loader.GlobalExclusions` + `get_global_exclusions()` accessor
+- `calculate.run_step` consumes `compute_stability_score: bool`
+- `decide.run_step` consumes `config["overrides"]: dict`
+- `decide()` in `sourcing_engine.pipeline.decision` gains optional `overrides=` kwarg
+- `run.py --strategy <name>` dispatch (existing `--supplier` and `open` paths unchanged)
+
+**No live Keepa API integration.** The `keepa_client` library exists from Phase 2 (PRs #26-#30) but has no `product_finder()` method — that path was deliberately not built. If/when Peter trials the API, adding it is a separate workstream that doesn't change anything here.
+
+### Prior sessions
+
+### What landed in the 2026-05-01 session (Phase 3)
 
 **PR #32 — keepa_enrich foundation** (MERGED): the missing connector that lets ASIN-only sources chain into `calculate→decide`. `KeepaProduct.market_snapshot()` extracts canonical engine columns from Keepa stats indices (0=AMAZON, 3=SALES, 10=NEW_FBA, 11=COUNT_NEW, 18=BUY_BOX_SHIPPING). New `fba_engine/steps/keepa_enrich.py` joins per-ASIN market data via `KeepaClient.get_products()`. Both single + batch product paths now request `stats=90`. `_estimate_for` scales with N ASINs + stats overhead so the token bucket doesn't silently over-issue under heavy batch load. Pre-PR review caught 2 HIGH (product_name=None bug + seller_storefront chain clash), both fixed by dropping descriptive fields from canonical enrich schema. +29 tests.
 
@@ -28,7 +65,7 @@ pytest shared/lib/python/ fba_engine/steps/tests/ \
 
 **PR #35 — Skill 3 scoring extraction** (MERGED): canonical `fba_engine/steps/scoring.py` replaces the agent-driven per-niche `phase3_scoring.js` scripts. 4-dimension scoring (Demand/Stability/Competition/Margin) + 30/30/20/20 composite + 3 lane scores (Cash Flow/Profit/Balanced) + lane classification + 9-verdict ladder (YES/MAYBE/MAYBE-ROI/BRAND APPROACH/BUY THE DIP/PRICE EROSION/GATED/HAZMAT/NO). Pre-PR review caught 2 HIGH bugs by comparing against real `phase2_enriched.csv` + the legacy `phase3_scoring.js`: wrong column names (`Buy Box Drop % 90d` → `Price Drop % 90d`, `Buy Box Amazon Share` → `Buy Box Amazon %`) and margin-tier off-by-one (strict `>` not `>=`). `keepa_niche.yaml` chain now `scoring → ip_risk → build_output → decision_engine`. +64 tests.
 
-### Prior session highlights (kept for context)
+### Older session highlights
 
 **Phase 2 (PRs #26-#30, MERGED, prior session):** canonical engine refactor (6 step modules); keepa_client batch + stale-on-error; seller_storefront discovery step; seller_storefront.yaml + oa_csv.yaml; run_summary.json + strategy docs.
 
@@ -38,7 +75,17 @@ pytest shared/lib/python/ fba_engine/steps/tests/ \
 
 ### Roadmap status (where we are)
 
-**Phase 3 (post-PRD scoping items): COMPLETE** ✅ (PRs #32–#35 this session)
+**Keepa Product Finder strategies: COMPLETE** ✅ (this session, branch `feat/keepa-finder-strategies`)
+
+| Recipe | Strategy YAML | Status |
+|---|---|---|
+| `amazon_oos_wholesale` | `keepa_finder.yaml` + recipe JSON | ✅ shipped |
+| `brand_wholesale_scan` | `keepa_finder.yaml` + recipe JSON | ✅ shipped |
+| `no_rank_hidden_gem` | `keepa_finder.yaml` + recipe JSON | ✅ shipped |
+| `stable_price_low_volatility` | `keepa_finder.yaml` + recipe JSON | ✅ shipped |
+| `a2a_flip` | — | ⏸️ Deferred (PRD §6.2 future) |
+
+**Phase 3 (post-PRD scoping items): COMPLETE** ✅ (PRs #32–#35 prior session)
 
 | Phase 3 deliverable | Status |
 |---|---|
@@ -46,7 +93,7 @@ pytest shared/lib/python/ fba_engine/steps/tests/ \
 | `oa_csv` chains into `calculate → decide` (full verdicts) | ✅ #33 |
 | Drop SellerAmp — SP-API MCP enrich leads mode | ✅ #34 |
 | Skill 3 scoring → canonical step | ✅ #35 |
-| **Skill 1 (Keepa Finder) — keep browser flow** | ⏸️ Deferred per user (2026-05-01) |
+| **Skill 1 (Keepa Finder) — keep browser flow** | ✅ wired in this session via `keepa_finder` |
 
 **Engine state:** structurally complete for the strategies in scope. Future PRs are polish, not missing functionality.
 
@@ -78,6 +125,13 @@ pytest shared/lib/python/ fba_engine/steps/tests/ \
 - **Keepa stats indices:** Per `https://keepa.com/#!discuss/t/keepa-time-series-data/116`. The constants we consume: 0=AMAZON, 3=SALES (rank), 10=NEW_FBA, 11=COUNT_NEW (offer count), 18=BUY_BOX_SHIPPING. Stored as integer cents (`stats.current[18] = 1525` means £15.25). `-1` is the "no current value" sentinel — `KeepaProduct._stat_money/_stat_int` coerces both `-1` and missing arrays to `None`.
 - **`_estimate_for` token scaling (PR #32):** Single product no-stats: 6 tokens. Single product with `stats=N`: 7. 100-ASIN batch with stats: 5 + 100*2 = 205. Without per-ASIN scaling, the bucket would silently over-issue and rely on Keepa returning HTTP 429.
 - **Vitest integration tests:** Live in `src/__integration__/*.integration.test.ts`. Excluded from default `npm test` via `vitest.config.ts` exclude. Run with `npm run test:integration` (separate `vitest.integration.config.ts`).
+- **ASINs are exactly 10 chars.** Every test fixture ASIN that's 11 chars (`B0KEEP00001`, `B0SMOKE0001`) gets silently dropped by the canonical 10-char check in any discovery step that validates length (keepa_finder_csv does). Hit this twice this session — both times the test failure mode was "0 rows in output" with no obvious cause until tracing through the discovery step. Use 10-char ASINs in fixtures.
+- **Keepa CSV column names with commas** (`"New, 3rd Party FBA: Current"`) MUST be CSV-quoted. Real Keepa exports do this correctly; hand-built test CSVs that join columns with bare commas silently shift every data column right by one. Use `pd.DataFrame(...).to_csv(...)` to write fixture CSVs — pandas handles the quoting.
+- **Keepa Referral Fee % format:** Keepa exports `"15 %"` / `"15.01 %"` (with space + percent sign). `parse_money()` strips the `%` but doesn't divide; the canonical engine expects the fraction (0.15). Always divide by 100 when bridging this column. Same shape for "Buy Box: % Amazon 90 days" — though that one is informational and the divide isn't load-bearing yet.
+- **Wholesale flow buy_cost convention:** `buy_cost = 0.0` is the load-bearing signal that tells `calculate.calculate_profit` to emit `max_buy_price` (the supplier-negotiation ceiling) instead of a literal ROI. Used by `seller_storefront`, `keepa_finder`, and any future leads-only strategy. Don't pass `None` — the engine's direct `match["buy_cost"]` access KeyErrors on missing keys; 0.0 is the intentional sentinel.
+- **Strategy YAML interpolation is string-only and one-level-deep.** The `runner._interpolate_config` function only substitutes `{name}` in string values, not in dict/list values, and missing context keys raise `StrategyConfigError`. To forward a dict config (like recipe `decide_overrides`), mutate the loaded `StrategyDef` from the dispatcher (see `cli/strategy.py:_apply_recipe_to_strategy`) rather than trying to interpolate it through YAML.
+- **Recipe JSONs live with the skill that consumes them:** `_legacy_keepa/skills/keepa-product-finder/recipes/{name}.json`. Same convention as `keepa-finder-values.md` — co-located with the consumer. Future strategies that don't go through this skill should put their recipes elsewhere.
+- **`pd.read_csv(on_bad_lines='skip')`:** Real Keepa Product Finder exports occasionally have malformed lines (e.g. `kids_toys_phase1_raw.csv` line 4993 has unbalanced quotes). Skip them rather than crashing the whole run — the engine's "never crash on a single bad row" principle applies at the row-parser level too.
 
 ## Session Protocol
 - At the end of each session, update the "Current State" section above

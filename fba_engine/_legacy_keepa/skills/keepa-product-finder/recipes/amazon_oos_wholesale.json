@@ -1,0 +1,37 @@
+{
+  "name": "amazon_oos_wholesale",
+  "description": "Wholesale plays where Amazon has effectively abandoned the listing. Sustained Amazon out-of-stock, FBA sellers maintaining the listing, healthy BSR. Each shortlisted ASIN goes to supplier outreach to negotiate trade.",
+  "thesis": "Amazon has stopped selling — brand wants resellers — we negotiate trade pricing.",
+  "marketplace": "GB",
+  "requires_category": true,
+  "requires_brands": false,
+
+  "url_filters": {
+    "BUY_BOX_SHIPPING_current": {"filterType": "number", "type": "inRange", "filter": 20, "filterTo": 40},
+    "SALES_current": {"filterType": "number", "type": "lessThanOrEqual", "filter": 100000, "filterTo": null},
+    "SALES_avg90": {"filterType": "number", "type": "lessThanOrEqual", "filter": 80000, "filterTo": null},
+    "COUNT_NEW_FBA_current": {"filterType": "number", "type": "inRange", "filter": 2, "filterTo": 10},
+    "monthlySold": {"filterType": "number", "type": "greaterThanOrEqual", "filter": 50, "filterTo": null}
+  },
+
+  "ui_filters": {
+    "boolean_no": ["isAdultProduct"],
+    "checkboxes": ["AMAZON_outOfStock"]
+  },
+
+  "sort": [{"colId": "SALES_current", "sort": "asc"}],
+  "rows_per_page": 5000,
+
+  "global_exclusions": "auto",
+
+  "calculate_config": {
+    "compute_stability_score": true
+  },
+
+  "notes": [
+    "AMAZON_outOfStock checkbox sets the 'Amazon currently OOS' boolean. Combined with the seller-count window and monthly-sold floor, captures the abandoned-but-still-selling pattern.",
+    "monthlySold ≥ 50 is the velocity floor that confirms the absence is sustained, not a 1-day glitch.",
+    "If a verified `outOfStockPercentage90_AMAZON` field key turns up at runtime, append a {filter: 70, filterTo: null, type: greaterThanOrEqual} block under url_filters and save-back to keepa-finder-values.md per the skill's save-back rule.",
+    "compute_stability_score flows into 04_calculate.config — populates stability_score column in output (informational, does not gate)."
+  ]
+}
