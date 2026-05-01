@@ -190,7 +190,17 @@ def decide(row: dict, overrides: dict | None = None) -> tuple[str, str]:
         return "SHORTLIST", shortlist_reason
 
     # REVIEW
-    review_flag_hits = [f for f in risk_flags if f in REVIEW_FLAGS]
+    # Exclude flags that already appeared in the "Blocked by:" line above.
+    # Some flags (PRICE_FLOOR_HIT, VAT_*, PRICE_MISMATCH_RRP,
+    # BUY_BOX_ABOVE_AVG90) are deliberately members of both SHORTLIST_BLOCKERS
+    # (to prevent auto-shortlist) AND REVIEW_FLAGS (to surface in reason
+    # text). Without this filter, the operator sees the flag twice in the
+    # same row's decision_reason — once as "Blocked by:" and once as
+    # "Review flags:" — which is noise, not signal.
+    review_flag_hits = [
+        f for f in risk_flags
+        if f in REVIEW_FLAGS and f not in SHORTLIST_BLOCKERS
+    ]
     if review_flag_hits:
         reasons.append(f"Review flags: {', '.join(review_flag_hits)}")
     reason_str = "; ".join(reasons) if reasons else "Does not meet shortlist criteria"

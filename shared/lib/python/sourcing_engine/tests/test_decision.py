@@ -59,6 +59,44 @@ def test_buy_box_above_avg90_routes_to_review():
     assert BUY_BOX_ABOVE_AVG90 in reason
 
 
+def test_dual_set_flag_appears_once_in_reason():
+    """Flags that are members of BOTH SHORTLIST_BLOCKERS and REVIEW_FLAGS
+    must appear ONCE in decision_reason ("Blocked by: …"), not also
+    repeated under "Review flags: …". Operator-readability fix —
+    duplication is noise.
+
+    BUY_BOX_ABOVE_AVG90, PRICE_FLOOR_HIT, VAT_FIELD_MISMATCH,
+    PRICE_MISMATCH_RRP and the VAT flags are all in both sets by design.
+    """
+    row = _make_row(risk_flags=[BUY_BOX_ABOVE_AVG90])
+    decision, reason = decide(row)
+    assert decision == "REVIEW"
+    # Flag appears in "Blocked by:" line.
+    assert "Blocked by: BUY_BOX_ABOVE_AVG90" in reason
+    # And NOT in any "Review flags:" line.
+    assert "Review flags:" not in reason or BUY_BOX_ABOVE_AVG90 not in (
+        reason.split("Review flags:", 1)[1] if "Review flags:" in reason else ""
+    )
+    # Belt-and-braces: the literal flag name appears exactly once.
+    assert reason.count(BUY_BOX_ABOVE_AVG90) == 1
+
+
+def test_blocking_and_review_flags_keep_distinct_attribution():
+    """When a row carries one SHORTLIST_BLOCKERS flag AND one purely-
+    REVIEW_FLAGS flag, each appears in its own section."""
+    from sourcing_engine.utils.flags import SINGLE_FBA_SELLER
+    row = _make_row(risk_flags=[BUY_BOX_ABOVE_AVG90, SINGLE_FBA_SELLER])
+    decision, reason = decide(row)
+    assert decision == "REVIEW"
+    # BUY_BOX_ABOVE_AVG90 in both sets → "Blocked by:" only.
+    assert "Blocked by: BUY_BOX_ABOVE_AVG90" in reason
+    # SINGLE_FBA_SELLER only in REVIEW_FLAGS → "Review flags:" only.
+    assert "Review flags: SINGLE_FBA_SELLER" in reason
+    # Each name appears exactly once.
+    assert reason.count(BUY_BOX_ABOVE_AVG90) == 1
+    assert reason.count("SINGLE_FBA_SELLER") == 1
+
+
 def test_gated_y_shortlists_with_indicator():
     row = _make_row(gated="Y")
     decision, reason = decide(row)
