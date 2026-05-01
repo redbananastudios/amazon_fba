@@ -92,6 +92,12 @@ class StrategyDef:
     output_xlsx: str | None = None      # interpolation-friendly; styled
                                          # workbook via excel_writer (URL
                                          # cells are clickable hyperlinks)
+    output_gsheet: dict[str, Any] | None = None  # {title, folder_id?, id_file?}
+                                                  # uploads the XLSX to Google
+                                                  # Drive as a Sheet via the
+                                                  # legacy push_to_gsheets.js
+                                                  # script. Requires a working
+                                                  # google-service-account.json.
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -200,6 +206,29 @@ def load_strategy(yaml_path: Path | str) -> StrategyDef:
             f"{discover_raw!r}"
         )
 
+    # output.gsheet: structured block (not a path string) — must be a
+    # mapping with at least `title`. Optional: `folder_id`, `id_file`.
+    # We accept None / missing entirely; reject any other shape so a
+    # malformed YAML fails at load, not when the runner tries to
+    # subprocess-dispatch with garbage args.
+    gsheet_raw = output_block.get("gsheet")
+    gsheet_cfg: dict[str, Any] | None = None
+    if gsheet_raw is not None:
+        if not isinstance(gsheet_raw, dict):
+            raise StrategyConfigError(
+                f"{yaml_path}: output.gsheet must be a mapping with at "
+                f"least `title`, got {type(gsheet_raw).__name__}"
+            )
+        if "title" not in gsheet_raw:
+            raise StrategyConfigError(
+                f"{yaml_path}: output.gsheet requires a `title` field"
+            )
+        gsheet_cfg = {
+            "title": str(gsheet_raw["title"]),
+            "folder_id": gsheet_raw.get("folder_id"),
+            "id_file": gsheet_raw.get("id_file"),
+        }
+
     return StrategyDef(
         name=str(data["name"]),
         description=str(data.get("description", "")),
@@ -209,6 +238,7 @@ def load_strategy(yaml_path: Path | str) -> StrategyDef:
         steps=steps,
         output_csv=output_block.get("csv"),
         output_xlsx=output_block.get("xlsx"),
+        output_gsheet=gsheet_cfg,
     )
 
 
@@ -327,6 +357,25 @@ def run_strategy(
                 xlsx_path,
             )
 
+    if strategy.output_gsheet and outputs.get("xlsx"):
+        # Upload the XLSX to Google Drive as a Sheet via the legacy
+        # push_to_gsheets.js script. Requires:
+        #   - node on PATH
+        #   - googleapis npm package installed (run `npm install` in
+        #     fba_engine/_legacy_keepa/)
+        #   - service account key at
+        #     fba_engine/_legacy_keepa/config/google-service-account.json
+        # Silent skip when any prerequisite is missing — matches the
+        # preflight contract: an unconfigured environment shouldn't
+        # block CSV/XLSX from landing.
+        url = _push_xlsx_to_gsheet(
+            xlsx_path=outputs["xlsx"],
+            gsheet_cfg=strategy.output_gsheet,
+            context=context,
+        )
+        if url:
+            outputs["gsheet_url"] = url
+
     if strategy.output_csv:
         # Write the run_summary.json sibling. Naming: <csv-stem>.summary.json
         # so multiple strategies sharing a parent directory don't clash.
@@ -353,6 +402,91 @@ def run_strategy(
         )
 
     return df
+
+
+def _push_xlsx_to_gsheet(
+    xlsx_path: str,
+    gsheet_cfg: dict[str, Any],
+    context: dict[str, Any],
+) -> str | None:
+    """Upload an XLSX to Google Drive as a Sheet via push_to_gsheets.js.
+
+    Returns the Sheet URL on success; ``None`` when prerequisites aren't
+    met (no node, no googleapis package, no service account key, or
+    upload fails). Silent-skip on prerequisite-missing matches the
+    preflight contract — an unconfigured env shouldn't block the file
+    outputs already on disk.
+
+    Hard-fail (raises) only if the gsheet config itself is malformed
+    after interpolation — that's a YAML bug, not an env issue.
+    """
+    import shutil
+    import subprocess
+
+    # Locate the script + service account key + node binary.
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = (
+        repo_root / "fba_engine" / "_legacy_keepa" / "skills"
+        / "skill-5-build-output" / "push_to_gsheets.js"
+    )
+    key_path = (
+        repo_root / "fba_engine" / "_legacy_keepa" / "config"
+        / "google-service-account.json"
+    )
+
+    if shutil.which("node") is None:
+        logger.info("gsheet: skipping (node executable not on PATH)")
+        return None
+    if not script_path.exists():
+        logger.info("gsheet: skipping (push_to_gsheets.js not at %s)", script_path)
+        return None
+    if not key_path.exists():
+        logger.info("gsheet: skipping (service account key not at %s)", key_path)
+        return None
+
+    # Interpolate the title + id_file. folder_id is passed through —
+    # the script falls back to GOOGLE_DRIVE_FOLDER_ID env var when None.
+    title = interpolate(gsheet_cfg["title"], context)
+    id_file = gsheet_cfg.get("id_file")
+    if id_file:
+        id_file = interpolate(id_file, context)
+    folder_id = gsheet_cfg.get("folder_id")
+
+    cmd = [
+        "node", str(script_path),
+        "--xlsx", str(xlsx_path),
+        "--title", title,
+    ]
+    if id_file:
+        cmd += ["--id-file", str(id_file)]
+    if folder_id:
+        cmd += ["--folder", str(folder_id)]
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120,
+            encoding="utf-8", errors="replace",
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning("gsheet: subprocess failed (%s)", e)
+        return None
+
+    if result.returncode != 0:
+        logger.warning(
+            "gsheet: push_to_gsheets.js exited %d. stderr: %s",
+            result.returncode, result.stderr.strip()[:500],
+        )
+        return None
+
+    # The script prints `URL: https://...` on success. Find that line.
+    for line in (result.stdout or "").splitlines():
+        if line.startswith("URL:"):
+            return line[len("URL:"):].strip()
+    logger.warning(
+        "gsheet: push_to_gsheets.js did not emit a URL line. stdout: %s",
+        (result.stdout or "").strip()[:500],
+    )
+    return None
 
 
 def _resolve_input_df(
@@ -447,6 +581,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Output CSV: {interpolate(strategy.output_csv, context)}")
     if strategy.output_xlsx:
         print(f"Output XLSX: {interpolate(strategy.output_xlsx, context)}")
+    if strategy.output_gsheet:
+        # The runner already wrote it (or silently skipped) inside
+        # run_strategy; the URL is in run_summary.json — we don't
+        # re-fetch here to avoid double work. Operators read either the
+        # CLI summary or the JSON.
+        print(
+            f"Output GSheet: declared with title "
+            f"\"{interpolate(strategy.output_gsheet['title'], context)}\""
+            " — see run_summary.json for the resulting URL"
+        )
     return 0
 
 

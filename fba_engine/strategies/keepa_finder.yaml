@@ -85,3 +85,11 @@ output:
   # auto-excludes REJECT rows. The XLSX is the operator's working file;
   # the CSV is the audit trail.
   xlsx: "{output_dir}/keepa_finder_{recipe}_{timestamp}.xlsx"
+  # Google Sheet upload via the legacy push_to_gsheets.js script.
+  # Silently skipped when prerequisites aren't met (no node, no
+  # googleapis package, no service account key) — does not block CSV
+  # or XLSX from landing. The id_file lets reruns of the same recipe
+  # delete the previous sheet rather than spam new ones.
+  gsheet:
+    title: "Keepa Finder — {recipe} — {timestamp}"
+    id_file: "{output_dir}/keepa_finder_{recipe}_{timestamp}.gsheet_id.txt"

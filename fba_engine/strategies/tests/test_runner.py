@@ -520,6 +520,161 @@ class TestKeepaFinderXlsxOutput:
         assert strat.output_xlsx is not None and strat.output_xlsx.endswith(".xlsx")
 
 
+class TestRunStrategyOutputGsheet:
+    """Runner uploads the XLSX to Google Drive as a Sheet via
+    push_to_gsheets.js when output.gsheet is set. Subprocess mocked so
+    tests don't hit real Google APIs / require service account creds."""
+
+    def test_gsheet_block_parses(self, tmp_path: Path):
+        yaml_text = (
+            "name: g\n"
+            "description: g\n"
+            "steps: []\n"
+            "output:\n"
+            "  csv: out.csv\n"
+            "  xlsx: out.xlsx\n"
+            "  gsheet:\n"
+            "    title: \"Hello {recipe}\"\n"
+            "    id_file: out.gsheet_id.txt\n"
+        )
+        yp = tmp_path / "g.yaml"
+        yp.write_text(yaml_text, encoding="utf-8")
+        strat = load_strategy(yp)
+        assert strat.output_gsheet is not None
+        assert strat.output_gsheet["title"] == "Hello {recipe}"
+        assert strat.output_gsheet["id_file"] == "out.gsheet_id.txt"
+        assert strat.output_gsheet["folder_id"] is None
+
+    def test_gsheet_block_requires_title(self, tmp_path: Path):
+        yaml_text = (
+            "name: g\n"
+            "description: g\n"
+            "steps: []\n"
+            "output:\n"
+            "  csv: out.csv\n"
+            "  gsheet:\n"
+            "    id_file: x.txt\n"   # title missing — must reject
+        )
+        yp = tmp_path / "g.yaml"
+        yp.write_text(yaml_text, encoding="utf-8")
+        with pytest.raises(StrategyConfigError, match="requires a `title`"):
+            load_strategy(yp)
+
+    def test_gsheet_block_must_be_a_mapping(self, tmp_path: Path):
+        yaml_text = (
+            "name: g\n"
+            "description: g\n"
+            "steps: []\n"
+            "output:\n"
+            "  csv: out.csv\n"
+            "  gsheet: not a mapping\n"
+        )
+        yp = tmp_path / "g.yaml"
+        yp.write_text(yaml_text, encoding="utf-8")
+        with pytest.raises(StrategyConfigError, match="must be a mapping"):
+            load_strategy(yp)
+
+    def test_gsheet_skip_when_node_missing(self, tmp_path: Path, monkeypatch):
+        """No node on PATH → silent skip (no exception, no URL)."""
+        from fba_engine.strategies import runner as runner_mod
+        # Make shutil.which return None for "node"
+        import shutil
+        monkeypatch.setattr(
+            shutil, "which",
+            lambda name: None if name == "node" else "/usr/bin/" + name,
+        )
+        url = runner_mod._push_xlsx_to_gsheet(
+            xlsx_path=str(tmp_path / "any.xlsx"),
+            gsheet_cfg={"title": "x", "folder_id": None, "id_file": None},
+            context={},
+        )
+        assert url is None
+
+    def test_gsheet_skip_when_service_account_key_missing(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """No service-account.json → silent skip."""
+        from fba_engine.strategies import runner as runner_mod
+        # Patch Path so the key file lookup misses (use a tmp repo root
+        # that doesn't have the key).
+        monkeypatch.setattr(
+            runner_mod, "__file__",
+            str(tmp_path / "fba_engine" / "strategies" / "runner.py"),
+        )
+        url = runner_mod._push_xlsx_to_gsheet(
+            xlsx_path=str(tmp_path / "any.xlsx"),
+            gsheet_cfg={"title": "x", "folder_id": None, "id_file": None},
+            context={},
+        )
+        assert url is None
+
+    def test_gsheet_extracts_url_from_subprocess_stdout(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """Happy path: subprocess prints `URL: https://...` and runner
+        extracts it correctly. Verifies the contract between the JS
+        script's stdout format and the runner's parser."""
+        from fba_engine.strategies import runner as runner_mod
+        from unittest.mock import MagicMock
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda name: "node")
+
+        # Stub the script + key existence checks so the function reaches
+        # the subprocess call.
+        repo_root = Path(runner_mod.__file__).resolve().parents[2]
+        script = repo_root / "fba_engine" / "_legacy_keepa" / "skills" / "skill-5-build-output" / "push_to_gsheets.js"
+        key = repo_root / "fba_engine" / "_legacy_keepa" / "config" / "google-service-account.json"
+        if not script.exists() or not key.exists():
+            pytest.skip("legacy keepa script / key not present in this checkout")
+
+        sheet_url = "https://docs.google.com/spreadsheets/d/abc123/edit"
+        fake_proc = MagicMock(
+            returncode=0,
+            stdout=(
+                f"Uploaded (xlsx conversion): test\n"
+                f"Sheet ID: abc123\n"
+                f"URL: {sheet_url}\n"
+            ),
+            stderr="",
+        )
+        import subprocess
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake_proc)
+
+        url = runner_mod._push_xlsx_to_gsheet(
+            xlsx_path=str(tmp_path / "any.xlsx"),
+            gsheet_cfg={"title": "x", "folder_id": None, "id_file": None},
+            context={},
+        )
+        assert url == sheet_url
+
+    def test_gsheet_handles_subprocess_failure(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """Non-zero exit code from the script → silent skip + warn log."""
+        from fba_engine.strategies import runner as runner_mod
+        from unittest.mock import MagicMock
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda name: "node")
+        repo_root = Path(runner_mod.__file__).resolve().parents[2]
+        script = repo_root / "fba_engine" / "_legacy_keepa" / "skills" / "skill-5-build-output" / "push_to_gsheets.js"
+        key = repo_root / "fba_engine" / "_legacy_keepa" / "config" / "google-service-account.json"
+        if not script.exists() or not key.exists():
+            pytest.skip("legacy keepa script / key not present in this checkout")
+
+        fake_proc = MagicMock(returncode=1, stdout="", stderr="invalid grant")
+        import subprocess
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake_proc)
+
+        url = runner_mod._push_xlsx_to_gsheet(
+            xlsx_path=str(tmp_path / "any.xlsx"),
+            gsheet_cfg={"title": "x", "folder_id": None, "id_file": None},
+            context={},
+        )
+        assert url is None
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: keepa_niche YAML against a real fixture
 # ---------------------------------------------------------------------------
