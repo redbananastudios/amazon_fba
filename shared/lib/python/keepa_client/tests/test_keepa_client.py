@@ -61,6 +61,24 @@ class TestKeepaProductModel:
         with pytest.raises(Exception):  # pydantic.ValidationError
             KeepaProduct.model_validate({"title": "no asin"})
 
+    def test_null_category_tree_coerced_to_empty_list(self):
+        """Real Keepa /product responses for some popular ASINs (e.g.
+        B0CCM2W57G, B07JCZW3Z9) return ``categoryTree: null``. The model
+        must coerce that to ``[]`` rather than raise — otherwise the
+        single_asin strategy can't validate the response and the whole
+        product is dropped from the batch. Regression-pin so a future
+        Pydantic upgrade or refactor can't silently revert the fix."""
+        payload = {"asin": "B0CCM2W57G", "categoryTree": None}
+        product = KeepaProduct.model_validate(payload)
+        assert product.category_tree == []
+        # Belt-and-braces: also confirm a populated tree still works
+        # (the validator only runs in `mode="before"` so non-None values
+        # pass through to the inner list-of-dict validation).
+        product2 = KeepaProduct.model_validate(
+            {"asin": "B01EXAMPLE", "categoryTree": [{"catId": 1, "name": "X"}]}
+        )
+        assert product2.category_tree == [{"catId": 1, "name": "X"}]
+
     def test_market_snapshot_extracts_canonical_columns(self):
         # Stats current[] is keyed by Keepa's CSV index enum:
         #   0=AMAZON, 3=SALES (rank), 10=NEW_FBA, 11=COUNT_NEW, 18=BUY_BOX

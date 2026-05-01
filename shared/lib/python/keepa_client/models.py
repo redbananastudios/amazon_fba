@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -59,9 +59,18 @@ class KeepaProduct(BaseModel):
     asin: str
     title: Optional[str] = None
     brand: Optional[str] = None
+    # Keepa returns ``categoryTree=None`` for some popular ASINs (e.g.
+    # Amazon-branded electronics) — coerce to empty list so the model
+    # validates instead of rejecting the whole product. Operators still
+    # see the (empty) list rather than a missing key.
     category_tree: list[dict[str, Any]] = Field(
-        default_factory=list, alias="categoryTree"
+        default_factory=list, alias="categoryTree", validate_default=False,
     )
+
+    @field_validator("category_tree", mode="before")
+    @classmethod
+    def _coerce_none_category_tree(cls, v: Any) -> Any:
+        return [] if v is None else v
     # Keepa's `csv` is a list of 30+ parallel time-series. We surface it as
     # opaque list-of-lists; callers that need a specific series index by
     # Keepa's documented enum positions (kept out of this model to avoid

@@ -81,6 +81,43 @@ class TestParseArgs:
         ctx = cli_strategy._build_context(ns)
         assert "seller_id" not in ctx
 
+    def test_asin_flag_parses_and_threads_into_context(self):
+        """--asin is a first-class arg for the single_asin strategy. Must
+        parse onto the namespace and propagate to the runner context so
+        {asin} interpolation in the strategy YAML resolves."""
+        ns = cli_strategy._parse_args([
+            "--strategy", "single_asin",
+            "--asin", "B0EXAMPLE1",
+        ])
+        assert ns.asin == "B0EXAMPLE1"
+        ctx = cli_strategy._build_context(ns)
+        assert ctx["asin"] == "B0EXAMPLE1"
+
+    def test_buy_cost_flag_parses_and_threads_into_context(self):
+        ns = cli_strategy._parse_args([
+            "--strategy", "single_asin",
+            "--asin", "B0EXAMPLE1",
+            "--buy-cost", "6.50",
+        ])
+        assert ns.buy_cost == "6.50"
+        ctx = cli_strategy._build_context(ns)
+        assert ctx["buy_cost"] == "6.50"
+
+    def test_buy_cost_absent_does_not_pollute_context(self):
+        """Strategies that don't need a buy_cost should not see a stray
+        key — the context dict should only carry intentional values."""
+        ns = cli_strategy._parse_args(["--strategy", "keepa_finder"])
+        ctx = cli_strategy._build_context(ns)
+        assert "asin" not in ctx
+        assert "buy_cost" not in ctx
+
+    def test_single_asin_without_asin_flag_raises_helpful_error(self):
+        """`python run.py --strategy single_asin` without --asin would
+        otherwise fail mid-run with a runner KeyError. Fail loud + clear
+        at the CLI layer instead, with an example invocation."""
+        with pytest.raises(SystemExit, match="single_asin.*--asin"):
+            cli_strategy.main(["--strategy", "single_asin"])
+
     def test_context_repeatable(self):
         ns = cli_strategy._parse_args([
             "--strategy", "x",
