@@ -6,27 +6,40 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-01 late session — store-stalking strategy shipped, peak-buying flag added, decision_reason cleaned up.
-**Currently working on:** Nothing in flight. Engine has end-to-end CSV/XLSX/GSheet outputs, Gated cells render Y/N, store-stalking is wired, peak-buying detection catches "buying at the top" via the Browser CSV alone. Single branch (main) holds all work.
-**Status:** main at HEAD of #48. **987 Python tests pass.** MCP suite untouched (110 unit + 5 integration still green). Working tree clean.
+**Last updated:** 2026-05-01 late evening — single-ASIN verdict workflow shipped + tuned against real-world product data.
+**Currently working on:** Nothing in flight. Engine now has full coverage of three operator workflows: category sweep (keepa_finder), competitor walk (seller_storefront_csv), single-ASIN verdict (single_asin). All produce CSV + (where applicable) XLSX + auto-uploaded Google Sheet. Single branch (main) holds all work.
+**Status:** main at HEAD of #51. **1021 Python tests pass.** MCP suite untouched (110 unit + 5 integration still green). Working tree clean.
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                          # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 987/987 in ~44s
+       fba_engine/strategies/tests/ cli/tests/                       # 1021/1021 in ~43s
 ```
 
 ### What landed this session (2026-05-01)
 
 | PR | Summary |
 |---|---|
-| **#44** (security) | Untracked the leaked Google service account JSON, gitignore line 76 (`google-service-account*.json`) catches future copies. Rotated to key `296eef282133`. |
-| **#45** (bug fix) | `gated` Y/N/UNKNOWN derived from `restriction_status` in preflight._coerce_result + _seed_row. XLSX "Gated" cell was None for every row pre-fix; now correct via SP-API. +13 tests. |
-| **#46** (feature) | `seller_storefront_csv` strategy — browser-driven store stalking. Operator exports a competitor's storefront from Keepa Browser, runs the engine, gets full SP-API enrichment + max_buy_price ceiling + supplier-search URLs + auto-uploaded Sheet. Reuses keepa_finder_csv mapper (same export schema). +16 tests. |
-| **#47** (feature) | `BUY_BOX_ABOVE_AVG90` peak-buying flag in calculate.py. Fires when current Buy Box > 90d avg by ≥20% (configurable). Browser-tier-friendly (no API tokens). 17/251 rows flagged on Toys & Games dataset, all routed to REVIEW. +9 tests. |
-| **#48** (cleanup) | `decide()` deduplicates flag names in `decision_reason` when a flag is in both SHORTLIST_BLOCKERS and REVIEW_FLAGS. +2 tests. |
+| **#44** (security) | Untracked leaked Google service account JSON; rotated to key `296eef282133`. gitignore line 76 catches future copies. |
+| **#45** (bug fix) | `gated` Y/N/UNKNOWN derived from `restriction_status` in preflight._coerce_result + _seed_row. +13 tests. |
+| **#46** (feature) | `seller_storefront_csv` strategy — browser-driven store stalking via Keepa Browser export. +16 tests. |
+| **#47** (feature) | `BUY_BOX_ABOVE_AVG90` peak-buying flag in calculate.py (current vs 90d avg ≥20%). Browser-tier-friendly. +9 tests. |
+| **#48** (cleanup) | `decide()` dedups flag names in `decision_reason` when a flag is in both SHORTLIST_BLOCKERS and REVIEW_FLAGS. +2 tests. |
+| **#49** (feature) | `single_asin` verdict strategy — single-ASIN entry point with stdout verdict block + categoryTree=null pydantic fix. +16 tests. |
+| **#50** (engine tuning) | `_pick_market_price` 3-arg fall-through to amazon_price + AMAZON_ONLY_PRICE flag; `single_asin.yaml` ships with `min_sales floors=0` overrides. Triggered by B0B636ZKZQ false-REJECT. +4 tests. |
+| **#51** (engine tuning) | Use Keepa offers list for real market price + BSR-drop sales fallback. Engine now reads the live offer table via `offers=20` and counts rank-improvement events as sale proxies when `monthly_sold` is None. +11 tests. |
+
+### B0B636ZKZQ calibration (Casdon Morphy Richards Toaster — Peter's actual product)
+
+PRs #50 + #51 driven by this real-world test. Engine pre-fix REJECTed with "No valid market price"; post-fix:
+- Buy Box (current): **£16.90** (matches Keepa Browser screenshot exactly)
+- Buy Box 90d avg: **£16.32**
+- Sales/month: **73** (BSR-drop heuristic — Keepa's `monthly_sold` was None)
+- Verdict (no buy_cost): REVIEW + max_buy_price **£5.96** + "WORTH A SUPPLIER ASK"
+- Verdict with `--buy-cost 4.00`: SHORTLIST + 111.4% ROI + PURSUE
+- Amazon's £23.86 offer (dormant inventory) correctly visible in printer but not driving economics
 
 **Workspace Shared Drive (gsheet auto-upload):**
 - Service account `claude@mcp-access-490812.iam.gserviceaccount.com` is a Content Manager on the **Amazon FBA** Shared Drive (`0ABr-7qEsFb7FUk9PVA`).
