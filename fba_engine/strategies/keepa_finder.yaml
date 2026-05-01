@@ -81,3 +81,7 @@ steps:
 
 output:
   csv: "{output_dir}/keepa_finder_{recipe}_{timestamp}.csv"
+  # Styled workbook — clickable hyperlinks on amazon_url + restriction_links,
+  # auto-excludes REJECT rows. The XLSX is the operator's working file;
+  # the CSV is the audit trail.
+  xlsx: "{output_dir}/keepa_finder_{recipe}_{timestamp}.xlsx"

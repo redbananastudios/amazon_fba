@@ -33,12 +33,15 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import logging
 import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 import yaml
@@ -86,6 +89,9 @@ class StrategyDef:
     input_encoding: str = "utf-8-sig"
     input_discover: bool = False        # first step creates the DataFrame
     output_csv: str | None = None       # interpolation-friendly
+    output_xlsx: str | None = None      # interpolation-friendly; styled
+                                         # workbook via excel_writer (URL
+                                         # cells are clickable hyperlinks)
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -202,6 +208,7 @@ def load_strategy(yaml_path: Path | str) -> StrategyDef:
         input_discover=discover_raw,
         steps=steps,
         output_csv=output_block.get("csv"),
+        output_xlsx=output_block.get("xlsx"),
     )
 
 
@@ -297,6 +304,30 @@ def run_strategy(
         )
         outputs["csv"] = str(out_path)
 
+    if strategy.output_xlsx:
+        # Styled XLSX via excel_writer — URL-format cells become
+        # one-click hyperlinks (Amazon URL, Ungate Links). Auto-excludes
+        # REJECT rows so the operator's working set is REVIEW + SHORTLIST
+        # only. Lazy-imported because the writer pulls openpyxl which
+        # tests / cli paths that only need CSV shouldn't have to load.
+        from sourcing_engine.output.excel_writer import write_excel
+
+        xlsx_path = Path(interpolate(strategy.output_xlsx, context))
+        xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+        # write_excel handles its own try/except; passes through silent
+        # on failure with a logged exception (so a bad sheet doesn't
+        # blow up the whole run after CSV already wrote).
+        write_excel(df, str(xlsx_path))
+        if xlsx_path.exists():
+            outputs["xlsx"] = str(xlsx_path)
+        else:
+            logger.warning(
+                "runner: xlsx output declared at %s but file not written "
+                "(see excel_writer logs for the underlying error)",
+                xlsx_path,
+            )
+
+    if strategy.output_csv:
         # Write the run_summary.json sibling. Naming: <csv-stem>.summary.json
         # so multiple strategies sharing a parent directory don't clash.
         summary_path = out_path.with_suffix(".summary.json")
@@ -414,6 +445,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Strategy complete: {len(df)} rows, {len(df.columns)} columns")
     if strategy.output_csv:
         print(f"Output CSV: {interpolate(strategy.output_csv, context)}")
+    if strategy.output_xlsx:
+        print(f"Output XLSX: {interpolate(strategy.output_xlsx, context)}")
     return 0
 
 
