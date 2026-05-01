@@ -36,6 +36,14 @@ INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"      # <30 days qualifying Keepa F
 # supplier-negotiation ceiling computed against the current price would
 # lock the operator into a position that erodes if the listing reverts.
 BUY_BOX_ABOVE_AVG90 = "BUY_BOX_ABOVE_AVG90"
+# Fired when the engine had to fall back to Amazon's price as the
+# market reference because Keepa's Buy Box (idx 18) and FBA-only (idx 10)
+# stats were both empty. Common for niche or freshly-listed products
+# Keepa hasn't profiled into those buckets yet. Operator should treat
+# the resulting economics as indicative only — when Amazon competes on
+# the listing, 3rd-party FBA may actually be priced lower than the
+# Amazon offer that drove the calculation.
+AMAZON_ONLY_PRICE = "AMAZON_ONLY_PRICE"
 
 # --- Sets used by the decision engine ---
 
@@ -71,6 +79,7 @@ REVIEW_FLAGS = frozenset({
     CASE_QTY_UNKNOWN,
     PRICE_MISMATCH_RRP,
     BUY_BOX_ABOVE_AVG90,
+    AMAZON_ONLY_PRICE,
 })
 
 

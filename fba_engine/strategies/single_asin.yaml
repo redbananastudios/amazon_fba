@@ -58,8 +58,17 @@ steps:
     module: fba_engine.steps.calculate
 
   # Stage 05 — decide: SHORTLIST / REVIEW / REJECT verdict.
+  # Single-ASIN mode is an on-demand operator query ("should I buy
+  # THIS one ASIN?") rather than a portfolio-velocity gate, so the
+  # default sales-volume floors don't apply — a profitable low-volume
+  # niche listing should still get a verdict on its merits. Operator
+  # who genuinely wants velocity gating can layer a recipe later.
   - name: decide
     module: fba_engine.steps.decide
+    config:
+      overrides:
+        min_sales_review: 0
+        min_sales_shortlist: 0
 
 output:
   csv: "{output_dir}/single_asin_{asin}_{timestamp}.csv"

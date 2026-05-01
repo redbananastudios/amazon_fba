@@ -429,6 +429,13 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
     print(f"  Buy Box (90d avg):     {_fmt(bb_avg90)}"
           f"   delta: {f'{delta_pct:+.1f}%' if delta_pct is not None else '-'}")
     print(f"  3rd-party FBA:         {_fmt(row.get('new_fba_price'))}")
+    # Amazon price — shown always so the operator sees what's actually
+    # happening on the listing even when Buy Box / FBA stats are sparse.
+    # When Amazon is the only price the engine had to work with, the
+    # AMAZON_ONLY_PRICE flag on the row tells the operator the
+    # economics ride on this number rather than the more representative
+    # Buy Box / lowest-FBA reading.
+    print(f"  Amazon (current):      {_fmt(row.get('amazon_price'))}")
     print(f"  FBA seller count:      {_fmt_int(row.get('fba_seller_count'))}")
     print(f"  Sales/month (Keepa):   {_fmt_int(row.get('sales_estimate'))}")
     print(f"  Amazon status:         {row.get('amazon_status') or '-'}")

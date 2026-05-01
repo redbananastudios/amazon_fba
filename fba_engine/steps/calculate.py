@@ -36,6 +36,7 @@ from sourcing_engine.pipeline.fees import calculate_fees_fba, calculate_fees_fbm
 from sourcing_engine.pipeline.profit import calculate_profit
 from sourcing_engine.utils.flags import (
     AMAZON_ON_LISTING,
+    AMAZON_ONLY_PRICE,
     AMAZON_STATUS_UNKNOWN,
     BUY_BOX_ABOVE_AVG90,
     FBM_ONLY,
@@ -97,10 +98,25 @@ def _calculate_match(match: dict) -> dict:
     amazon_status = match.get("amazon_status")
     buy_box_price = match.get("buy_box_price")
     lowest_fba_price = match.get("new_fba_price")
+    amazon_price = match.get("amazon_price")
 
     if fba_seller_count > 0:
         price_basis = "FBA"
-        market_price = _pick_market_price(buy_box_price, lowest_fba_price)
+        market_price = _pick_market_price(
+            buy_box_price, lowest_fba_price, amazon_price,
+        )
+        # Surface the Amazon-fallback case as a flag — operator should
+        # know the economics ride on Amazon's price, not the more
+        # representative Buy Box / lowest-FBA. Common for niche or
+        # freshly-listed products Keepa hasn't profiled into the BB/FBA
+        # stats buckets yet.
+        if (
+            market_price is not None
+            and (buy_box_price is None or buy_box_price <= 0)
+            and (lowest_fba_price is None or lowest_fba_price <= 0)
+            and amazon_price is not None and amazon_price > 0
+        ):
+            risk_flags.append(AMAZON_ONLY_PRICE)
         if amazon_status == "ON_LISTING":
             risk_flags.append(AMAZON_ON_LISTING)
         elif amazon_status == "UNKNOWN":
@@ -201,10 +217,30 @@ def _calculate_match(match: dict) -> dict:
     return match
 
 
-def _pick_market_price(bb: float | None, fba: float | None) -> float | None:
-    """Lower of buy-box and lowest 3rd-party FBA. Mirrors legacy."""
+def _pick_market_price(
+    bb: float | None,
+    fba: float | None,
+    amazon: float | None = None,
+) -> float | None:
+    """Lower of buy-box and lowest 3rd-party FBA, falling back to
+    Amazon's price when both Keepa stats are empty.
+
+    Real-world Keepa responses for niche / freshly-listed products
+    return -1 sentinels for both BUY_BOX_SHIPPING (idx 18) and NEW_FBA
+    (idx 10), even when Amazon themselves are tracked at idx 0. Without
+    the Amazon fall-through, the engine REJECTed those rows for "no
+    valid market price" — false-rejecting otherwise viable products.
+    The Amazon-fallback path is annotated upstream with the
+    AMAZON_ONLY_PRICE risk flag so the operator knows the economics
+    are computed against Amazon's offer rather than the more
+    representative Buy Box / lowest-FBA reading.
+    """
     candidates = [p for p in (bb, fba) if p is not None and p > 0]
-    return min(candidates) if candidates else None
+    if candidates:
+        return min(candidates)
+    if amazon is not None and amazon > 0:
+        return amazon
+    return None
 
 
 def _fees(
