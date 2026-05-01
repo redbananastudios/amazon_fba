@@ -105,3 +105,87 @@ class TestRunStep:
         df = pd.DataFrame()
         out = run_step(df, {})
         assert out.empty
+
+    def test_run_step_default_omits_stability_score(self):
+        """Backwards compat — strategies that don't request the score
+        keep the same output schema as before."""
+        df = pd.DataFrame([_match_row()])
+        out = run_step(df, {})
+        assert "stability_score" not in out.columns
+
+    def test_run_step_compute_stability_score_appends_column(self):
+        df = pd.DataFrame([_match_row(
+            delta_buy_box_30d_pct=5.0, delta_buy_box_90d_pct=5.0,
+        )])
+        out = run_step(df, {"compute_stability_score": True})
+        assert "stability_score" in out.columns
+        # 1 - (5 + 5) / 200 = 0.95
+        assert abs(out.iloc[0]["stability_score"] - 0.95) < 1e-9
+
+
+class TestStabilityScore:
+    """Tests for the add_stability_score helper directly."""
+
+    def test_zero_deltas_score_one(self):
+        from fba_engine.steps.calculate import add_stability_score
+        df = pd.DataFrame([{
+            "delta_buy_box_30d_pct": 0.0,
+            "delta_buy_box_90d_pct": 0.0,
+        }])
+        out = add_stability_score(df)
+        assert out.iloc[0]["stability_score"] == 1.0
+
+    def test_max_volatility_clamped_to_zero(self):
+        from fba_engine.steps.calculate import add_stability_score
+        df = pd.DataFrame([{
+            "delta_buy_box_30d_pct": -150.0,
+            "delta_buy_box_90d_pct": 200.0,
+        }])
+        out = add_stability_score(df)
+        # Raw formula gives a negative; clamped to 0.0.
+        assert out.iloc[0]["stability_score"] == 0.0
+
+    def test_negative_deltas_use_absolute_value(self):
+        """Buy Box dropping 10% is just as volatile as rising 10%."""
+        from fba_engine.steps.calculate import add_stability_score
+        df_drop = pd.DataFrame([{
+            "delta_buy_box_30d_pct": -10.0, "delta_buy_box_90d_pct": -10.0,
+        }])
+        df_rise = pd.DataFrame([{
+            "delta_buy_box_30d_pct":  10.0, "delta_buy_box_90d_pct":  10.0,
+        }])
+        out_drop = add_stability_score(df_drop)
+        out_rise = add_stability_score(df_rise)
+        assert out_drop.iloc[0]["stability_score"] == out_rise.iloc[0]["stability_score"]
+
+    def test_missing_columns_default_to_max_stability(self):
+        """Defensive: rows without delta columns get max stability,
+        not a KeyError."""
+        from fba_engine.steps.calculate import add_stability_score
+        df = pd.DataFrame([{"asin": "B0X"}])
+        out = add_stability_score(df)
+        assert out.iloc[0]["stability_score"] == 1.0
+
+    def test_empty_df_returns_empty_with_column_present(self):
+        from fba_engine.steps.calculate import add_stability_score
+        df = pd.DataFrame()
+        out = add_stability_score(df)
+        assert out.empty
+        assert "stability_score" in out.columns
+
+    def test_preserves_other_columns(self):
+        """Adding stability_score doesn't drop or rename any existing column."""
+        from fba_engine.steps.calculate import add_stability_score
+        df = pd.DataFrame([{
+            "asin": "B0X",
+            "decision": "SHORTLIST",
+            "delta_buy_box_30d_pct": 2.0,
+            "delta_buy_box_90d_pct": 3.0,
+        }])
+        out = add_stability_score(df)
+        assert set(out.columns) == {
+            "asin", "decision", "delta_buy_box_30d_pct",
+            "delta_buy_box_90d_pct", "stability_score",
+        }
+        assert out.iloc[0]["asin"] == "B0X"
+        assert out.iloc[0]["decision"] == "SHORTLIST"

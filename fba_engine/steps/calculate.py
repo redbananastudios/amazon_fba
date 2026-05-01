@@ -211,8 +211,67 @@ def _fees(
     return calculate_fees_fbm(price)
 
 
+def add_stability_score(df: pd.DataFrame) -> pd.DataFrame:
+    """Append a 0.0–1.0 ``stability_score`` column derived from Buy Box deltas.
+
+    Formula per ``docs/PRD-keepa-sourcing-strategies.md`` §8:
+
+        stability_score = 1.0 - (abs(delta_30d_pct) + abs(delta_90d_pct)) / 200
+
+    Range: 1.0 (rock-steady — zero movement on both windows) to 0.0
+    (highly volatile — ±100% on both windows).
+
+    Reads ``delta_buy_box_30d_pct`` and ``delta_buy_box_90d_pct`` from
+    each row (populated by the keepa_finder_csv discovery step from
+    Keepa's "Buy Box: 30/90 days drop %" columns). Missing or non-
+    numeric deltas are treated as 0 → max stability — defensive choice
+    that won't penalise rows lacking the data.
+
+    Informational only — does NOT gate SHORTLIST/REVIEW/REJECT.
+    Mutating the DataFrame in place would surprise callers; we return
+    a new DataFrame.
+    """
+    if df.empty:
+        out = df.copy()
+        out["stability_score"] = pd.Series(dtype=float)
+        return out
+
+    def _to_pct(value: object) -> float:
+        if is_missing(value):
+            return 0.0
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    delta30 = df.get("delta_buy_box_30d_pct", pd.Series([0.0] * len(df), index=df.index))
+    delta90 = df.get("delta_buy_box_90d_pct", pd.Series([0.0] * len(df), index=df.index))
+    abs30 = delta30.map(_to_pct).abs()
+    abs90 = delta90.map(_to_pct).abs()
+    score = 1.0 - (abs30 + abs90) / 200.0
+    # Clamp to [0, 1] — a row with > ±100% deltas would otherwise produce
+    # a negative score, which conveys the same information as 0 (max
+    # volatility) while being a cleaner contract for downstream consumers.
+    score = score.clip(lower=0.0, upper=1.0)
+
+    out = df.copy()
+    out["stability_score"] = score
+    return out
+
+
 def run_step(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
-    """Runner-compatible wrapper. Currently no config keys are used —
-    accepted for forward-compatibility (e.g. a future ``capital_exposure_limit``
-    override could land here without a contract change)."""
-    return calculate_economics(df)
+    """Runner-compatible wrapper.
+
+    Recognised ``config`` keys:
+
+      - ``compute_stability_score``: when truthy, append a
+        ``stability_score`` column (0.0–1.0) derived from Buy Box
+        delta-30d / delta-90d. Used by the keepa_finder strategy
+        family (amazon_oos_wholesale, stable_price_low_volatility).
+        Default ``False`` — existing strategies keep the same output
+        schema.
+    """
+    out = calculate_economics(df)
+    if config.get("compute_stability_score"):
+        out = add_stability_score(out)
+    return out
