@@ -6,17 +6,36 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-02 (post-real-run cleanup — Keepa Product Finder strategies validated end-to-end against live data)
-**Currently working on:** Nothing in flight. The `keepa_finder` strategy family is shipped, validated against real data, and operationally usable today. PR #37 (infrastructure), #38 (column-rename fix), #39 (`restriction_links`), #40 (5 reserved ungate-tracking columns) all merged to main.
-**Status:** main is at `32ff276`. **933 Python tests pass.** MCP suite untouched (110 unit + 5 integration still green). Working tree clean except for two pre-existing modifications carried from prior sessions (`docs/PRD-sourcing-strategies.md`, `fba_engine/data/pricelists/connect-beauty/raw/eans_for_keepa.txt`).
+**Last updated:** 2026-05-01 end-of-session — gsheet auto-upload wired, Workspace Shared Drive setup, Gated column bug fix shipped.
+**Currently working on:** Nothing in flight. Engine outputs all three deliverable formats (CSV / XLSX / Google Sheet) automatically and Gated cells now render Y/N from SP-API. Single branch (main) holds all work.
+**Status:** main is at `b1f3f4b`. **961 Python tests pass.** MCP suite untouched (110 unit + 5 integration still green). Working tree clean.
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                          # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 933/933 in ~17s
+       fba_engine/strategies/tests/ cli/tests/                       # 961/961 in ~40s
 ```
+
+### What landed this session (2026-05-01 evening)
+
+| PR | Summary |
+|---|---|
+| **#44** (security) | Untracked the leaked Google service account JSON, gitignore patterns at line 76 (`google-service-account*.json`) catch all future copies. Old key disabled in Cloud Console; rotated to `296eef282133`. |
+| **#45** (bug fix) | `gated` Y/N/UNKNOWN derived from `restriction_status` in `preflight._coerce_result` + `_seed_row`. The XLSX writer's "Gated" cell rendered None for every row pre-fix; now 8 Y / 2 N matching SP-API exactly on the 10-row smoke. +13 tests. |
+
+**Workspace Shared Drive (Google Sheets auto-upload):**
+- Service account `claude@mcp-access-490812.iam.gserviceaccount.com` is a Content Manager on the **Amazon FBA** Shared Drive (`0ABr-7qEsFb7FUk9PVA`).
+- `GOOGLE_DRIVE_FOLDER_ID` in `credentials.env` points at the drive root; sync-credentials.ps1 propagated it to settings.json.
+- `runner.py` invokes `push_to_gsheets.js` after the XLSX writes, capturing the URL into `summary.json.outputs.gsheet_url`.
+- End-to-end verified: `python run.py --strategy keepa_finder --recipe amazon_oos_wholesale ...` emits CSV + XLSX + Sheet (e.g. https://docs.google.com/spreadsheets/d/1GO71S78GiS0NJzSVg6V-_8vFtvwBtZMqMZvhF6I7xA0/edit) in 5.17s on the 10-row smoke.
+
+**Working tree cleanup committed:**
+- `.gitignore` now hides `.claude/`, `.mcp.json`, `.playwright-mcp/`, `fba_engine/data/strategies/`, `*.local-pre-merge-backup`.
+- `docs/PRD-keepa-sourcing-strategies.md` checked in (the PRD that drove the keepa_finder + Workspace Drive work).
+- `fba_engine/_legacy_keepa/scripts/keepa_*.py` archived (8 exploratory scripts from prior Keepa Browser/API path investigations).
+- Operator-driven trim of `fba_engine/data/pricelists/connect-beauty/raw/eans_for_keepa.txt` (640 → 265 EANs).
 
 ### Operationally usable workflow (post real-run)
 
