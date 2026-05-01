@@ -56,6 +56,14 @@ COLUMNS = [
     ("keepa_brand",             "Keepa Brand",          18, "text"),
     ("catalog_hazmat",          "Hazmat",               10, "text"),
     ("preflight_errors",        "Preflight Errors",     40, "text"),
+    # Ungate-tracking columns. Reserved schema — populated by the
+    # operator (today, by hand as ungate applications progress) or by
+    # a future click-through bot. Blank until then.
+    ("ungate_status",           "Ungate Status",        18, "text"),
+    ("ungate_required_docs",    "Ungate Docs Needed",   18, "text"),
+    ("ungate_brand_required",   "Ungate Brand",         20, "text"),
+    ("ungate_attempted_at",     "Ungate Attempted",     18, "text"),
+    ("ungate_message",          "Ungate Message",       40, "text"),
 ]
 
 

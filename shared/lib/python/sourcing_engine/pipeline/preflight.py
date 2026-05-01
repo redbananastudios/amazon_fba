@@ -57,6 +57,40 @@ PREFLIGHT_COLUMNS = [
     "preflight_errors",
 ]
 
+# Ungate-tracking columns — reserved schema for the ungate workflow.
+# These are NOT populated by SP-API preflight. They're seeded as None
+# so every row in the output has the cells, and the operator (or a
+# future automated click-through bot) fills them in as ungate
+# applications progress through Seller Central.
+#
+# Workflow today: operator clicks the URL in `restriction_links`,
+# applies on Amazon, then types the outcome into these cells (e.g.
+# `ungate_status = "INSTANT_APPROVED"` for the no-docs path,
+# `ungate_status = "DOCS_REQUIRED"` + `ungate_required_docs = "invoice"`
+# for the supplier-invoice path).
+#
+# Workflow when the bot lands: same columns, populated automatically.
+# No schema migration — the bot just stops leaving them blank.
+UNGATE_COLUMNS = [
+    # INSTANT_APPROVED / DOCS_REQUIRED / IN_QUEUE / DENIED /
+    # RATE_LIMITED / NOT_ATTEMPTED. Free-text accepted; canonical
+    # values listed for the bot author.
+    "ungate_status",
+    # invoice / brand_letter / category_cert / "" — what Amazon's
+    # form is asking for when ungate_status == "DOCS_REQUIRED".
+    "ungate_required_docs",
+    # The brand whose invoice/letter Amazon needs. Sometimes more
+    # specific than the listing's `brand` field (e.g. "Hasbro Inc"
+    # rather than "Transformers").
+    "ungate_brand_required",
+    # ISO 8601 timestamp — set by the bot or operator. Lets reruns
+    # avoid re-attempting recent applications.
+    "ungate_attempted_at",
+    # Free-text — whatever Amazon's response page said. Useful for
+    # debugging unexpected outcomes.
+    "ungate_message",
+]
+
 
 def _find_repo_root(start: Path | None = None) -> Path | None:
     here = (start or Path(__file__)).resolve()
@@ -227,8 +261,16 @@ def _call_cli(
 
 def _coerce_result(result: dict, original_row: dict) -> dict:
     """Translate a single preflight result envelope into the flat column set
-    we attach to the row. Missing/error sources resolve to None."""
+    we attach to the row. Missing/error sources resolve to None.
+
+    Ungate-tracking columns (UNGATE_COLUMNS) are also seeded as None so
+    every gated row has the cells ready for the operator (or future
+    bot) to fill in. Preflight itself never writes them — see the
+    UNGATE_COLUMNS docstring above.
+    """
     out: dict[str, Any] = {col: None for col in PREFLIGHT_COLUMNS}
+    for col in UNGATE_COLUMNS:
+        out[col] = None
     # Prefer an existing keepa_brand column if a prior pass set it — that's
     # the original Keepa value. Falling back to original_row.get("brand")
     # only on first-pass rows means re-running preflight (e.g. with refresh
@@ -292,12 +334,19 @@ def _coerce_result(result: dict, original_row: dict) -> dict:
 def _seed_row(row: dict) -> None:
     """Populate the preflight columns with None and keepa_brand on a row that
     we couldn't or didn't preflight, so downstream output writers see a
-    consistent schema."""
+    consistent schema.
+
+    Also seeds the ungate-tracking columns (UNGATE_COLUMNS) so the
+    output schema is identical whether preflight ran successfully, no-
+    op'd, or crashed.
+    """
     for col in PREFLIGHT_COLUMNS:
         if col == "keepa_brand":
             row.setdefault(col, row.get("brand"))
         else:
             row.setdefault(col, None)
+    for col in UNGATE_COLUMNS:
+        row.setdefault(col, None)
 
 
 def annotate_with_preflight(
