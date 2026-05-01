@@ -21,6 +21,11 @@ OUTPUT_COLUMNS = [
     "live_offer_count_new", "live_offer_count_fba",
     "catalog_brand", "keepa_brand", "catalog_hazmat",
     "preflight_errors",
+    # Ungate-tracking columns. Reserved schema — populated by the
+    # operator (today, by hand as ungate applications progress) or by
+    # a future click-through bot. Seeded as blank by the preflight step.
+    "ungate_status", "ungate_required_docs", "ungate_brand_required",
+    "ungate_attempted_at", "ungate_message",
 ]
 
 

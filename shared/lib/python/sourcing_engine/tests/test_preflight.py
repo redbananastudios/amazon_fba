@@ -306,6 +306,52 @@ def test_restriction_links_treats_empty_string_as_absent(tmp_path, monkeypatch):
     assert rows[0]["restriction_links"] is None
 
 
+def test_ungate_columns_seeded_as_none_when_cli_runs(tmp_path, monkeypatch):
+    """Ungate-tracking columns are reserved schema — preflight never writes
+    them, but every row gets the cells so the operator's CSV/XLSX has
+    somewhere to record progress."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    monkeypatch.setenv("SP_API_CLIENT_ID", "x")
+    rows = [_row("B001"), _row("B002")]
+    fake_proc = MagicMock(
+        returncode=0,
+        stdout=json.dumps(_fake_cli_response(["B001", "B002"])),
+        stderr="",
+    )
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch.object(pf, "_find_repo_root", return_value=tmp_path), \
+         patch("subprocess.run", return_value=fake_proc):
+        pf.annotate_with_preflight(rows, cli_path=cli)
+    for row in rows:
+        for col in pf.UNGATE_COLUMNS:
+            assert col in row, f"row missing reserved ungate column {col!r}"
+            assert row[col] is None
+
+
+def test_ungate_columns_seeded_when_cli_missing(tmp_path):
+    """Even when preflight no-ops (no CLI), the ungate columns appear —
+    the schema must be identical regardless of preflight outcome."""
+    rows = [_row("B001"), _row("B002")]
+    pf.annotate_with_preflight(rows, cli_path=tmp_path / "nope.js")
+    for row in rows:
+        for col in pf.UNGATE_COLUMNS:
+            assert col in row
+            assert row[col] is None
+
+
+def test_ungate_column_set_documented_constants():
+    """Lock in the column names so a refactor doesn't silently drop one
+    and break existing operator spreadsheets that reference the names."""
+    assert pf.UNGATE_COLUMNS == [
+        "ungate_status",
+        "ungate_required_docs",
+        "ungate_brand_required",
+        "ungate_attempted_at",
+        "ungate_message",
+    ]
+
+
 def test_restriction_links_partial_coverage_keeps_present_only(tmp_path, monkeypatch):
     """Some reasons surface a link, others don't. The output should
     contain ONLY the present links — not None placeholders or empty

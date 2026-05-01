@@ -222,6 +222,18 @@ the preflight didn't run or the source erred):
 | `catalog_hazmat` | True / None |
 | `preflight_errors` | comma-joined per-source error messages |
 
+**Ungate-tracking columns** (reserved schema — blank by default; operator fills them as ungate applications progress, or a future click-through bot populates them automatically):
+
+| Column | Source / values |
+|---|---|
+| `ungate_status` | `INSTANT_APPROVED` / `DOCS_REQUIRED` / `IN_QUEUE` / `DENIED` / `RATE_LIMITED` / `NOT_ATTEMPTED` (free-text accepted; canonical values listed) |
+| `ungate_required_docs` | `invoice` / `brand_letter` / `category_cert` / `""` — what Amazon's form is asking for when status is DOCS_REQUIRED |
+| `ungate_brand_required` | brand whose invoice/letter is needed (sometimes more specific than the listing's brand field — e.g. "Hasbro Inc" not "Transformers") |
+| `ungate_attempted_at` | ISO 8601 timestamp — set by bot or operator; lets reruns avoid re-attempting recent applications |
+| `ungate_message` | free-text from Amazon's response page — useful for debugging unexpected outcomes |
+
+These columns are seeded as `None` for every row in the preflight output. The engine never writes them — they exist purely so the operator's CSV/XLSX has the cells ready to fill in.
+
 **Disk cache:** lives at `<repo>/.cache/fba-mcp/` (gitignored). TTLs default to
 restrictions 7d, FBA 7d, catalog 30d, fees 24h, pricing 5min. Override via
 `MCP_CACHE_TTL_*_S` env vars. Wipe with `rm -rf .cache/fba-mcp/`.
