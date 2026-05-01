@@ -45,6 +45,11 @@ PREFLIGHT_COLUMNS = [
     "restriction_status",
     "restriction_reasons",
     "restriction_links",
+    # Y/N/UNKNOWN flag derived from restriction_status — the XLSX writer
+    # reads this to colour-code rows without parsing the longer status
+    # string. UNRESTRICTED → "N"; BRAND_GATED / RESTRICTED / CATEGORY_GATED
+    # → "Y"; missing → "UNKNOWN".
+    "gated",
     "fba_eligible",
     "fba_ineligibility",
     "live_buy_box",
@@ -56,6 +61,34 @@ PREFLIGHT_COLUMNS = [
     "catalog_hazmat",
     "preflight_errors",
 ]
+
+
+# Restriction-status values that mean the seller needs Amazon's approval
+# before listing. Anything else → not gated. Sourced from the SP-API
+# listings-restrictions response shapes the MCP normalises into the
+# `restriction_status` column.
+_GATED_STATUSES = frozenset(
+    {"RESTRICTED", "BRAND_GATED", "CATEGORY_GATED"}
+)
+
+
+def _derive_gated(restriction_status: Any) -> str:
+    """Map a normalised restriction_status to the Y/N/UNKNOWN flag.
+
+    None or empty → "UNKNOWN" (we don't know yet — preflight didn't run
+    or returned nothing for this ASIN). UNRESTRICTED → "N". Anything in
+    _GATED_STATUSES → "Y". Unrecognised non-empty status defaults to
+    "UNKNOWN" so a future SP-API value we haven't seen doesn't get
+    silently mis-classified as not-gated.
+    """
+    if not restriction_status:
+        return "UNKNOWN"
+    status = str(restriction_status).strip().upper()
+    if status == "UNRESTRICTED":
+        return "N"
+    if status in _GATED_STATUSES:
+        return "Y"
+    return "UNKNOWN"
 
 # Ungate-tracking columns — reserved schema for the ungate workflow.
 # These are NOT populated by SP-API preflight. They're seeded as None
@@ -280,9 +313,16 @@ def _coerce_result(result: dict, original_row: dict) -> dict:
         original_row.get("keepa_brand") or original_row.get("brand")
     )
 
+    # Default `gated` for the row — overwritten below if SP-API returned
+    # a restriction status. Keeps the column populated even when the
+    # restrictions source is missing (e.g. a CLI partial failure) so the
+    # XLSX writer never sees a None Gated cell.
+    out["gated"] = "UNKNOWN"
+
     restrictions = result.get("restrictions") or {}
     if restrictions:
         out["restriction_status"] = restrictions.get("status")
+        out["gated"] = _derive_gated(out["restriction_status"])
         reasons = restrictions.get("reasons") or []
         codes = [r.get("reasonCode") for r in reasons if r.get("reasonCode")]
         if codes:
@@ -343,6 +383,12 @@ def _seed_row(row: dict) -> None:
     for col in PREFLIGHT_COLUMNS:
         if col == "keepa_brand":
             row.setdefault(col, row.get("brand"))
+        elif col == "gated":
+            # "UNKNOWN" not None — the column has a domain ("Y", "N",
+            # "UNKNOWN") and the XLSX writer + decision logic compare
+            # against that domain. Setting None here would cause the
+            # cell to render blank in the operator's spreadsheet.
+            row.setdefault(col, "UNKNOWN")
         else:
             row.setdefault(col, None)
     for col in UNGATE_COLUMNS:
