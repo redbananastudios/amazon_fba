@@ -59,6 +59,28 @@ class TestParseArgs:
         assert ns.output_dir == "/tmp/out"
         assert ns.timestamp == "20260502_120000"
 
+    def test_seller_id_flag_parses_and_threads_into_context(self):
+        """--seller-id is a first-class arg used by storefront-walking
+        strategies; it must (a) parse onto the namespace as seller_id and
+        (b) appear in the runner context dict so {seller_id} interpolation
+        in the strategy YAML resolves."""
+        ns = cli_strategy._parse_args([
+            "--strategy", "seller_storefront_csv",
+            "--csv", "/tmp/storefront.csv",
+            "--seller-id", "AR5NTANTFUHVI",
+        ])
+        assert ns.seller_id == "AR5NTANTFUHVI"
+        ctx = cli_strategy._build_context(ns)
+        assert ctx["seller_id"] == "AR5NTANTFUHVI"
+
+    def test_seller_id_optional_when_strategy_does_not_need_it(self):
+        ns = cli_strategy._parse_args(["--strategy", "keepa_finder"])
+        assert ns.seller_id is None
+        # Absent from context — strategies that don't interpolate
+        # {seller_id} should not see a stray key.
+        ctx = cli_strategy._build_context(ns)
+        assert "seller_id" not in ctx
+
     def test_context_repeatable(self):
         ns = cli_strategy._parse_args([
             "--strategy", "x",

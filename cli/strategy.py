@@ -216,6 +216,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--seller-id", default=None, dest="seller_id",
+        help=(
+            "Amazon merchant ID — required by storefront-walking "
+            "strategies (e.g. seller_storefront_csv). Tags every "
+            "output row's seller_id column and flows into output "
+            "filenames + Sheet titles via {seller_id} interpolation."
+        ),
+    )
+    parser.add_argument(
         "--output-dir", default=None, dest="output_dir",
         help=(
             "Directory for run artifacts (canonical CSV, supplier_leads.md, "
@@ -260,6 +269,8 @@ def _build_context(args: argparse.Namespace) -> dict[str, str]:
         ctx["csv_path"] = args.csv
     if args.recipe:
         ctx["recipe"] = args.recipe
+    if args.seller_id:
+        ctx["seller_id"] = args.seller_id
 
     # Extra context pairs from --context k=v (each occurrence overrides
     # auto-resolved defaults — last wins).

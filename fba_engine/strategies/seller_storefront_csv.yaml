@@ -1,0 +1,94 @@
+# Strategy: seller_storefront_csv
+# Browser-driven competitor storefront walking.
+#
+# Pairs with Keepa Browser's Pro → Seller Lookup → <seller> →
+# Storefront tab → Export workflow. The exported CSV uses the same
+# column shape as Keepa Product Finder, so the existing column mapper
+# handles it — this strategy adds seller_id tagging + appropriate
+# decision thresholds for competitive-intel use cases (where we want
+# to surface every listing, not just high-volume ones).
+#
+# Sister strategy `seller_storefront.yaml` exists for the Keepa-API
+# path (requires KEEPA_API_KEY). Use this CSV-driven strategy when
+# you have the Keepa Browser tier but not the API tier.
+#
+# Run:
+#   python run.py --strategy seller_storefront_csv \
+#       --csv ./KeepaExport-2026-05-01-SellerOverview-2-AR5NTANTFUHVI.csv \
+#       --seller-id AR5NTANTFUHVI \
+#       --recipe seller_storefront \
+#       --output-dir ./fba_engine/data/strategies/seller_storefront/AR5NTANTFUHVI
+#
+# Recipe is optional. Without one the engine's default decision
+# thresholds apply, which will reject low-volume listings (`Sales
+# estimate 0/month below minimum 10`) — fine for SHORTLIST gating but
+# noisy for storefront walking. The bundled `seller_storefront` recipe
+# lowers the sales floor to 0 so every storefront row carries through
+# to the operator's spreadsheet for manual review.
+
+name: seller_storefront_csv
+description: >
+  Browser-driven competitor storefront walking. Loads a Keepa Seller
+  Lookup → Storefront export, enriches via SP-API (gating / FBA
+  eligibility / hazmat / catalog brand), calculates economics
+  (max_buy_price as the supplier-negotiation ceiling), decides, and
+  writes the canonical CSV / XLSX / Google Sheet plus supplier-search
+  URLs per row.
+
+# `input.discover: true` — the discover step creates the DataFrame
+# from `csv_path`; the runner passes an empty df_in.
+input:
+  discover: true
+
+steps:
+  # Stage 01 — discover: parse the Keepa Browser storefront CSV and
+  # emit canonical rows with `source="seller_storefront"` and
+  # `discovery_strategy="seller_storefront_<seller_id>"`. Inherits
+  # the keepa_finder_csv mapper's column logic, ASIN dedup, title
+  # keyword + category exclusions.
+  - name: discover
+    module: fba_engine.steps.seller_storefront_csv
+    config:
+      csv_path: "{csv_path}"
+      seller_id: "{seller_id}"
+
+  # Stage 03 — enrich: SP-API preflight in leads mode (restrictions /
+  # FBA eligibility / catalog brand / catalog hazmat). Same as
+  # keepa_finder. Silently no-ops when SP-API creds aren't set.
+  - name: enrich
+    module: fba_engine.steps.enrich
+    config:
+      include: leads
+
+  # Stage 04 — calculate: fees + conservative price + max_buy_price.
+  # With buy_cost=0 (wholesale flow), ROI returns None but
+  # max_buy_price is populated as the supplier-negotiation ceiling.
+  - name: calculate
+    module: fba_engine.steps.calculate
+
+  # Stage 05 — decide: SHORTLIST / REVIEW / REJECT verdicts. The
+  # `seller_storefront` recipe overrides `min_sales_review` →0 so
+  # every storefront row surfaces (vs the default 10/month floor that
+  # would reject low-volume listings as noise).
+  - name: decide
+    module: fba_engine.steps.decide
+
+  # Stage 07 — supplier_leads: append Brand-distributor / Product-
+  # wholesale / Brand-trade-account search URLs per row. The seller_id
+  # passes through as `niche` for output organisation.
+  - name: supplier_leads
+    module: fba_engine.steps.supplier_leads
+    config:
+      output_md_path: "{output_dir}/supplier_leads_{seller_id}_{timestamp}.md"
+      niche: "{seller_id}"
+
+output:
+  csv: "{output_dir}/seller_storefront_{seller_id}_{timestamp}.csv"
+  # Styled workbook — clickable Amazon URL + Ungate Links, gated rows
+  # auto-highlighted, Y/N/UNKNOWN Gated cells coloured.
+  xlsx: "{output_dir}/seller_storefront_{seller_id}_{timestamp}.xlsx"
+  # Auto-upload to the Amazon FBA Shared Drive via push_to_gsheets.js.
+  # Silently skipped when prerequisites are missing.
+  gsheet:
+    title: "Seller Storefront — {seller_id} — {timestamp}"
+    id_file: "{output_dir}/seller_storefront_{seller_id}_{timestamp}.gsheet_id.txt"
