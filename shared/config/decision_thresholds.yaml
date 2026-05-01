@@ -33,6 +33,19 @@ fba_fee_conservative_fallback: 4.50   # GBP — used when size_tier is UNKNOWN
 # === Storage fee risk ===
 storage_risk_threshold_sales: 20  # sales/month below which STORAGE_FEE_RISK is flagged
 
+# === Buy Box peak detection ===
+# When current Buy Box price is N% above the 90-day average, flag
+# BUY_BOX_ABOVE_AVG90 → routes to REVIEW. Catches "buying at a peak"
+# scenarios where the supplier-negotiation ceiling computed against the
+# current price would lock you into a position that could erode if the
+# Buy Box reverts to its 90d baseline. Browser-tier-friendly — uses
+# fields already present in the Keepa Browser CSV (no API tokens
+# needed). 20% is the empirically-tuned floor — on the Toys & Games
+# Keepa Product Finder dataset (2026-05-01) it flags ~7% of rows;
+# tighter thresholds (15%, 10%) bring in noise from normal weekly
+# price wobble.
+buy_box_peak_threshold_pct: 20.0
+
 # === FBM (Fulfilled by Merchant) defaults ===
 # SET THESE TO YOUR REAL COSTS BEFORE TRUSTING FBM SHORTLIST RESULTS
 fbm_shipping_estimate: 3.50       # GBP — Royal Mail 2nd class up to 1kg default

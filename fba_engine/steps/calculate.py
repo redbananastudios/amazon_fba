@@ -30,13 +30,14 @@ from typing import Any
 import pandas as pd
 
 from fba_engine.steps._helpers import is_missing
-from sourcing_engine.config import CAPITAL_EXPOSURE_LIMIT
+from sourcing_engine.config import BUY_BOX_PEAK_THRESHOLD_PCT, CAPITAL_EXPOSURE_LIMIT
 from sourcing_engine.pipeline.conservative_price import calculate_conservative_price
 from sourcing_engine.pipeline.fees import calculate_fees_fba, calculate_fees_fbm
 from sourcing_engine.pipeline.profit import calculate_profit
 from sourcing_engine.utils.flags import (
     AMAZON_ON_LISTING,
     AMAZON_STATUS_UNKNOWN,
+    BUY_BOX_ABOVE_AVG90,
     FBM_ONLY,
     HIGH_MOQ,
     INSUFFICIENT_HISTORY,
@@ -170,6 +171,19 @@ def _calculate_match(match: dict) -> dict:
     capital_exposure = moq * buy_cost
     if capital_exposure > CAPITAL_EXPOSURE_LIMIT:
         risk_flags.append(HIGH_MOQ)
+
+    # Buy Box peak detection — fires when current Buy Box price is
+    # materially above the 90-day average. Browser-tier-friendly: uses
+    # the buy_box_avg90 column already present in the Keepa export, no
+    # API tokens needed. Skipped silently when avg90 is missing or zero
+    # (the keepa_finder mapper writes 0.0 as the missing-data sentinel
+    # because the canonical schema declares this column numeric).
+    avg90 = match.get("buy_box_avg90")
+    bb_now = match.get("buy_box_price")
+    if avg90 and avg90 > 0 and bb_now and bb_now > 0:
+        peak_pct = (bb_now - avg90) / avg90 * 100
+        if peak_pct >= BUY_BOX_PEAK_THRESHOLD_PCT:
+            risk_flags.append(BUY_BOX_ABOVE_AVG90)
 
     risk_flags = list(dict.fromkeys(risk_flags))
 

@@ -1,6 +1,7 @@
 import pytest
 from sourcing_engine.pipeline.decision import decide
 from sourcing_engine.utils.flags import (
+    BUY_BOX_ABOVE_AVG90,
     PRICE_FLOOR_HIT, VAT_UNCLEAR, VAT_FIELD_MISMATCH,
     INSUFFICIENT_HISTORY, SIZE_TIER_UNKNOWN, FBM_ONLY, FBM_SHIPPING_ESTIMATED,
 )
@@ -46,6 +47,16 @@ def test_size_tier_unknown_does_not_block_shortlist():
     row = _make_row(risk_flags=[SIZE_TIER_UNKNOWN])
     decision, reason = decide(row)
     assert decision == "SHORTLIST"
+
+
+def test_buy_box_above_avg90_routes_to_review():
+    """Peak-buying flag is in REVIEW_FLAGS — a row that would otherwise
+    SHORTLIST gets pushed to REVIEW so the operator confirms the price
+    isn't a temporary spike before committing supplier capital."""
+    row = _make_row(risk_flags=[BUY_BOX_ABOVE_AVG90])
+    decision, reason = decide(row)
+    assert decision == "REVIEW"
+    assert BUY_BOX_ABOVE_AVG90 in reason
 
 
 def test_gated_y_shortlists_with_indicator():

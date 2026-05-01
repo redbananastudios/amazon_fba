@@ -152,6 +152,7 @@ class DecisionThresholds:
     fbm_packaging_estimate: float
     min_plausible_unit_price: float
     default_referral_fee_pct: float
+    buy_box_peak_threshold_pct: float
 
 
 @lru_cache(maxsize=1)
@@ -187,6 +188,12 @@ def _load_all(config_dir_str: str | None = None) -> tuple[BusinessRules, Decisio
         fbm_packaging_estimate=float(thresh_data["fbm_packaging_estimate"]),
         min_plausible_unit_price=float(thresh_data["min_plausible_unit_price"]),
         default_referral_fee_pct=float(thresh_data["default_referral_fee_pct"]),
+        # Default 20.0 keeps backwards-compat for any operator config
+        # that hasn't added the new key yet — the flag simply doesn't
+        # fire below 20% of avg90 movement until the YAML is bumped.
+        buy_box_peak_threshold_pct=float(
+            thresh_data.get("buy_box_peak_threshold_pct", 20.0)
+        ),
     )
 
     _validate(business, thresh)
@@ -205,6 +212,7 @@ def _validate(business: BusinessRules, thresh: DecisionThresholds) -> None:
     assert 0 < thresh.lower_band_percentile < 100, "percentile out of range"
     assert thresh.history_minimum_days <= thresh.history_window_days, "min days above window"
     assert 0 < thresh.default_referral_fee_pct < 1, "referral fee not a fraction"
+    assert thresh.buy_box_peak_threshold_pct > 0, "peak threshold must be positive"
 
 
 def get_business_rules(config_dir: Path | None = None) -> BusinessRules:
@@ -302,6 +310,9 @@ try:
     # New: ROI gate
     TARGET_ROI: float = _t.target_roi
 
+    # New: peak-buying detection (browser-tier-friendly historical signal)
+    BUY_BOX_PEAK_THRESHOLD_PCT: float = _t.buy_box_peak_threshold_pct
+
     # NB: MIN_MARGIN deliberately not exported — see module docstring.
 except (FileNotFoundError, KeyError) as e:
     # Module is being inspected (e.g. by a doc generator) outside a real repo.
@@ -338,4 +349,5 @@ __all__ = [
     "MIN_PLAUSIBLE_UNIT_PRICE",
     "DEFAULT_REFERRAL_FEE_PCT",
     "TARGET_ROI",
+    "BUY_BOX_PEAK_THRESHOLD_PCT",
 ]

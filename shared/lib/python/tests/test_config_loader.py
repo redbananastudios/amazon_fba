@@ -47,6 +47,7 @@ def test_thresholds_loads_from_default_location():
     assert t.min_profit_absolute == 2.50
     assert t.min_sales_shortlist == 20
     assert t.min_sales_review == 10
+    assert t.buy_box_peak_threshold_pct == 20.0
 
 
 def test_legacy_constants_match_yaml():
@@ -59,6 +60,46 @@ def test_legacy_constants_match_yaml():
     assert cfg.MIN_SALES_REVIEW == t.min_sales_review
     assert cfg.VAT_RATE == b.vat_rate
     assert cfg.TARGET_ROI == t.target_roi
+    assert cfg.BUY_BOX_PEAK_THRESHOLD_PCT == t.buy_box_peak_threshold_pct
+
+
+def test_buy_box_peak_threshold_defaults_when_yaml_missing_key(tmp_path):
+    """Backwards compat — operator configs without the new key must
+    still load (default 20.0). Important: a stale supplier checkout
+    that hasn't pulled this commit shouldn't break on threshold load."""
+    (tmp_path / "business_rules.yaml").write_text(
+        "marketplace_id: A1F83G8C2ARO7P\n"
+        "currency: GBP\n"
+        "vat_rate: 0.20\n"
+        "seller_vat_registered: true\n"
+        "vat_mismatch_tolerance: 0.05\n"
+        "price_range:\n  min: 5.0\n  max: 100.0\n"
+    )
+    (tmp_path / "decision_thresholds.yaml").write_text(
+        "target_roi: 0.30\n"
+        "min_profit_absolute: 2.50\n"
+        "min_sales_shortlist: 20\n"
+        "min_sales_review: 10\n"
+        "capital_exposure_limit: 200.0\n"
+        "history_minimum_days: 30\n"
+        "history_window_days: 90\n"
+        "lower_band_percentile: 15\n"
+        "size_tier_boundary_pct: 0.10\n"
+        "fba_fee_conservative_fallback: 4.50\n"
+        "storage_risk_threshold_sales: 20\n"
+        "fbm_shipping_estimate: 3.50\n"
+        "fbm_packaging_estimate: 0.50\n"
+        "min_plausible_unit_price: 0.50\n"
+        "default_referral_fee_pct: 0.15\n"
+        # buy_box_peak_threshold_pct intentionally omitted — should default.
+    )
+    (tmp_path / "global_exclusions.yaml").write_text(
+        "hazmat_strict: true\ncategories_excluded: []\ntitle_keywords_excluded: []\n"
+    )
+    cfg.reset_cache()
+    t = cfg.get_thresholds(config_dir=tmp_path)
+    assert t.buy_box_peak_threshold_pct == 20.0
+    cfg.reset_cache()
 
 
 def test_min_margin_is_not_exported():
