@@ -119,17 +119,31 @@ class KeepaClient:
         self._cache.set("seller", cache_key, seller_payload, ttl_seconds=ttl)
         return KeepaSeller.model_validate(seller_payload)
 
-    def get_product(self, asin: str) -> KeepaProduct:
-        """Look up a single product by ASIN. Cached per ASIN."""
-        cached = self._cache.get("product", asin)
+    def get_product(
+        self, asin: str, *, with_offers: bool = False,
+    ) -> KeepaProduct:
+        """Look up a single product by ASIN. Cached per ASIN.
+
+        ``with_offers``: when True, request the live offer list via
+        ``offers=20``. Costs ~4 extra tokens per call but is the only
+        reliable source for the actual market price on niche / freshly-
+        listed ASINs where Keepa's stats arrays return -1 sentinels for
+        Buy Box and NEW_FBA. Default False to keep bulk lookups cheap;
+        the single_asin strategy YAML opts in explicitly.
+        """
+        # Cache key includes the offer-mode so we don't serve a stats-only
+        # cached response when the caller asked for offers. Cheaper paths
+        # see "asin"; richer paths see "asin:offers" — distinct entries.
+        cache_key = asin if not with_offers else f"{asin}:offers"
+        cached = self._cache.get("product", cache_key)
         if cached is not None:
             append_token_log(
                 self._log_path, endpoint="product", tokens=0, cached=True,
-                extra={"asin": asin},
+                extra={"asin": asin, "with_offers": with_offers},
             )
             return KeepaProduct.model_validate(cached)
 
-        params = {
+        params: dict[str, Any] = {
             "key": self._api_key,
             "domain": self._config.api.marketplace,
             "asin": asin,
@@ -139,10 +153,17 @@ class KeepaClient:
             # step's whole purpose. See `models.py` for the index map.
             "stats": 90,
         }
+        if with_offers:
+            # `offers=20` returns up to 20 offer history entries per
+            # product. We filter to live + FBA + NEW downstream; the
+            # cap is generous because Keepa's offer list is sorted by
+            # historical relevance, not freshness, so we want enough
+            # rows to capture the active sellers.
+            params["offers"] = 20
         try:
             payload = self._request("/product", params)
         except KeepaApiError:
-            stale = self._cache.get_stale("product", asin)
+            stale = self._cache.get_stale("product", cache_key)
             if stale is not None:
                 logger.warning(
                     "Keepa /product failed for %s — using stale cache", asin,
@@ -156,7 +177,7 @@ class KeepaClient:
         tokens_used = int(payload.get("tokensConsumed", 0))
         append_token_log(
             self._log_path, endpoint="product", tokens=tokens_used, cached=False,
-            extra={"asin": asin},
+            extra={"asin": asin, "with_offers": with_offers},
         )
 
         products = payload.get("products") or []
@@ -167,10 +188,12 @@ class KeepaClient:
         product_payload = products[0]
 
         ttl = self._config.cache.ttl_seconds.get("product", 24 * 3600)
-        self._cache.set("product", asin, product_payload, ttl_seconds=ttl)
+        self._cache.set("product", cache_key, product_payload, ttl_seconds=ttl)
         return KeepaProduct.model_validate(product_payload)
 
-    def get_products(self, asins: list[str]) -> list[KeepaProduct]:
+    def get_products(
+        self, asins: list[str], *, with_offers: bool = False,
+    ) -> list[KeepaProduct]:
         """Look up multiple products in one or more batched API calls.
 
         Behaviour:
@@ -197,15 +220,22 @@ class KeepaClient:
         # caller order regardless of how the cache + API split the work.
         by_asin: dict[str, dict] = {}
 
+        # Cache key includes the offer-mode so a stats-only cache entry
+        # never gets served to a caller that asked for offers (and vice
+        # versa — a richer offers cache to a stats-only caller would
+        # work but is wasted bandwidth on the deserialise path).
+        def _cache_key(a: str) -> str:
+            return f"{a}:offers" if with_offers else a
+
         # Cache pass — pull anything fresh, leave the rest for the API.
         uncached: list[str] = []
         for asin in asins:
-            cached = self._cache.get("product", asin)
+            cached = self._cache.get("product", _cache_key(asin))
             if cached is not None:
                 by_asin[asin] = cached
                 append_token_log(
                     self._log_path, endpoint="product", tokens=0, cached=True,
-                    extra={"asin": asin, "batch": True},
+                    extra={"asin": asin, "batch": True, "with_offers": with_offers},
                 )
             else:
                 uncached.append(asin)
@@ -219,7 +249,7 @@ class KeepaClient:
 
         for i in range(0, len(to_fetch), batch_size):
             chunk = to_fetch[i : i + batch_size]
-            params = {
+            params: dict[str, Any] = {
                 "key": self._api_key,
                 "domain": self._config.api.marketplace,
                 "asin": ",".join(chunk),
@@ -228,6 +258,10 @@ class KeepaClient:
                 # current/avg90 prices in the keepa_enrich step.
                 "stats": 90,
             }
+            if with_offers:
+                # +4 tokens per ASIN with offers vs stats-only; opt-in
+                # so bulk callers aren't surprised.
+                params["offers"] = 20
             try:
                 payload = self._request("/product", params)
             except KeepaApiError:
@@ -242,7 +276,7 @@ class KeepaClient:
                     "cache where available", len(chunk),
                 )
                 for asin in chunk:
-                    stale = self._cache.get_stale("product", asin)
+                    stale = self._cache.get_stale("product", _cache_key(asin))
                     if stale is not None:
                         by_asin[asin] = stale
                         append_token_log(
@@ -259,7 +293,11 @@ class KeepaClient:
             append_token_log(
                 self._log_path, endpoint="product",
                 tokens=tokens_used, cached=False,
-                extra={"batch_size": len(chunk), "batch": True},
+                extra={
+                    "batch_size": len(chunk),
+                    "batch": True,
+                    "with_offers": with_offers,
+                },
             )
 
             products = payload.get("products") or []
@@ -271,7 +309,7 @@ class KeepaClient:
                 asin = prod.get("asin")
                 if not asin:
                     continue
-                self._cache.set("product", asin, prod, ttl_seconds=ttl)
+                self._cache.set("product", _cache_key(asin), prod, ttl_seconds=ttl)
                 by_asin[asin] = prod
 
         # Reassemble in input order, dropping any ASINs we couldn't
@@ -354,10 +392,15 @@ class KeepaClient:
         """
         if path.startswith("/seller"):
             return 50
-        # Per-product Keepa cost: 1 base + 1 stats (when stats= is set).
+        # Per-product Keepa cost: 1 base + 1 stats (when stats= is set)
+        # + 4 offers (when offers= is set; observed empirically — a
+        # `offers=20` request consumed 5 tokens for one ASIN vs 1 for
+        # stats-only on the same ASIN).
         asin_param = params.get("asin", "")
         n_asins = max(1, asin_param.count(",") + 1) if asin_param else 1
-        per_product = 1 + (1 if "stats" in params else 0)
+        per_product = 1 + (1 if "stats" in params else 0) + (
+            4 if "offers" in params else 0
+        )
         # +5 base overhead per call (matches the legacy single-ASIN
         # estimate of 6 = 1 product + 5 overhead).
         return 5 + n_asins * per_product

@@ -12,9 +12,25 @@ Field aliases let the JSON-as-shipped (`sellerId`, `asinList`,
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+# Keepa epoch — minutes since 2011-01-01 UTC. Used to translate Keepa's
+# integer-minute timestamps (in `lastSeen`, `csv` arrays, `offerCSV`)
+# back into Python datetimes for "is this offer recent?" filtering.
+_KEEPA_EPOCH = datetime(2011, 1, 1, tzinfo=timezone.utc)
+
+
+def _keepa_minutes_to_datetime(minutes: int) -> datetime:
+    return _KEEPA_EPOCH + timedelta(minutes=int(minutes))
+
+
+def _now_keepa_minutes() -> int:
+    """Current time as Keepa-epoch minutes (matching `lastSeen` units)."""
+    return int((datetime.now(timezone.utc) - _KEEPA_EPOCH).total_seconds() // 60)
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -35,6 +51,132 @@ _CSV_SALES_RANK: int = 3       # Sales rank
 _CSV_NEW_FBA: int = 10         # Lowest 3rd-party FBA
 _CSV_COUNT_NEW: int = 11       # New offer count (proxy for FBA seller count)
 _CSV_BUY_BOX: int = 18         # Buy Box Shipping (winner price + shipping)
+
+
+class KeepaOffer(BaseModel):
+    """One offer row from Keepa `/product?offers=N`.
+
+    Keepa returns the full historical offer list — many entries are
+    long-dormant (`lastSeen` years ago). We surface the raw fields and
+    let helpers below filter to genuinely-live offers.
+
+    The `offerCSV` time series is `[time, price, shippingCost, time,
+    price, shippingCost, ...]` — last triple gives the most recent
+    observed price. Prices are integer pence.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    seller_id: Optional[str] = Field(default=None, alias="sellerId")
+    is_fba: bool = Field(default=False, alias="isFBA")
+    is_amazon: bool = Field(default=False, alias="isAmazon")
+    is_prime: bool = Field(default=False, alias="isPrime")
+    # Keepa condition codes — 1 = NEW. We only want NEW for market-price
+    # selection; "Used", "Open Box" etc. don't compete with our FBA listing.
+    condition: Optional[int] = None
+    last_seen: Optional[int] = Field(default=None, alias="lastSeen")
+    # Triple-stride array `[t, price, ship, t, price, ship, ...]` — last
+    # `price` field (every 3rd starting from index 1) is the most recent
+    # observed price in pence. Empty list when Keepa has no offer data.
+    offer_csv: list[int] = Field(default_factory=list, alias="offerCSV")
+
+    def is_live(self, *, max_age_minutes: int = 24 * 60 * 7) -> bool:
+        """Is this offer fresh enough to count as a live market signal?
+
+        Default window: 7 days. Keepa's offer list includes years of
+        dormant entries (sellers who once stocked an ASIN and moved on).
+        Filtering to `lastSeen` within the last week keeps us anchored
+        to "what could win the Buy Box right now" without throwing away
+        legitimate offers from sellers Keepa polled a couple of days
+        ago.
+        """
+        if self.last_seen is None:
+            return False
+        return self.last_seen >= _now_keepa_minutes() - max_age_minutes
+
+    def current_price(self) -> Optional[float]:
+        """Most recent price seen on this offer, in pounds.
+
+        offerCSV stride is 3 (time, price, ship). The price field at
+        index `-2` is the last observed sticker price; we ignore the
+        shipping field for now since UK FBA listings typically include
+        free Prime shipping.
+        """
+        if not self.offer_csv or len(self.offer_csv) < 2:
+            return None
+        # Last triple: indices [-3, -2, -1] = [time, price, ship].
+        # Some entries lack a shipping field (legacy data); fall back to
+        # `[-1]` if the array length isn't a multiple of 3.
+        if len(self.offer_csv) % 3 == 0:
+            cents = self.offer_csv[-2]
+        else:
+            cents = self.offer_csv[-1]
+        if cents is None or cents < 0:
+            return None
+        return cents / 100.0
+
+
+def lowest_live_fba_price(offers: list[KeepaOffer]) -> Optional[float]:
+    """Return the lowest price among live, NEW-condition, FBA offers.
+
+    "Live" = lastSeen in the last 7 days (see `KeepaOffer.is_live`).
+    Excludes Amazon's own offer — when Amazon competes, the operator
+    typically can't win the Buy Box anyway, and we'd rather see what
+    the lowest 3rd-party FBA seller is asking. Amazon's price is
+    surfaced separately via `_stat_money(stats, _CSV_AMAZON)`.
+    """
+    candidates: list[float] = []
+    for offer in offers:
+        if offer.condition != 1:
+            continue
+        if not offer.is_fba or offer.is_amazon:
+            continue
+        if not offer.is_live():
+            continue
+        price = offer.current_price()
+        if price is not None and price > 0:
+            candidates.append(price)
+    return min(candidates) if candidates else None
+
+
+def estimate_sales_from_rank_drops(
+    rank_csv: list[int] | None, *, window_days: int = 30,
+) -> Optional[int]:
+    """Estimate sales/month from BSR-drop count in the recent window.
+
+    Heuristic used by SellerAmp / Helium / AMZScout: a sales-rank drop
+    (rank value decreases = listing moves UP the chart) is a strong
+    proxy for a sale event. Counting drops in the last 30 days
+    approximates monthly sales — the standard fallback when Keepa's
+    `monthlySold` field isn't populated.
+
+    Args:
+        rank_csv: Keepa's csv[3] series — interleaved `[time, rank, time,
+            rank, ...]` with rank values as integers (-1 sentinel for
+            "no data").
+        window_days: lookback window in days; default 30.
+
+    Returns:
+        Drop count (rough monthly sales estimate), or None when the
+        series is empty / has no data inside the window.
+    """
+    if not rank_csv or len(rank_csv) < 4:
+        return None
+    cutoff = _now_keepa_minutes() - window_days * 24 * 60
+    drops = 0
+    last_rank: Optional[int] = None
+    for i in range(0, len(rank_csv) - 1, 2):
+        ts, rank = rank_csv[i], rank_csv[i + 1]
+        if rank is None or rank < 0:
+            continue
+        if ts < cutoff:
+            last_rank = rank
+            continue
+        # Inside the window — count rank-improvement events.
+        if last_rank is not None and rank < last_rank:
+            drops += 1
+        last_rank = rank
+    return drops if drops > 0 else None
 
 
 class KeepaStats(BaseModel):
@@ -81,6 +223,14 @@ class KeepaProduct(BaseModel):
     # for ASINs Keepa hasn't profiled yet — `market_snapshot` handles None.
     stats: Optional[KeepaStats] = None
     monthly_sold: Optional[int] = Field(default=None, alias="monthlySold")
+    # Live offer list — populated when the Keepa request includes
+    # `offers=N`. Empty when not requested. Each entry is a KeepaOffer
+    # carrying the seller's most-recent price, FBA flag, condition, and
+    # `lastSeen` for liveness filtering. Critical for the lowest-FBA
+    # market-price path: Keepa's `stats.current[10]` (NEW_FBA) returns
+    # -1 sentinels for many ASINs even when active FBA offers exist —
+    # the offers list is the authoritative source.
+    offers: list[KeepaOffer] = Field(default_factory=list)
 
     def market_snapshot(self) -> dict[str, Any]:
         """Extract the canonical engine's market-data columns from `stats`.
@@ -103,10 +253,36 @@ class KeepaProduct(BaseModel):
         and shouldn't be silently overwritten by enrichment. Callers
         that need title/brand read them directly off this object.
         """
+        # New-FBA price selection: prefer the lowest LIVE FBA offer from
+        # the offers list (real-market signal — what's actually available
+        # to buyers right now). Fall back to Keepa's `stats.current[10]`
+        # only when offers data wasn't requested or all live offers are
+        # filtered out. Real-world: B0B636ZKZQ has -1 in stats.current[10]
+        # but the offers list shows £16.90 from a fresh FBA seller — the
+        # stats path alone would miss the actual market price.
+        new_fba_from_offers = lowest_live_fba_price(self.offers or [])
+        new_fba_from_stats = _stat_money(self.stats, _CSV_NEW_FBA)
+        new_fba_price = (
+            new_fba_from_offers if new_fba_from_offers is not None
+            else new_fba_from_stats
+        )
+
+        # Sales estimate: prefer Keepa's `monthly_sold` (their own
+        # estimator); fall back to counting BSR-drops in csv[3] when
+        # monthly_sold is missing — the standard heuristic SellerAmp /
+        # Helium use. Without this, ASINs Keepa hasn't profiled show
+        # `sales_estimate=None` even though the rank-drop history
+        # tells a clear story.
+        sales_estimate = self.monthly_sold
+        if sales_estimate is None:
+            csv = self.csv or []
+            rank_csv = csv[_CSV_SALES_RANK] if len(csv) > _CSV_SALES_RANK else None
+            sales_estimate = estimate_sales_from_rank_drops(rank_csv)
+
         return {
             "asin": self.asin,
             "amazon_price": _stat_money(self.stats, _CSV_AMAZON),
-            "new_fba_price": _stat_money(self.stats, _CSV_NEW_FBA),
+            "new_fba_price": new_fba_price,
             "buy_box_price": _stat_money(self.stats, _CSV_BUY_BOX),
             "buy_box_avg90": _stat_money(self.stats, _CSV_BUY_BOX, avg=True),
             # Note: Keepa doesn't expose FBA-only count via stats; index 11
@@ -115,7 +291,7 @@ class KeepaProduct(BaseModel):
             # CSV-export schema (`load_market_data` → "New Offer Count: Current").
             "fba_seller_count": _stat_int(self.stats, _CSV_COUNT_NEW),
             "sales_rank": _stat_int(self.stats, _CSV_SALES_RANK),
-            "sales_estimate": _coerce_positive_int(self.monthly_sold),
+            "sales_estimate": _coerce_positive_int(sales_estimate),
         }
 
 

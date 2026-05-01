@@ -168,6 +168,150 @@ class TestKeepaProductModel:
         assert snap["sales_estimate"] == 100
 
 
+class TestKeepaOffersAndBsrDrops:
+    """Coverage for the offer-list path + BSR-drop sales estimator added
+    to make single_asin work on real ASINs (B0B636ZKZQ calibration —
+    Casdon toaster toy where Keepa stats are sparse but offers list and
+    rank history both have the actual market signal)."""
+
+    def test_lowest_live_fba_price_picks_min(self):
+        from keepa_client.models import KeepaOffer, lowest_live_fba_price, _now_keepa_minutes
+        now = _now_keepa_minutes()
+        offers = [
+            KeepaOffer(sellerId="A1", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 60, offerCSV=[100, 1690, 0]),  # £16.90 fresh
+            KeepaOffer(sellerId="A2", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 200, offerCSV=[100, 1698, 0]),  # £16.98 fresh
+            KeepaOffer(sellerId="A3", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 5_000_000, offerCSV=[100, 999, 0]),  # £9.99 stale
+        ]
+        assert lowest_live_fba_price(offers) == 16.90
+
+    def test_lowest_live_fba_price_excludes_amazon(self):
+        from keepa_client.models import KeepaOffer, lowest_live_fba_price, _now_keepa_minutes
+        now = _now_keepa_minutes()
+        offers = [
+            KeepaOffer(sellerId="AMZ", isFBA=True, isAmazon=True, condition=1,
+                       lastSeen=now - 10, offerCSV=[100, 999, 0]),
+            KeepaOffer(sellerId="A1", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 10, offerCSV=[100, 1690, 0]),
+        ]
+        # Amazon at £9.99 is excluded; £16.90 from 3rd-party FBA wins.
+        assert lowest_live_fba_price(offers) == 16.90
+
+    def test_lowest_live_fba_price_excludes_fbm_and_used(self):
+        from keepa_client.models import KeepaOffer, lowest_live_fba_price, _now_keepa_minutes
+        now = _now_keepa_minutes()
+        offers = [
+            KeepaOffer(sellerId="FBM", isFBA=False, isAmazon=False, condition=1,
+                       lastSeen=now - 10, offerCSV=[100, 1100, 0]),
+            KeepaOffer(sellerId="USED", isFBA=True, isAmazon=False, condition=2,
+                       lastSeen=now - 10, offerCSV=[100, 800, 0]),
+            KeepaOffer(sellerId="A1", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 10, offerCSV=[100, 1690, 0]),
+        ]
+        assert lowest_live_fba_price(offers) == 16.90
+
+    def test_lowest_live_fba_price_returns_none_for_no_live_offers(self):
+        from keepa_client.models import lowest_live_fba_price
+        assert lowest_live_fba_price([]) is None
+
+    def test_offer_csv_triple_stride_picks_price_field(self):
+        """offerCSV is `[time, price, ship, time, price, ship, ...]` —
+        the price field is at index `-2` of the last triple."""
+        from keepa_client.models import KeepaOffer, _now_keepa_minutes
+        now = _now_keepa_minutes()
+        offer = KeepaOffer(
+            isFBA=True, condition=1, lastSeen=now - 10,
+            offerCSV=[100, 1500, 0, 200, 1690, 0],  # last price = 1690 = £16.90
+        )
+        assert offer.current_price() == 16.90
+
+    def test_estimate_sales_from_rank_drops_counts_improvements(self):
+        """Each rank-improvement event = ~1 sale. Counting them in the
+        last 30 days approximates monthly sales."""
+        from keepa_client.models import (
+            estimate_sales_from_rank_drops, _now_keepa_minutes,
+        )
+        now = _now_keepa_minutes()
+        # 3 rank drops in the last 30 days; one increase (return / unsold).
+        rank_csv = [
+            now - 25 * 24 * 60, 100_000,
+            now - 20 * 24 * 60, 80_000,   # drop 1
+            now - 15 * 24 * 60, 60_000,   # drop 2
+            now - 10 * 24 * 60, 90_000,   # increase (skip)
+            now - 5 * 24 * 60, 70_000,    # drop 3
+        ]
+        assert estimate_sales_from_rank_drops(rank_csv) == 3
+
+    def test_estimate_sales_from_rank_drops_filters_to_window(self):
+        """Drops outside the window don't count — but the last-rank
+        bookkeeping still flows through them so the first drop INSIDE
+        the window can be detected against the right baseline."""
+        from keepa_client.models import (
+            estimate_sales_from_rank_drops, _now_keepa_minutes,
+        )
+        now = _now_keepa_minutes()
+        rank_csv = [
+            now - 200 * 24 * 60, 100_000,  # outside window — sets baseline
+            now - 5 * 24 * 60, 80_000,     # inside window — drop counted
+        ]
+        assert estimate_sales_from_rank_drops(rank_csv, window_days=30) == 1
+
+    def test_estimate_sales_from_rank_drops_returns_none_for_empty(self):
+        from keepa_client.models import estimate_sales_from_rank_drops
+        assert estimate_sales_from_rank_drops(None) is None
+        assert estimate_sales_from_rank_drops([]) is None
+
+    def test_market_snapshot_prefers_live_fba_offer_over_stats(self):
+        """Real-world calibration: B0B636ZKZQ has -1 in stats.current[10]
+        (NEW_FBA) but a live FBA offer at £16.90. The snapshot should
+        pick £16.90, not None."""
+        from keepa_client.models import _now_keepa_minutes
+        now = _now_keepa_minutes()
+        payload = {
+            "asin": "B0B636ZKZQ",
+            "stats": {
+                "current": [2386] + [-1] * 17 + [-1],  # AMAZON=23.86; rest -1
+                "avg90":   [-1] * 19,
+            },
+            "offers": [
+                {"sellerId": "A1", "isFBA": True, "isAmazon": False,
+                 "condition": 1, "lastSeen": now - 10,
+                 "offerCSV": [100, 1690, 0]},
+            ],
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["new_fba_price"] == 16.90
+        assert snap["amazon_price"] == 23.86
+
+    def test_market_snapshot_falls_back_to_bsr_drops_when_monthly_sold_missing(self):
+        from keepa_client.models import _now_keepa_minutes, _CSV_SALES_RANK
+        now = _now_keepa_minutes()
+        # csv list with rank history at index 3.
+        csv = [None] * (_CSV_SALES_RANK + 1)
+        csv[_CSV_SALES_RANK] = [
+            now - 25 * 24 * 60, 100_000,
+            now - 20 * 24 * 60, 80_000,    # drop 1
+            now - 15 * 24 * 60, 60_000,    # drop 2
+        ]
+        payload = {"asin": "B0EXAMPLE1", "csv": csv}  # no monthlySold field
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["sales_estimate"] == 2
+
+    def test_market_snapshot_uses_monthly_sold_when_present(self):
+        """When Keepa provides monthlySold, prefer it over the
+        rank-drop estimator (it's their own model, closer to ground
+        truth than our drop-counting heuristic)."""
+        from keepa_client.models import _now_keepa_minutes, _CSV_SALES_RANK
+        now = _now_keepa_minutes()
+        csv = [None] * (_CSV_SALES_RANK + 1)
+        csv[_CSV_SALES_RANK] = [now - 5 * 24 * 60, 80_000]
+        payload = {"asin": "B0EXAMPLE1", "monthlySold": 250, "csv": csv}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["sales_estimate"] == 250
+
+
 class TestKeepaSellerModel:
     def test_seller_with_asin_list(self):
         payload = {
