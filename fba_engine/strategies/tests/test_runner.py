@@ -423,6 +423,103 @@ class TestRunStrategyOutputCsv:
         assert (tmp_path / "kids-toys.csv").exists()
 
 
+class TestRunStrategyOutputXlsx:
+    """Runner writes a styled XLSX alongside CSV when output.xlsx is set.
+    The XLSX is the operator-facing deliverable: clickable hyperlinks on
+    URL columns, REJECT rows excluded automatically."""
+
+    def test_xlsx_omitted_is_no_op(self, tmp_path: Path):
+        """Strategies that don't declare output.xlsx still run cleanly —
+        only CSV gets written, no XLSX file appears."""
+        df = pd.DataFrame([{"ASIN": "B001"}])
+        out_csv = tmp_path / "out.csv"
+        strat = _strategy(steps=[], output_csv=str(out_csv))
+        run_strategy(strat, context={}, df_in=df)
+        assert out_csv.exists()
+        assert not list(tmp_path.glob("*.xlsx"))
+
+    def test_xlsx_written_when_declared(self, tmp_path: Path):
+        df = pd.DataFrame([{
+            "ASIN": "B001", "decision": "REVIEW",
+            "buy_box_price": 24.99, "amazon_url": "https://www.amazon.co.uk/dp/B001",
+            "decision_reason": "test",
+        }])
+        out_csv = tmp_path / "out.csv"
+        out_xlsx = tmp_path / "out.xlsx"
+        strat = _strategy(
+            steps=[], output_csv=str(out_csv), output_xlsx=str(out_xlsx),
+        )
+        run_strategy(strat, context={}, df_in=df)
+        assert out_csv.exists()
+        assert out_xlsx.exists()
+
+    def test_xlsx_path_is_interpolated(self, tmp_path: Path):
+        df = pd.DataFrame([{
+            "ASIN": "B001", "decision": "REVIEW",
+            "buy_box_price": 24.99, "decision_reason": "test",
+        }])
+        out_csv = tmp_path / "out.csv"
+        strat = _strategy(
+            steps=[],
+            output_csv=str(out_csv),
+            output_xlsx=str(tmp_path / "{recipe}.xlsx"),
+        )
+        run_strategy(strat, context={"recipe": "amazon_oos_wholesale"}, df_in=df)
+        assert (tmp_path / "amazon_oos_wholesale.xlsx").exists()
+
+    def test_xlsx_excludes_reject_rows(self, tmp_path: Path):
+        """The styled workbook is the operator's working file — REJECT rows
+        belong in the audit-trail CSV, not the actionable XLSX. Verified
+        by reading back the workbook and counting non-REJECT rows."""
+        from openpyxl import load_workbook
+        df = pd.DataFrame([
+            {"asin": "B0KEEP0001", "decision": "REVIEW",
+             "buy_box_price": 25.0, "decision_reason": "review"},
+            {"asin": "B0DROP0001", "decision": "REJECT",
+             "buy_box_price": 0.0, "decision_reason": "rejected"},
+            {"asin": "B0SHRT0001", "decision": "SHORTLIST",
+             "buy_box_price": 30.0, "decision_reason": "passes"},
+        ])
+        out_xlsx = tmp_path / "out.xlsx"
+        strat = _strategy(
+            steps=[], output_csv=str(tmp_path / "out.csv"),
+            output_xlsx=str(out_xlsx),
+        )
+        run_strategy(strat, context={}, df_in=df)
+        wb = load_workbook(out_xlsx)
+        ws = wb.active
+        # excel_writer puts the title bar in row 1 and column headers in
+        # row 2 (data starts at row 3). Read the header row, find the
+        # ASIN column index, then enumerate data values.
+        header = [c.value for c in ws[2]]
+        asin_col_idx = next(
+            (i for i, h in enumerate(header, start=1) if h == "ASIN"), None,
+        )
+        assert asin_col_idx is not None, f"ASIN column missing; headers: {header}"
+        asins = [
+            ws.cell(row=r, column=asin_col_idx).value
+            for r in range(3, ws.max_row + 1)
+        ]
+        assert "B0DROP0001" not in asins                 # REJECT excluded
+        assert "B0KEEP0001" in asins
+        assert "B0SHRT0001" in asins
+
+
+class TestKeepaFinderXlsxOutput:
+    """Lock in that keepa_finder.yaml declares both csv AND xlsx outputs.
+    The deliverable to the operator is the XLSX (clickable hyperlinks);
+    the CSV is audit-trail only."""
+
+    def test_keepa_finder_yaml_declares_both_outputs(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        yaml_path = repo_root / "fba_engine" / "strategies" / "keepa_finder.yaml"
+        if not yaml_path.exists():
+            pytest.skip(f"keepa_finder.yaml not found at {yaml_path}")
+        strat = load_strategy(yaml_path)
+        assert strat.output_csv is not None and strat.output_csv.endswith(".csv")
+        assert strat.output_xlsx is not None and strat.output_xlsx.endswith(".xlsx")
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: keepa_niche YAML against a real fixture
 # ---------------------------------------------------------------------------

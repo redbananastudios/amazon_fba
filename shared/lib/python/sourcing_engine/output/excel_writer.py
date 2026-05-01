@@ -99,10 +99,17 @@ def write_excel(
             out["risk_flags"] = out["risk_flags"].apply(
                 lambda x: "; ".join(x) if isinstance(x, list) else str(x))
 
-        # Derive amazon_on_listing from risk_flags
+        # Derive amazon_on_listing from risk_flags. Skip when risk_flags
+        # is missing entirely — `out.get("risk_flags", "")` returns the
+        # default "" (not a Series) on a DataFrame, and `"".apply(...)`
+        # is an AttributeError. Strategies without a risk_flags column
+        # (e.g. discover-only chains used in tests) shouldn't crash here.
         if "amazon_on_listing" not in out.columns:
-            out["amazon_on_listing"] = out.get("risk_flags", "").apply(
-                lambda x: "Y" if "AMAZON_ON_LISTING" in str(x) else "N")
+            if "risk_flags" in out.columns:
+                out["amazon_on_listing"] = out["risk_flags"].apply(
+                    lambda x: "Y" if "AMAZON_ON_LISTING" in str(x) else "N")
+            else:
+                out["amazon_on_listing"] = "N"
 
         # Enrich from market_data if available
         if market_data:
