@@ -1,0 +1,65 @@
+# Strategy: single_asin
+# "Should I buy this ASIN?" — operator passes an ASIN (and optionally a
+# buy_cost), the engine fetches market data via Keepa API, runs SP-API
+# gating + economics + decision, and emits a verdict to stdout.
+#
+# Cost: 1 Keepa API call (~1 token at the cheapest tier with stats=90)
+# + 1 SP-API preflight call (free under our seller-account quota).
+#
+# Run:
+#   # Wholesale leads mode (buy_cost defaulted to 0 → emits max_buy_price)
+#   python run.py --strategy single_asin --asin B0EXAMPLE12
+#
+#   # With operator's real cost (gets ROI verdicts)
+#   python run.py --strategy single_asin --asin B0EXAMPLE12 --buy-cost 6.50
+
+name: single_asin
+description: >
+  Single-ASIN verdict workflow. Builds a 1-row DataFrame from CLI
+  args, enriches via Keepa (price history) + SP-API (gating /
+  eligibility / hazmat / catalog brand), calculates economics
+  (max_buy_price for wholesale flow, ROI for retail flow), decides,
+  prints the verdict.
+
+# `input.discover: true` — the discover step creates the DataFrame
+# from CLI args; the runner passes an empty df_in.
+input:
+  discover: true
+
+steps:
+  # Stage 01 — discover: 1-row DataFrame seeded with ASIN + buy_cost.
+  - name: discover
+    module: fba_engine.steps.single_asin
+    config:
+      asin: "{asin}"
+      buy_cost: "{buy_cost}"
+
+  # Stage 02 — keepa_enrich: fetch per-ASIN market data via Keepa API.
+  # Populates buy_box_price, buy_box_avg90, fba_seller_count,
+  # sales_estimate, etc. — the canonical fields calculate.py reads.
+  # Requires KEEPA_API_KEY env var.
+  - name: keepa_enrich
+    module: fba_engine.steps.keepa_enrich
+
+  # Stage 03 — enrich: SP-API leads-mode preflight (restrictions /
+  # FBA eligibility / catalog brand / catalog hazmat). Silently no-ops
+  # when SP-API creds aren't set so the strategy is testable in dev
+  # environments without creds.
+  - name: enrich
+    module: fba_engine.steps.enrich
+    config:
+      include: leads
+
+  # Stage 04 — calculate: fees + conservative price + max_buy_price
+  # (when buy_cost=0) or ROI (when buy_cost>0). Also fires the
+  # BUY_BOX_ABOVE_AVG90 peak-buying flag when current is materially
+  # above 90d avg.
+  - name: calculate
+    module: fba_engine.steps.calculate
+
+  # Stage 05 — decide: SHORTLIST / REVIEW / REJECT verdict.
+  - name: decide
+    module: fba_engine.steps.decide
+
+output:
+  csv: "{output_dir}/single_asin_{asin}_{timestamp}.csv"
