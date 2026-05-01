@@ -6,76 +6,59 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-04-30 (Phase 2 complete — 5 PRs merged this session)
-**Currently working on:** Phase 2 of `docs/PRD-sourcing-strategies.md` is fully shipped. Canonical engine refactored, keepa_client production-grade, two new sourcing strategies (seller_storefront, oa_csv) live, run_summary.json observability sidecar added.
-**Status:** Main is at PR #30 (commit `ca0b281`). **719 Python tests + 110 MCP vitest = 829 total green.**
+**Last updated:** 2026-05-01 (Phase 3 complete — 4 PRs merged this session)
+**Currently working on:** Phase 3 scoping items resolved. `oa_csv` now produces full SHORTLIST/REVIEW/REJECT verdicts; `seller_storefront` enriches with SP-API gating/eligibility/hazmat/brand (SellerAmp dropped); `keepa_niche` chain has its missing Phase 3 (canonical scoring step replacing the agent-driven per-niche scripts).
+**Status:** Main is at PR #35 (commit `76fe945`). **820 Python tests + 110 MCP vitest = 930 total green.**
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                          # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 719/719 in ~11s
+       fba_engine/strategies/tests/ cli/tests/                       # 820/820 in ~11s
 ```
 
-### What landed this session (2026-04-30, Phase 2)
+### What landed this session (2026-05-01, Phase 3)
 
-**PR #26 — Canonical engine refactor** (MERGED): split `sourcing_engine.main.run_pipeline` into 6 composable step modules at `fba_engine/steps/` exposing the `run_step(df, config) -> df` contract:
-- `supplier_pricelist_discover` — adapter ingest + normalise + case_detection
-- `resolve` — EAN validation + Amazon market match (multi-match explosion)
-- `calculate` — fees + conservative price + profit + risk flags
-- `decide` — SHORTLIST / REVIEW / REJECT verdicts
-- `enrich` — SP-API preflight passthrough
-- `supplier_pricelist_output` — CSV + XLSX + MD writers
+**PR #32 — keepa_enrich foundation** (MERGED): the missing connector that lets ASIN-only sources chain into `calculate→decide`. `KeepaProduct.market_snapshot()` extracts canonical engine columns from Keepa stats indices (0=AMAZON, 3=SALES, 10=NEW_FBA, 11=COUNT_NEW, 18=BUY_BOX_SHIPPING). New `fba_engine/steps/keepa_enrich.py` joins per-ASIN market data via `KeepaClient.get_products()`. Both single + batch product paths now request `stats=90`. `_estimate_for` scales with N ASINs + stats overhead so the token bucket doesn't silently over-issue under heavy batch load. Pre-PR review caught 2 HIGH (product_name=None bug + seller_storefront chain clash), both fixed by dropping descriptive fields from canonical enrich schema. +29 tests.
 
-`run_pipeline` keeps its public signature; internally composes the new modules. Adds `fba_engine/strategies/supplier_pricelist.yaml`. Runner extended with `input.discover: true` (strict bool — quoted `"true"` rejected). Caught + fixed a NaN-truthy bug that would have skipped match rows after DataFrame round-trip (`pd.DataFrame` fills missing dict keys with NaN, which is truthy — `is_missing()` is the safe check). PR #25's 9-case integration test was the regression check.
+**PR #33 — oa_csv full chain** (MERGED): promotes `oa_csv` from leads-only to full decision pipeline. New chain `discover → keepa_enrich → calculate → decide → output`. Two name-bridges: `monthly_sales_estimate → sales_estimate` in market_snapshot (canonical engine reads sales_estimate directly); `retail_cost_inc_vat → buy_cost` in oa_csv discovery output (per PRD §6.4). End-to-end smoke test pins that cheap rows SHORTLIST and expensive rows REJECT.
 
-**PR #27 — keepa_client batch + stale-on-error** (MERGED):
-- `KeepaClient.get_products(asins)` — chunked batch lookup (dedupes input, preserves order, filters Keepa nulls, defensive against extras Keepa returns beyond request).
-- `DiskCache.get_stale(namespace, key)` — TTL-ignoring lookup.
-- All three Keepa methods (`get_product`, `get_products`, `get_seller`) fall back to expired cached data when API fails after retries. Token log records `cached=true, stale=true` so operators correlate degraded responses with upstream incidents. Single-ASIN methods raise when no fallback exists; the batch method silently drops affected ASINs (caller compares `len(out)` to `len(asins)`).
+**PR #34 — SellerAmp drop / SP-API enrich leads mode** (MERGED): replaces the legacy SellerAmp skill with the existing SP-API MCP for non-Buy-Box-% checks. New `enrich.LEADS_INCLUDE = (restrictions, fba, catalog)` + `include: "leads"` YAML alias. `_row_to_item(allow_no_price=True)` lets ASIN-only rows preflight without a market_price. `seller_storefront.yaml` chain extended: discover → enrich (leads) → supplier_leads. Legacy `skill-2-selleramp/SKILL.md` marked deprecated. +8 tests.
 
-**PR #28 — seller_storefront discovery step** (MERGED): `fba_engine/steps/seller_storefront.py` walks an Amazon seller's storefront via Keepa and emits a canonical leads DataFrame (asin, source, seller_id, seller_name, product_name, brand, category, amazon_url). Wholesale-leads strategy. No buy_cost — discovery is leads-only by design (heuristic buy_cost would silently produce fake ROI verdicts). +15 tests with stubbed KeepaClient.
-
-**PR #29 — strategy YAMLs** (MERGED):
-- `fba_engine/strategies/seller_storefront.yaml` — 2-step chain: discover → supplier_leads → output CSV + supplier_leads.md.
-- `fba_engine/strategies/oa_csv.yaml` — 1-step: discover → output (OA buyers go directly to retail_url; supplier_leads redundant).
-- 4 YAML smoke tests including end-to-end runs with stubbed Keepa.
-
-**PR #30 — run_summary.json + strategy docs** (MERGED): when `output.csv` is set, runner writes a `<csv-stem>.summary.json` sibling capturing strategy name, context, started_at/completed_at (ISO 8601 UTC), duration, initial_rows, final_rows, per-step `step_summary` (name, module, rows_in, rows_out, duration, error?), outputs paths. Failure path doesn't serialise the summary (operators read StrategyExecutionError + logs). Plus `docs/strategies/seller_storefront.md` + `docs/strategies/oa_csv.md` matching the existing `supplier_pricelist.md` shape. +4 tests.
+**PR #35 — Skill 3 scoring extraction** (MERGED): canonical `fba_engine/steps/scoring.py` replaces the agent-driven per-niche `phase3_scoring.js` scripts. 4-dimension scoring (Demand/Stability/Competition/Margin) + 30/30/20/20 composite + 3 lane scores (Cash Flow/Profit/Balanced) + lane classification + 9-verdict ladder (YES/MAYBE/MAYBE-ROI/BRAND APPROACH/BUY THE DIP/PRICE EROSION/GATED/HAZMAT/NO). Pre-PR review caught 2 HIGH bugs by comparing against real `phase2_enriched.csv` + the legacy `phase3_scoring.js`: wrong column names (`Buy Box Drop % 90d` → `Price Drop % 90d`, `Buy Box Amazon Share` → `Buy Box Amazon %`) and margin-tier off-by-one (strict `>` not `>=`). `keepa_niche.yaml` chain now `scoring → ip_risk → build_output → decision_engine`. +64 tests.
 
 ### Prior session highlights (kept for context)
 
-**Phase 1 (PRs #20-#25, MERGED):** docs/PRD-sourcing-strategies.md (PR #20), keepa_client foundation (PR #21), supplier_leads step / Skill 99 v1 (PR #22), oa_csv discovery + SellerAmp 2DSorter importer (PR #23), CLI launch helpers (PR #24), sourcing_engine integration test as PR #7 safety net (PR #25).
+**Phase 2 (PRs #26-#30, MERGED, prior session):** canonical engine refactor (6 step modules); keepa_client batch + stale-on-error; seller_storefront discovery step; seller_storefront.yaml + oa_csv.yaml; run_summary.json + strategy docs.
+
+**Phase 1 (PRs #20-#25, MERGED, prior session):** docs/PRD-sourcing-strategies.md (PR #20), keepa_client foundation (PR #21), supplier_leads step / Skill 99 v1 (PR #22), oa_csv discovery + SellerAmp 2DSorter importer (PR #23), CLI launch helpers (PR #24), sourcing_engine integration test as PR #7 safety net (PR #25).
 
 **Step 4 + 5 (PRs #8-#18, MERGED, prior session):** ip_risk, decision_engine, build_output (3-part: merge/XLSX/GSheets), cross-cutting fixes, helpers extraction, YAML strategy runner with `keepa_niche.yaml`.
 
 ### Roadmap status (where we are)
 
-**Phase 2 of PRD: COMPLETE** ✅ (PRs #26–#30 this session)
+**Phase 3 (post-PRD scoping items): COMPLETE** ✅ (PRs #32–#35 this session)
 
-| Phase 2 deliverable | Status |
+| Phase 3 deliverable | Status |
 |---|---|
-| Canonical engine refactor (6 step modules) | ✅ #26 |
-| keepa_client batch + stale-on-error | ✅ #27 |
-| seller_storefront discovery step | ✅ #28 |
-| seller_storefront.yaml + oa_csv.yaml | ✅ #29 |
-| run_summary.json + strategy docs | ✅ #30 |
+| `keepa_enrich` step (foundation for ASIN→market data) | ✅ #32 |
+| `oa_csv` chains into `calculate → decide` (full verdicts) | ✅ #33 |
+| Drop SellerAmp — SP-API MCP enrich leads mode | ✅ #34 |
+| Skill 3 scoring → canonical step | ✅ #35 |
+| **Skill 1 (Keepa Finder) — keep browser flow** | ⏸️ Deferred per user (2026-05-01) |
 
-**Open scoping decisions (no PRs yet):**
-
-1. **`keepa_enrich` step** — fetches `market_price` / `fees` / `sales_estimate` per ASIN so `oa_csv` can chain into `calculate→decide` for full ROI verdicts. Currently `oa_csv.yaml` stops at discovery (leads-only). The existing `resolve` step is EAN-keyed and assumes supplier-pricelist input, doesn't fit OA's pre-resolved ASINs. Implementation involves parsing Keepa's `csv` array indices (deliberately avoided in `KeepaProduct` model so far). Med-effort PR.
-
-2. **Skill 1 (Keepa Finder) + Skill 2 (SellerAmp)** — both browser-based in the legacy. Three options each: official API (Keepa has one; SellerAmp has paid API), Playwright headless, or keep as Claude Code skills. Decision drives whether they get ports at all.
-
-3. **Skill 3 (Scoring)** — `skills/skill-3-scoring/` is just a SKILL.md. Per-niche scoring scripts get generated under `data/{niche}/working/` by an agent. Question: extract canonical `fba_engine/steps/scoring.py` (matches rest of step 4), or leave agent-driven? Tradeoff: portability + testability vs flexibility per niche.
+**Engine state:** structurally complete for the strategies in scope. Future PRs are polish, not missing functionality.
 
 **Open low-priority polish (not blocking):**
+- **Buy Box %** signal — SellerAmp's only unique field. Could be derived from Keepa `Buy Box: Is FBA` time series or via Keepa `buy_box_avg90` ratio. Not yet wired.
+- **TA + OAXray oa_importers** stubbed out — add their parsers when those tools are needed.
+- **Skill 1 (Keepa Finder)** — currently browser-driven; if/when API path becomes useful, we have the keepa_client + keepa_enrich foundations to build on.
+- **Niche-specific scoring weights** — `shared/config/scoring/<niche>.yaml` overrides could be added when operators need per-niche tuning. Universal weights work today.
 - Resumable upload progress logging dropped in PR #15 (`_status` discarded)
 - Title clamp at 200 chars vs Sheets API's actual 100-char limit
 - Strategy 2 silently falls through on auth failures (pre-existing, JS-faithful)
 - Dead `last_err` defensive branch in `_retry_with_backoff`
-- TA + OAXray oa_importers stubbed out — add their parsers when needed
 
 ### Workflow notes (cumulative across sessions)
 - **Worktree gotcha:** `[[ -d .git ]]` checks fail in worktrees because `.git` is a file pointer. Use `[[ -e .git ]]`.
@@ -90,6 +73,10 @@ pytest shared/lib/python/ fba_engine/steps/tests/ \
 - **Disk cache layout:** `<repo>/.cache/fba-mcp/<resource>/<key-parts>__joined.json` — gitignored. `DiskCache.get()` returns `{ hit, stale, data }` enabling stale-on-error fallback.
 - **Keepa cache layout:** `<keepa_cache_root>/<namespace>/<key>.json` per `shared/lib/python/keepa_client/cache.py`. Use `DiskCache.get_stale()` for stale-on-error fallback (introduced in PR #27).
 - **Strategy YAML `input.discover: true`:** when first step creates the DataFrame from API/files, set this flag instead of `input.path`. Strict bool coercion at load time — quoted `"true"` / `"false"` get rejected.
+- **Pandas strict-string dtype trap:** `out[col] = ""` initializes a string-only series, then assigning ints/floats raises `TypeError: Invalid value '10' for dtype 'str'`. Fix: `out[col] = pd.Series([None] * len(out), dtype=object, index=out.index)` before writing mixed-type values. Hit this in scoring.py — the column-init pattern needs object dtype if you'll write scores AND verdict strings to the same row.
+- **SKILL.md ≠ shipped behaviour:** When porting a legacy skill, treat the `SKILL.md` as the spec but verify against the actually-shipped JS (`fba_engine/_legacy_keepa/scripts/*.js` or `data/{niche}/working/*.js`). The reviewer caught 2 HIGH bugs in scoring.py (wrong column names + margin tier off-by-one) by reading the real CSV headers + the legacy phase3_scoring.js — both differed from SKILL.md. Always check both sources during a port.
+- **Keepa stats indices:** Per `https://keepa.com/#!discuss/t/keepa-time-series-data/116`. The constants we consume: 0=AMAZON, 3=SALES (rank), 10=NEW_FBA, 11=COUNT_NEW (offer count), 18=BUY_BOX_SHIPPING. Stored as integer cents (`stats.current[18] = 1525` means £15.25). `-1` is the "no current value" sentinel — `KeepaProduct._stat_money/_stat_int` coerces both `-1` and missing arrays to `None`.
+- **`_estimate_for` token scaling (PR #32):** Single product no-stats: 6 tokens. Single product with `stats=N`: 7. 100-ASIN batch with stats: 5 + 100*2 = 205. Without per-ASIN scaling, the bucket would silently over-issue and rely on Keepa returning HTTP 429.
 - **Vitest integration tests:** Live in `src/__integration__/*.integration.test.ts`. Excluded from default `npm test` via `vitest.config.ts` exclude. Run with `npm run test:integration` (separate `vitest.integration.config.ts`).
 
 ## Session Protocol
