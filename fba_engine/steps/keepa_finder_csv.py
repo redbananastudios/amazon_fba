@@ -86,7 +86,7 @@ from typing import Any
 import pandas as pd
 
 import fba_config_loader
-from fba_engine.steps._helpers import atomic_write, coerce_str, parse_money
+from fba_engine.steps._helpers import atomic_write, coerce_str, is_missing, parse_money
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,13 @@ _KEEPA_TO_CANONICAL: dict[str, str] = {
     "Buy Box: 90 days avg.": "buy_box_avg90",
     "New, 3rd Party FBA: Current": "new_fba_price",
     "FBA Pick&Pack Fee": "fba_pick_pack_fee",
+    # Keepa renamed this column some time after 2026-04 from
+    # "Bought in past month" → "Monthly Sales Trends: Bought in past
+    # month". Both spellings are mapped — the first one Keepa emits
+    # wins, the absent one is silently ignored. Drop the alias once
+    # all live exports are confirmed on the new schema.
     "Bought in past month": "sales_estimate",
+    "Monthly Sales Trends: Bought in past month": "sales_estimate",
     "New FBA Offer Count: Current": "fba_seller_count",
     "Sales Rank: Current": "bsr_current",
     "Sales Rank: 90 days avg.": "bsr_avg90",
@@ -308,10 +314,23 @@ def _row_from_keepa(
         "amazon_url": f"{AMAZON_UK_DP}{asin}",
         "category": _leaf_category(row),
     }
+    # Group source columns by destination so we can pick the first
+    # source column that actually has data. Some canonical fields have
+    # multiple source aliases (e.g. sales_estimate ← either
+    # "Bought in past month" or "Monthly Sales Trends: Bought in past
+    # month" depending on Keepa export vintage).
+    aliases: dict[str, list[str]] = {}
     for src_col, dst_col in _KEEPA_TO_CANONICAL.items():
+        aliases.setdefault(dst_col, []).append(src_col)
+    for dst_col, src_cols in aliases.items():
         if dst_col in out:
-            continue  # already populated above
-        raw = row.get(src_col)
+            continue  # already populated by the constants above
+        raw = None
+        for src in src_cols:
+            v = row.get(src)
+            if v is not None and not is_missing(v) and coerce_str(v):
+                raw = v
+                break
         if dst_col in _NUMERIC_CANONICAL_FIELDS:
             out[dst_col] = parse_money(raw)
         else:

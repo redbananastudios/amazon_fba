@@ -250,6 +250,37 @@ def test_canonical_columns_include_calculate_inputs(tmp_path):
     assert not missing, f"calculate.py inputs missing from canonical schema: {missing}"
 
 
+def test_sales_column_alias_post_rename(tmp_path):
+    """Keepa renamed "Bought in past month" → "Monthly Sales Trends:
+    Bought in past month" some time after 2026-04. The mapper supports
+    both spellings; whichever the live export emits wins. Locks in the
+    fix that exposed itself only when sales_estimate stayed at 0
+    for every row of a real Toys & Games export."""
+    NEW_HEADER = [
+        c for c in _KEEPA_HEADER if c != "Bought in past month"
+    ] + ["Monthly Sales Trends: Bought in past month"]
+
+    base = _fixture_row()
+    base["Monthly Sales Trends: Bought in past month"] = base.pop("Bought in past month")
+
+    csv = tmp_path / "keepa_new_schema.csv"
+    pd.DataFrame([base], columns=NEW_HEADER).to_csv(
+        csv, index=False, encoding="utf-8-sig",
+    )
+    cdir = _write_canonical_config(tmp_path)
+    df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
+    assert df.iloc[0]["sales_estimate"] == 150.0
+
+
+def test_sales_column_alias_pre_rename_still_works(tmp_path):
+    """Backwards compat — the legacy column name still resolves so
+    historical phase1_raw.csv files don't suddenly break."""
+    csv = _write_fixture(tmp_path, [_fixture_row()])  # uses old "Bought in past month"
+    cdir = _write_canonical_config(tmp_path)
+    df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
+    assert df.iloc[0]["sales_estimate"] == 150.0
+
+
 def test_canonical_column_order_is_stable(tmp_path):
     csv = _write_fixture(tmp_path, [_fixture_row()])
     cdir = _write_canonical_config(tmp_path)
