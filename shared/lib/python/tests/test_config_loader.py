@@ -160,3 +160,140 @@ def test_missing_config_dir_raises(tmp_path):
     cfg.reset_cache()
     with pytest.raises(FileNotFoundError):
         cfg.get_business_rules(config_dir=tmp_path / "does_not_exist")
+
+
+# --------------------------------------------------------------------------- #
+# GlobalExclusions                                                            #
+# --------------------------------------------------------------------------- #
+
+def test_global_exclusions_loads_canonical_yaml():
+    """Canonical global_exclusions.yaml ships with hazmat strict + Clothing root."""
+    g = cfg.get_global_exclusions()
+    assert g.hazmat_strict is True
+    assert "Clothing, Shoes & Jewellery" in g.categories_excluded
+    # Canonical keyword list — these must remain (extending OK; removing without sign-off NOT).
+    for kw in ("clothing", "apparel", "shoe", "boot", "footwear"):
+        assert kw in g.title_keywords_excluded, f"missing canonical keyword {kw!r}"
+
+
+def test_global_exclusions_is_frozen():
+    """GlobalExclusions is immutable — callers cannot mutate."""
+    g = cfg.get_global_exclusions()
+    with pytest.raises((AttributeError, TypeError)):
+        g.hazmat_strict = False  # type: ignore[misc]
+
+
+def test_global_exclusions_uses_tuples_for_lists():
+    """Tuples, not lists — hashable, immutable, safe for caching."""
+    g = cfg.get_global_exclusions()
+    assert isinstance(g.categories_excluded, tuple)
+    assert isinstance(g.title_keywords_excluded, tuple)
+
+
+def test_global_exclusions_missing_file_returns_permissive_defaults(tmp_path):
+    """Without global_exclusions.yaml present, callers see no exclusions —
+    legacy supplier flow keeps working."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    # Write only the two mandatory files; deliberately omit global_exclusions.yaml.
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    (config_dir / "decision_thresholds.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    )
+    cfg.reset_cache()
+    g = cfg.get_global_exclusions(config_dir=config_dir)
+    assert g.hazmat_strict is False
+    assert g.categories_excluded == ()
+    assert g.title_keywords_excluded == ()
+
+
+def test_global_exclusions_custom_config_dir(tmp_path):
+    """Custom YAML in a temp dir loads correctly — supports per-test override."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    (config_dir / "decision_thresholds.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    )
+    (config_dir / "global_exclusions.yaml").write_text("""
+hazmat_strict: false
+categories_excluded:
+  - "Health & Personal Care"
+title_keywords_excluded:
+  - banana
+  - shoehorn
+""")
+    cfg.reset_cache()
+    g = cfg.get_global_exclusions(config_dir=config_dir)
+    assert g.hazmat_strict is False
+    assert g.categories_excluded == ("Health & Personal Care",)
+    assert g.title_keywords_excluded == ("banana", "shoehorn")
+
+
+def test_title_is_excluded_substring_match():
+    """Substring match catches plurals and compounds."""
+    g = cfg.get_global_exclusions()
+    assert g.title_is_excluded("Mens Shoes Size 10") is True       # 'shoe' substring
+    assert g.title_is_excluded("Boots for Hiking") is True          # 'boot' substring
+    assert g.title_is_excluded("Apparel rack") is True              # exact
+    assert g.title_is_excluded("Action Figure Set") is False        # clean
+
+
+def test_title_is_excluded_case_insensitive():
+    g = cfg.get_global_exclusions()
+    assert g.title_is_excluded("CLOTHING ITEM") is True
+    assert g.title_is_excluded("clothing item") is True
+    assert g.title_is_excluded("Clothing Item") is True
+
+
+def test_title_is_excluded_handles_none_and_empty():
+    """None / empty title isn't an exclusion match — let other validation catch missing data."""
+    g = cfg.get_global_exclusions()
+    assert g.title_is_excluded(None) is False
+    assert g.title_is_excluded("") is False
+
+
+def test_category_is_excluded_exact_match():
+    """Exact-match (case-insensitive, whitespace-trimmed) — subcategories not implied."""
+    g = cfg.get_global_exclusions()
+    assert g.category_is_excluded("Clothing, Shoes & Jewellery") is True
+    assert g.category_is_excluded("clothing, shoes & jewellery") is True
+    assert g.category_is_excluded("  Clothing, Shoes & Jewellery  ") is True
+    assert g.category_is_excluded("Clothing") is False               # not a substring match
+    assert g.category_is_excluded("Toys & Games") is False
+
+
+def test_category_is_excluded_handles_none():
+    g = cfg.get_global_exclusions()
+    assert g.category_is_excluded(None) is False
+    assert g.category_is_excluded("") is False
+
+
+def test_reset_cache_clears_global_exclusions(tmp_path):
+    """reset_cache() must clear the global_exclusions cache too — otherwise
+    test isolation breaks across tests that mutate the config dir."""
+    # Step 1: load canonical
+    cfg.reset_cache()
+    g1 = cfg.get_global_exclusions()
+    assert g1.hazmat_strict is True
+    # Step 2: switch to a custom dir without resetting → cache should still
+    # return the canonical (proving cache works), but ONLY because we haven't reset.
+    # Step 3: reset, switch dir → must read fresh.
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    (config_dir / "decision_thresholds.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    )
+    (config_dir / "global_exclusions.yaml").write_text("hazmat_strict: false\n")
+    cfg.reset_cache()
+    g2 = cfg.get_global_exclusions(config_dir=config_dir)
+    assert g2.hazmat_strict is False
+    assert g1 is not g2
+
