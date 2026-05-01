@@ -36,6 +36,17 @@ build/
 services/amazon-fba-fees-mcp/dist/
 services/amazon-fba-fees-mcp/build/
 
+# Claude Code / MCP session-local state
+.claude/
+.mcp.json
+.playwright-mcp/
+
+# Engine run outputs — operator-local artefacts, regenerated per run
+fba_engine/data/strategies/
+
+# Local pre-merge backups created when reconciling PRDs / docs
+*.local-pre-merge-backup
+
 # Data — gitignored except for the bits we want to track
 fba_engine/data/pricelists/*/raw/
 fba_engine/data/pricelists/*/results/
