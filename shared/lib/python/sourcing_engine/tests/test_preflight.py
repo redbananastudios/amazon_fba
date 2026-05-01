@@ -352,6 +352,110 @@ def test_ungate_column_set_documented_constants():
     ]
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# `gated` Y/N/UNKNOWN derivation from restriction_status
+# ──────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("status,expected", [
+    ("UNRESTRICTED", "N"),
+    ("BRAND_GATED", "Y"),
+    ("RESTRICTED", "Y"),
+    ("CATEGORY_GATED", "Y"),
+    # Lowercase is normalised — defensive against MCP shape drift.
+    ("brand_gated", "Y"),
+    ("unrestricted", "N"),
+    # Unknown / future status values default to UNKNOWN rather than
+    # silently being treated as not-gated.
+    ("APPROVAL_PENDING", "UNKNOWN"),
+    ("", "UNKNOWN"),
+    (None, "UNKNOWN"),
+])
+def test_derive_gated_mapping(status, expected):
+    assert pf._derive_gated(status) == expected
+
+
+def test_coerce_result_sets_gated_y_for_brand_gated():
+    """A real SP-API restrictions response with BRAND_GATED status must
+    populate gated="Y" so the XLSX writer's Gated cell renders correctly
+    instead of showing None to the operator."""
+    response = {
+        "restrictions": {
+            "status": "BRAND_GATED",
+            "reasons": [{"reasonCode": "APPROVAL_REQUIRED"}],
+        },
+    }
+    out = pf._coerce_result(response, original_row={"asin": "B0AAA00001"})
+    assert out["restriction_status"] == "BRAND_GATED"
+    assert out["gated"] == "Y"
+
+
+def test_coerce_result_sets_gated_n_for_unrestricted():
+    response = {
+        "restrictions": {
+            "status": "UNRESTRICTED",
+            "reasons": [],
+        },
+    }
+    out = pf._coerce_result(response, original_row={"asin": "B0AAA00001"})
+    assert out["restriction_status"] == "UNRESTRICTED"
+    assert out["gated"] == "N"
+
+
+def test_coerce_result_defaults_gated_unknown_when_restrictions_missing():
+    """When the SP-API restrictions source is absent (e.g. partial CLI
+    failure), gated must still be "UNKNOWN" — never None — so the column
+    domain stays consistent."""
+    response = {"fba": {"eligible": True}}
+    out = pf._coerce_result(response, original_row={"asin": "B0AAA00001"})
+    assert out["restriction_status"] is None
+    assert out["gated"] == "UNKNOWN"
+
+
+def test_seed_row_defaults_gated_unknown():
+    """Rows that don't get preflighted (no ASIN, batch failure) must
+    still have gated="UNKNOWN" so the output schema is consistent."""
+    row = {"asin": "B0AAA00001", "brand": "AcmeKeepa"}
+    pf._seed_row(row)
+    assert row["gated"] == "UNKNOWN"
+
+
+def test_seed_row_preserves_existing_gated_value():
+    """If an upstream step already set gated (e.g. supplier flow with
+    SellerAmp data), seeding must not clobber it."""
+    row = {"asin": "B0AAA00001", "gated": "Y"}
+    pf._seed_row(row)
+    assert row["gated"] == "Y"
+
+
+def test_preflight_columns_includes_gated():
+    """Lock in the schema — `gated` must be in PREFLIGHT_COLUMNS so the
+    seed loop and downstream writers see it consistently."""
+    assert "gated" in pf.PREFLIGHT_COLUMNS
+
+
+def test_annotate_populates_gated_end_to_end(tmp_path, monkeypatch):
+    """Full annotate path: gated="Y" for restricted rows, "N" for clean
+    rows. Mirrors the keepa_finder leads flow that surfaced the bug."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    monkeypatch.setenv("SP_API_CLIENT_ID", "x")
+    rows = [_row("B001"), _row("B002")]
+    fake_proc = MagicMock(
+        returncode=0,
+        stdout=json.dumps(_fake_cli_response(
+            ["B001", "B002"], restricted={"B002"}
+        )),
+        stderr="",
+    )
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch.object(pf, "_find_repo_root", return_value=tmp_path), \
+         patch("subprocess.run", return_value=fake_proc):
+        pf.annotate_with_preflight(rows, cli_path=cli)
+    by_asin = {r["asin"]: r for r in rows}
+    assert by_asin["B001"]["gated"] == "N"
+    assert by_asin["B002"]["gated"] == "Y"
+
+
 def test_restriction_links_partial_coverage_keeps_present_only(tmp_path, monkeypatch):
     """Some reasons surface a link, others don't. The output should
     contain ONLY the present links — not None placeholders or empty
