@@ -14,28 +14,43 @@ the manually-driven ``$keepa-product-finder`` skill (Cowork's discovery
 task) and the canonical engine (Cowork's engine task). It does not call
 Keepa or SP-API itself.
 
-Output columns (canonical schema consumed downstream):
-    asin                       — primary key
-    source                     — constant ``"keepa_finder"``
-    discovery_strategy         — recipe id (``amazon_oos_wholesale`` etc.)
-    product_name               — Keepa "Title"
-    brand                      — Keepa "Brand"
-    manufacturer               — Keepa "Manufacturer"
-    category                   — leaf of "Categories: Tree" (or "Sub" / "Root")
-    category_root              — Keepa "Categories: Root"
-    ean                        — Keepa "Product Codes: EAN"
-    upc                        — Keepa "Product Codes: UPC"
-    market_price               — Keepa "Buy Box: Current"
-    buy_box_avg90              — Keepa "Buy Box: 90 days avg."
-    sales_estimate             — Keepa "Bought in past month"
-    fba_seller_count           — Keepa "New FBA Offer Count: Current"
-    bsr_current                — Keepa "Sales Rank: Current"
-    bsr_avg90                  — Keepa "Sales Rank: 90 days avg."
-    buy_box_pct_amazon_90d     — Keepa "Buy Box: % Amazon 90 days"
-    buy_box_oos_90             — Keepa "Buy Box: 90 days OOS"
-    delta_buy_box_30d_pct      — Keepa "Buy Box: 30 days drop %"
-    delta_buy_box_90d_pct      — Keepa "Buy Box: 90 days drop %"
-    amazon_url                 — built from ASIN
+Output columns (canonical schema consumed downstream by 04_calculate):
+    Identity / metadata
+        asin                    — primary key
+        source                  — constant ``"keepa_finder"``
+        discovery_strategy      — recipe id (``amazon_oos_wholesale`` etc.)
+        product_name            — Keepa "Title"
+        brand                   — Keepa "Brand"
+        manufacturer            — Keepa "Manufacturer"
+        category                — leaf of "Categories: Tree"
+        category_root           — Keepa "Categories: Root"
+        ean / upc               — Keepa "Product Codes: EAN" / "UPC"
+        amazon_url              — built from ASIN
+
+    Prices (calculate.py reads these directly)
+        buy_box_price           ← Buy Box: Current
+        new_fba_price           ← New, 3rd Party FBA: Current
+        buy_box_avg90           ← Buy Box: 90 days avg.
+
+    Velocity / competition (read by calculate.py)
+        sales_estimate          ← Bought in past month
+        fba_seller_count        ← New FBA Offer Count: Current
+
+    Fee inputs (read by fees.calculate_fees_fba)
+        fba_pick_pack_fee       ← FBA Pick&Pack Fee
+        referral_fee_pct        ← Referral Fee % (Keepa exports "15 %",
+                                  divided by 100 → 0.15)
+
+    Engine flags
+        amazon_status           — derived: "ON_LISTING" if Amazon: Current
+                                  > 0 else "OFF_LISTING"
+        buy_cost                — 0.0 (wholesale flow — engine emits
+                                  max_buy_price as the negotiation ceiling)
+        moq                     — 1 (Keepa-finder flow is leads, no MOQ)
+
+    Informational / used by stability_score (commit 6)
+        bsr_current, bsr_avg90, buy_box_pct_amazon_90d,
+        buy_box_oos_90, delta_buy_box_30d_pct, delta_buy_box_90d_pct
 
 Filters applied (in order):
     1. ASIN dedup against ``data/niches/exclusions.csv`` (the global
@@ -81,6 +96,7 @@ logger = logging.getLogger(__name__)
 # ────────────────────────────────────────────────────────────────────────
 
 KEEPA_FINDER_CANONICAL_COLUMNS: tuple[str, ...] = (
+    # Identity / metadata
     "asin",
     "source",
     "discovery_strategy",
@@ -91,10 +107,24 @@ KEEPA_FINDER_CANONICAL_COLUMNS: tuple[str, ...] = (
     "category_root",
     "ean",
     "upc",
-    "market_price",
-    "buy_box_avg90",
-    "sales_estimate",
-    "fba_seller_count",
+    # Price columns calculate.py reads directly
+    "buy_box_price",            # ← Buy Box: Current
+    "new_fba_price",            # ← New, 3rd Party FBA: Current
+    "buy_box_avg90",            # informational; calculate has its own conservative-price logic
+    # Velocity + competition columns calculate.py reads
+    "sales_estimate",           # ← Bought in past month
+    "fba_seller_count",         # ← New FBA Offer Count: Current
+    # Keepa-supplied fee inputs (used by _fees() — see calculate.py L130-131)
+    "fba_pick_pack_fee",        # ← FBA Pick&Pack Fee
+    "referral_fee_pct",         # ← Referral Fee % (parsed and divided by 100)
+    # Amazon presence flag derived in _row_from_keepa
+    "amazon_status",            # "ON_LISTING" / "OFF_LISTING"
+    # Wholesale-flow defaults — buy_cost=0 tells the engine to emit
+    # max_buy_price (the supplier-negotiation ceiling); moq=1 because
+    # Keepa-finder strategies are leads, not pre-negotiated pricelists.
+    "buy_cost",
+    "moq",
+    # Informational / for stability_score (commit 6) and downstream display
     "bsr_current",
     "bsr_avg90",
     "buy_box_pct_amazon_90d",
@@ -117,8 +147,10 @@ _KEEPA_TO_CANONICAL: dict[str, str] = {
     "Categories: Root": "category_root",
     "Product Codes: EAN": "ean",
     "Product Codes: UPC": "upc",
-    "Buy Box: Current": "market_price",
+    "Buy Box: Current": "buy_box_price",
     "Buy Box: 90 days avg.": "buy_box_avg90",
+    "New, 3rd Party FBA: Current": "new_fba_price",
+    "FBA Pick&Pack Fee": "fba_pick_pack_fee",
     "Bought in past month": "sales_estimate",
     "New FBA Offer Count: Current": "fba_seller_count",
     "Sales Rank: Current": "bsr_current",
@@ -127,15 +159,21 @@ _KEEPA_TO_CANONICAL: dict[str, str] = {
     "Buy Box: 90 days OOS": "buy_box_oos_90",
     "Buy Box: 30 days drop %": "delta_buy_box_30d_pct",
     "Buy Box: 90 days drop %": "delta_buy_box_90d_pct",
+    # NB: "Referral Fee %" is mapped specially in _row_from_keepa
+    # because Keepa formats it as "15 %" and calculate.py expects
+    # the fraction (0.15). parse_money strips the % sign but
+    # doesn't divide.
 }
 
 # Numeric canonical fields (coerced via parse_money — tolerant of
 # Keepa's "-" sentinel for missing, "GBP" prefix on prices, etc.).
 _NUMERIC_CANONICAL_FIELDS: frozenset[str] = frozenset({
-    "market_price",
+    "buy_box_price",
+    "new_fba_price",
     "buy_box_avg90",
     "sales_estimate",
     "fba_seller_count",
+    "fba_pick_pack_fee",
     "bsr_current",
     "bsr_avg90",
     "buy_box_pct_amazon_90d",
@@ -276,6 +314,27 @@ def _row_from_keepa(
             out[dst_col] = parse_money(raw)
         else:
             out[dst_col] = coerce_str(raw)
+
+    # Referral fee: Keepa exports "15 %" or "15.01 %"; calculate.py and
+    # fees.calculate_fees_fba expect the fraction (0.15). parse_money
+    # strips the percent sign but doesn't divide.
+    out["referral_fee_pct"] = parse_money(row.get("Referral Fee %")) / 100.0
+
+    # Amazon presence flag — derived. Empty / 0 / "-" in "Amazon: Current"
+    # means Amazon is NOT currently selling (the OOS pattern that
+    # amazon_oos_wholesale targets). Anything > 0 means Amazon IS on the
+    # listing right now. We don't emit "UNKNOWN" — Keepa always returns
+    # a value; absence is meaningful (= OFF_LISTING).
+    amz_current = parse_money(row.get("Amazon: Current"))
+    out["amazon_status"] = "ON_LISTING" if amz_current > 0 else "OFF_LISTING"
+
+    # Wholesale-flow defaults. buy_cost=0 is the load-bearing convention
+    # that tells calculate.calculate_profit to emit max_buy_price (the
+    # supplier-negotiation ceiling) instead of a literal ROI. moq=1
+    # because Keepa-finder strategies are leads, not pre-negotiated
+    # pricelists with bulk-buy minimums.
+    out["buy_cost"] = 0.0
+    out["moq"] = 1
     return out
 
 

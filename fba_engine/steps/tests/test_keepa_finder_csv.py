@@ -34,13 +34,16 @@ from fba_engine.steps import keepa_finder_csv as step  # noqa: E402
 
 
 # Subset of the real Keepa export header (175+ columns). The step only
-# reads ~17 columns by name; we include those plus a couple extras to
+# reads ~21 columns by name; we include those plus a couple extras to
 # prove the step ignores the rest gracefully.
 _KEEPA_HEADER = [
     "ASIN", "Title", "Brand", "Manufacturer",
     "Categories: Root", "Categories: Sub", "Categories: Tree",
     "Product Codes: EAN", "Product Codes: UPC",
     "Buy Box: Current", "Buy Box: 90 days avg.",
+    "New, 3rd Party FBA: Current",
+    "Amazon: Current",
+    "FBA Pick&Pack Fee", "Referral Fee %",
     "Bought in past month",
     "New FBA Offer Count: Current",
     "Sales Rank: Current", "Sales Rank: 90 days avg.",
@@ -65,11 +68,15 @@ def _fixture_row(**overrides) -> dict[str, str]:
         "Product Codes: UPC": "012345678905",
         "Buy Box: Current": "24.99",
         "Buy Box: 90 days avg.": "26.50",
+        "New, 3rd Party FBA: Current": "25.49",
+        "Amazon: Current": "",                   # OFF_LISTING (Amazon not selling)
+        "FBA Pick&Pack Fee": "3.35",
+        "Referral Fee %": "15 %",                # Keepa-formatted percent
         "Bought in past month": "150",
         "New FBA Offer Count: Current": "5",
         "Sales Rank: Current": "12345",
         "Sales Rank: 90 days avg.": "13500",
-        "Buy Box: % Amazon 90 days": "5",
+        "Buy Box: % Amazon 90 days": "5 %",
         "Buy Box: 90 days OOS": "2",
         "Buy Box: 30 days drop %": "3",
         "Buy Box: 90 days drop %": "5",
@@ -158,15 +165,17 @@ def test_numeric_coercion_money_fields(tmp_path):
         _fixture_row(**{
             "Buy Box: Current": "24.99",
             "Buy Box: 90 days avg.": "GBP26.50",
+            "New, 3rd Party FBA: Current": "25.49",
             "Sales Rank: Current": "12345",
-            "Buy Box: % Amazon 90 days": "8",
+            "Buy Box: % Amazon 90 days": "8 %",
         })
     ])
     cdir = _write_canonical_config(tmp_path)
     df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
     row = df.iloc[0]
-    assert row["market_price"] == 24.99
+    assert row["buy_box_price"] == 24.99
     assert row["buy_box_avg90"] == 26.5
+    assert row["new_fba_price"] == 25.49
     assert row["bsr_current"] == 12345.0
     assert row["buy_box_pct_amazon_90d"] == 8.0
 
@@ -182,8 +191,63 @@ def test_keepa_dash_sentinel_becomes_zero(tmp_path):
     cdir = _write_canonical_config(tmp_path)
     df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
     row = df.iloc[0]
-    assert row["market_price"] == 0.0
+    assert row["buy_box_price"] == 0.0
     assert row["sales_estimate"] == 0.0
+
+
+def test_referral_fee_pct_divides_by_100(tmp_path):
+    """Keepa exports '15 %' / '15.01 %'; calculate.py expects fraction (0.15)."""
+    csv = _write_fixture(tmp_path, [
+        _fixture_row(**{"Referral Fee %": "15 %"}),
+        _fixture_row(ASIN="B0FRACTION", **{"Referral Fee %": "15.01 %"}),
+    ])
+    cdir = _write_canonical_config(tmp_path)
+    df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
+    assert df.iloc[0]["referral_fee_pct"] == 0.15
+    assert abs(df.iloc[1]["referral_fee_pct"] - 0.1501) < 1e-9
+
+
+def test_amazon_status_derivation(tmp_path):
+    """Amazon: Current > 0 → ON_LISTING; empty / 0 / '-' → OFF_LISTING."""
+    csv = _write_fixture(tmp_path, [
+        _fixture_row(ASIN="B0AMZON001", **{"Amazon: Current": "29.99"}),  # selling
+        _fixture_row(ASIN="B0AMZOFF01", **{"Amazon: Current": ""}),        # not selling
+        _fixture_row(ASIN="B0AMZOFF02", **{"Amazon: Current": "-"}),       # not selling (sentinel)
+        _fixture_row(ASIN="B0AMZOFF03", **{"Amazon: Current": "0"}),       # not selling
+    ])
+    cdir = _write_canonical_config(tmp_path)
+    df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
+    assert df.set_index("asin").loc["B0AMZON001", "amazon_status"] == "ON_LISTING"
+    assert df.set_index("asin").loc["B0AMZOFF01", "amazon_status"] == "OFF_LISTING"
+    assert df.set_index("asin").loc["B0AMZOFF02", "amazon_status"] == "OFF_LISTING"
+    assert df.set_index("asin").loc["B0AMZOFF03", "amazon_status"] == "OFF_LISTING"
+
+
+def test_wholesale_defaults_buy_cost_zero_moq_one(tmp_path):
+    """Keepa-finder is wholesale-leads — buy_cost=0 tells calculate.py
+    to emit max_buy_price; moq=1 because no MOQ at lead-stage."""
+    csv = _write_fixture(tmp_path, [_fixture_row()])
+    cdir = _write_canonical_config(tmp_path)
+    df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
+    row = df.iloc[0]
+    assert row["buy_cost"] == 0.0
+    assert row["moq"] == 1
+
+
+def test_canonical_columns_include_calculate_inputs(tmp_path):
+    """Sanity: every column calculate.py reads must be present and the order
+    matches KEEPA_FINDER_CANONICAL_COLUMNS."""
+    csv = _write_fixture(tmp_path, [_fixture_row()])
+    cdir = _write_canonical_config(tmp_path)
+    df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
+    required = {
+        # Read directly by calculate.calculate_economics + _calculate_match
+        "buy_box_price", "new_fba_price", "fba_seller_count",
+        "amazon_status", "buy_cost", "sales_estimate",
+        "fba_pick_pack_fee", "referral_fee_pct", "moq",
+    }
+    missing = required - set(df.columns)
+    assert not missing, f"calculate.py inputs missing from canonical schema: {missing}"
 
 
 def test_canonical_column_order_is_stable(tmp_path):
@@ -499,10 +563,16 @@ def test_real_keepa_export_produces_canonical_df():
     assert (df["source"] == "keepa_finder").all()
     assert (df["discovery_strategy"] == "amazon_oos_wholesale").all()
     assert (df["product_name"].str.len() > 0).mean() > 0.9
-    # market_price + sales_estimate are the load-bearing signals for the
+    # buy_box_price + sales_estimate are the load-bearing signals for the
     # downstream calculate step. If these are all 0 something's wrong with
     # the column-name mapping (Keepa may have renamed).
-    assert (df["market_price"] > 0).any(), \
-        "no rows have market_price — Buy Box: Current column name may have drifted"
+    assert (df["buy_box_price"] > 0).any(), \
+        "no rows have buy_box_price — Buy Box: Current column name may have drifted"
     assert (df["sales_estimate"] > 0).any(), \
         "no rows have sales_estimate — Bought in past month column name may have drifted"
+    # Sanity: the wholesale-default columns are populated for every row.
+    assert (df["buy_cost"] == 0.0).all()
+    assert (df["moq"] == 1).all()
+    # Referral fee was divided by 100 (Keepa "15 %" → 0.15)
+    assert (df["referral_fee_pct"] <= 1.0).all()
+    assert (df["referral_fee_pct"] > 0.0).any()
