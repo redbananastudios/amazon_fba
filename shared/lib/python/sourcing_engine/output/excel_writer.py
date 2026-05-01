@@ -45,6 +45,7 @@ COLUMNS = [
     # Populated when MCP CLI is built and SP_API creds are set; blank otherwise.
     ("restriction_status",      "Restriction Status",   18, "text"),
     ("restriction_reasons",     "Restriction Reasons",  30, "text"),
+    ("restriction_links",       "Ungate Links",         60, "url"),
     ("fba_eligible",            "FBA Eligible",         12, "text"),
     ("fba_ineligibility",       "FBA Ineligibility",    24, "text"),
     ("live_buy_box",            "Live Buy Box",         14, "gbp"),
@@ -178,8 +179,16 @@ def write_excel(
                     cell.value = None
                 elif fmt == "url" and val:
                     cell.value = str(val)
-                    cell.hyperlink = str(val)
-                    cell.font = link_font
+                    # Multi-URL cells (e.g. restriction_links =
+                    # "https://...; https://...") use the FIRST URL as
+                    # the hyperlink target — Excel cells only support
+                    # one hyperlink per cell. The full text remains
+                    # visible / copyable; the operator clicks for the
+                    # primary application URL.
+                    first_url = str(val).split(";", 1)[0].strip()
+                    if first_url:
+                        cell.hyperlink = first_url
+                        cell.font = link_font
                 elif fmt == "gbp":
                     try:
                         cell.value = round(float(val), 2)

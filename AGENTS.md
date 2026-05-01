@@ -210,6 +210,7 @@ the preflight didn't run or the source erred):
 |---|---|
 | `restriction_status` | UNRESTRICTED / RESTRICTED / BRAND_GATED / CATEGORY_GATED |
 | `restriction_reasons` | comma-joined reason codes |
+| `restriction_links` | semicolon-joined Seller Central Apply-to-sell URLs (one per distinct reason) — click straight from the CSV/XLSX |
 | `fba_eligible` | True / False |
 | `fba_ineligibility` | comma-joined ineligibility codes |
 | `live_buy_box` | real-time Buy Box landed price (GBP) |

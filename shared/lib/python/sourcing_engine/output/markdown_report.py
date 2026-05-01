@@ -90,7 +90,8 @@ def _restriction_notes_section(df: pd.DataFrame) -> str:
         return ""
     cols = [
         "supplier", "ean", "asin", "product_name", "restriction_status",
-        "restriction_reasons", "profit_conservative", "margin_conservative",
+        "restriction_reasons", "restriction_links",
+        "profit_conservative", "margin_conservative",
     ]
     lines = [
         "\n## \U0001F6AB Restriction notes\n",
@@ -98,6 +99,9 @@ def _restriction_notes_section(df: pd.DataFrame) -> str:
         "Decision logic is unchanged — these items are still profitable "
         "enough to shortlist; the engine flags them so you can decide "
         "whether to apply for ungating.\n",
+        "The **`restriction_links`** column carries the SP-API-provided "
+        "Seller Central application URL per ASIN — click straight from "
+        "here instead of looking up each restriction by hand.\n",
     ]
     lines.append(_make_table(gated, cols))
     return "\n".join(lines)

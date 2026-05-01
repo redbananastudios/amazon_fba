@@ -16,13 +16,35 @@ import pytest
 from sourcing_engine.pipeline import preflight as pf
 
 
-def _fake_cli_response(asins, *, restricted=None, ineligible=None, buy_box=None):
-    """Build a fake CLI JSON response in the shape preflight_asin returns."""
+def _fake_cli_response(asins, *, restricted=None, ineligible=None, buy_box=None,
+                       restriction_links=None):
+    """Build a fake CLI JSON response in the shape preflight_asin returns.
+
+    ``restriction_links``: optional dict ``{asin: [url1, url2, ...]}`` —
+    each URL becomes one reason's ``link`` field (mirroring how the
+    MCP forwards SP-API's per-reason ``links[0].resource`` value).
+    """
     restricted = restricted or set()
     ineligible = ineligible or set()
     buy_box = buy_box or {}
+    restriction_links = restriction_links or {}
     results = []
     for asin in asins:
+        # Build per-reason payload — when restriction_links specifies
+        # multiple URLs for an ASIN, emit one reason per URL so the
+        # extraction path's de-duplication has something to chew on.
+        if asin in restricted:
+            urls = restriction_links.get(asin, [None])
+            reasons_payload = [
+                {
+                    "reasonCode": "APPROVAL_REQUIRED",
+                    "message": "brand approval required",
+                    **({"link": url} if url else {}),
+                }
+                for url in urls
+            ]
+        else:
+            reasons_payload = []
         result = {
             "asin": asin,
             "cached": {},
@@ -30,11 +52,7 @@ def _fake_cli_response(asins, *, restricted=None, ineligible=None, buy_box=None)
             "restrictions": {
                 "asin": asin,
                 "status": "BRAND_GATED" if asin in restricted else "UNRESTRICTED",
-                "reasons": (
-                    [{"reasonCode": "APPROVAL_REQUIRED",
-                      "message": "brand approval required"}]
-                    if asin in restricted else []
-                ),
+                "reasons": reasons_payload,
                 "approval_required": asin in restricted,
                 "marketplace_id": "A1F83G8C2ARO7P",
             },
@@ -158,6 +176,158 @@ def test_annotate_populates_columns_from_cli_response(tmp_path, monkeypatch):
     # B002 — brand gated
     assert rows[1]["restriction_status"] == "BRAND_GATED"
     assert rows[1]["restriction_reasons"] == "APPROVAL_REQUIRED"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# restriction_links extraction (Apply-to-sell URLs from SP-API).
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_restriction_links_populated_when_link_present(tmp_path, monkeypatch):
+    """SP-API attaches an Apply-to-sell URL per gated reason. The engine
+    surfaces it as restriction_links so the operator can click straight
+    through instead of looking up each ASIN in Seller Central by hand."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    monkeypatch.setenv("SP_API_CLIENT_ID", "x")
+    rows = [_row("B001"), _row("B002")]
+    fake_proc = MagicMock(
+        returncode=0,
+        stdout=json.dumps(_fake_cli_response(
+            ["B001", "B002"],
+            restricted={"B002"},
+            restriction_links={
+                "B002": ["https://sellercentral.amazon.co.uk/hz/approval?asin=B002"],
+            },
+        )),
+        stderr="",
+    )
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch.object(pf, "_find_repo_root", return_value=tmp_path), \
+         patch("subprocess.run", return_value=fake_proc):
+        pf.annotate_with_preflight(rows, cli_path=cli)
+    assert rows[0]["restriction_links"] is None     # UNRESTRICTED — no link
+    assert rows[1]["restriction_links"] == \
+        "https://sellercentral.amazon.co.uk/hz/approval?asin=B002"
+
+
+def test_restriction_links_dedupes_same_url_across_reasons(tmp_path, monkeypatch):
+    """Some restrictions surface multiple reasons that all point at the
+    same application URL. Dedup so the cell isn't a wall of repeats."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    monkeypatch.setenv("SP_API_CLIENT_ID", "x")
+    rows = [_row("B001")]
+    same = "https://sellercentral.amazon.co.uk/hz/approval?asin=B001"
+    fake_proc = MagicMock(
+        returncode=0,
+        stdout=json.dumps(_fake_cli_response(
+            ["B001"], restricted={"B001"},
+            restriction_links={"B001": [same, same, same]},
+        )),
+        stderr="",
+    )
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch.object(pf, "_find_repo_root", return_value=tmp_path), \
+         patch("subprocess.run", return_value=fake_proc):
+        pf.annotate_with_preflight(rows, cli_path=cli)
+    assert rows[0]["restriction_links"] == same
+
+
+def test_restriction_links_joins_distinct_urls_with_semicolon(tmp_path, monkeypatch):
+    """When reasons surface different application URLs (e.g. one for
+    invoice review, one for brand authorization), keep both — operator
+    chooses the path."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    monkeypatch.setenv("SP_API_CLIENT_ID", "x")
+    rows = [_row("B001")]
+    urls = [
+        "https://sellercentral.amazon.co.uk/hz/approval?asin=B001",
+        "https://sellercentral.amazon.co.uk/brand/auth?asin=B001",
+    ]
+    fake_proc = MagicMock(
+        returncode=0,
+        stdout=json.dumps(_fake_cli_response(
+            ["B001"], restricted={"B001"},
+            restriction_links={"B001": urls},
+        )),
+        stderr="",
+    )
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch.object(pf, "_find_repo_root", return_value=tmp_path), \
+         patch("subprocess.run", return_value=fake_proc):
+        pf.annotate_with_preflight(rows, cli_path=cli)
+    assert rows[0]["restriction_links"] == "; ".join(urls)
+
+
+def test_restriction_links_absent_when_mcp_omits_link_field(tmp_path, monkeypatch):
+    """Older MCP responses (or SP-API responses where the links array is
+    empty) yield None — column still exists in schema, value is just unset."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    monkeypatch.setenv("SP_API_CLIENT_ID", "x")
+    rows = [_row("B001")]
+    fake_proc = MagicMock(
+        returncode=0,
+        stdout=json.dumps(_fake_cli_response(
+            ["B001"], restricted={"B001"},
+            # restriction_links omitted → reason has no link field
+        )),
+        stderr="",
+    )
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch.object(pf, "_find_repo_root", return_value=tmp_path), \
+         patch("subprocess.run", return_value=fake_proc):
+        pf.annotate_with_preflight(rows, cli_path=cli)
+    assert "restriction_links" in rows[0]              # column exists
+    assert rows[0]["restriction_links"] is None        # value is unset
+
+
+def test_restriction_links_treats_empty_string_as_absent(tmp_path, monkeypatch):
+    """SP-API edge case: ``links: [{"resource": ""}]`` — the MCP forwards
+    the empty string verbatim. We treat it the same as missing (truthy
+    filter) to avoid surfacing a useless empty cell to operators."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    monkeypatch.setenv("SP_API_CLIENT_ID", "x")
+    rows = [_row("B001")]
+    fake_proc = MagicMock(
+        returncode=0,
+        stdout=json.dumps(_fake_cli_response(
+            ["B001"], restricted={"B001"},
+            restriction_links={"B001": [""]},   # empty-string link
+        )),
+        stderr="",
+    )
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch.object(pf, "_find_repo_root", return_value=tmp_path), \
+         patch("subprocess.run", return_value=fake_proc):
+        pf.annotate_with_preflight(rows, cli_path=cli)
+    assert rows[0]["restriction_links"] is None
+
+
+def test_restriction_links_partial_coverage_keeps_present_only(tmp_path, monkeypatch):
+    """Some reasons surface a link, others don't. The output should
+    contain ONLY the present links — not None placeholders or empty
+    semicolon-joined gaps."""
+    cli = tmp_path / "cli.js"
+    cli.write_text("// fake")
+    monkeypatch.setenv("SP_API_CLIENT_ID", "x")
+    rows = [_row("B001")]
+    real_url = "https://sellercentral.amazon.co.uk/hz/approval?asin=B001"
+    fake_proc = MagicMock(
+        returncode=0,
+        stdout=json.dumps(_fake_cli_response(
+            ["B001"], restricted={"B001"},
+            restriction_links={"B001": [real_url, None]},  # one valid, one missing
+        )),
+        stderr="",
+    )
+    with patch.object(pf, "_node_executable", return_value="node"), \
+         patch.object(pf, "_find_repo_root", return_value=tmp_path), \
+         patch("subprocess.run", return_value=fake_proc):
+        pf.annotate_with_preflight(rows, cli_path=cli)
+    assert rows[0]["restriction_links"] == real_url   # not "URL; None"
 
 
 def test_annotate_decision_field_is_untouched(tmp_path, monkeypatch):
