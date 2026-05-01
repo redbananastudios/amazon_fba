@@ -6,17 +6,56 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-02 (Keepa Product Finder strategies — branch `feat/keepa-finder-strategies`, 10 commits)
-**Currently working on:** Implementation of `docs/PRD-keepa-sourcing-strategies.md` is complete. Four named recipes (`amazon_oos_wholesale`, `brand_wholesale_scan`, `no_rank_hidden_gem`, `stable_price_low_volatility`) ship as JSON filter sets consumed by the existing `$keepa-product-finder` skill — no Keepa API subscription required, no live-API path built. The skill exports a CSV; the engine ingests it through a new `keepa_finder_csv` discovery step + generic `keepa_finder.yaml` strategy. Cowork orchestrates the two-task flow (discovery + engine) per `orchestration/runs/keepa_finder.yaml`.
-**Status:** Branch ready for PR. **902 Python tests pass** (was 820; +82 new across the session). MCP suite untouched (110 unit + 5 integration still green).
+**Last updated:** 2026-05-02 (post-real-run cleanup — Keepa Product Finder strategies validated end-to-end against live data)
+**Currently working on:** Nothing in flight. The `keepa_finder` strategy family is shipped, validated against real data, and operationally usable today. PR #37 (infrastructure), #38 (column-rename fix), #39 (`restriction_links`), #40 (5 reserved ungate-tracking columns) all merged to main.
+**Status:** main is at `32ff276`. **933 Python tests pass.** MCP suite untouched (110 unit + 5 integration still green). Working tree clean except for two pre-existing modifications carried from prior sessions (`docs/PRD-sourcing-strategies.md`, `fba_engine/data/pricelists/connect-beauty/raw/eans_for_keepa.txt`).
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                          # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 902/902 in ~14s
+       fba_engine/strategies/tests/ cli/tests/                       # 933/933 in ~17s
 ```
+
+### Operationally usable workflow (post real-run)
+
+```
+1. Browser (Cowork or Claude Code instance with $keepa-product-finder skill):
+   $keepa-product-finder recipe=amazon_oos_wholesale category="Toys & Games"
+   → exports CSV to ./output/<run_id>/keepa_<recipe>.csv
+
+2. Engine:
+   python run.py --strategy keepa_finder \
+     --csv ./output/<run_id>/keepa_<recipe>.csv \
+     --recipe amazon_oos_wholesale \
+     --output-dir ./output/<run_id>/
+
+3. Operator opens the resulting <recipe>_<ts>.xlsx — every gated row carries:
+   - Amazon URL (clickable → product listing)
+   - Ungate Links (clickable → Apply-to-sell page)
+   - Ungate Status / Required Docs / Brand Required / Attempted At / Message
+     (5 reserved columns, blank by default — operator fills as ungate apps progress)
+```
+
+### First real Toys & Games run (2026-05-01, validated)
+
+| Filter funnel | Count |
+|---|---|
+| Keepa Product Finder UI hits (Toys & Games + AMAZON_outOfStock + recipe filters) | 265 |
+| After global title-keyword exclusions | 251 |
+| **Engine verdicts** | **0 SHORTLIST / 250 REVIEW / 1 REJECT** |
+
+The 0 SHORTLIST is by design — wholesale flow uses `buy_cost = 0.0`, so the ROI gate emits `no_buy_cost` → REVIEW with `max_buy_price` populated as the supplier-negotiation ceiling.
+
+| SP-API gating breakdown (174 gated rows) | Count |
+|---|---|
+| `BRAND_GATED` — needs brand outreach OR account-metric auto-approve | 161 |
+| `RESTRICTED` — different gating class | 13 |
+| `UNRESTRICTED` (immediately listable) | 77 |
+| `catalog_hazmat = true` (caught by post-enrich safety net) | 2 |
+
+Top wholesale leads surfaced: **Hasbro Transformers, Mattel WWE, Games Workshop Warhammer, Funko, BABESIDE / JIZHI Reborn Dolls.** Run artefacts in `fba_engine/data/strategies/keepa_finder/20260501_122031/`.
 
 ### What landed this session (2026-05-02, Keepa Product Finder strategies)
 
@@ -132,6 +171,13 @@ pytest shared/lib/python/ fba_engine/steps/tests/ \
 - **Strategy YAML interpolation is string-only and one-level-deep.** The `runner._interpolate_config` function only substitutes `{name}` in string values, not in dict/list values, and missing context keys raise `StrategyConfigError`. To forward a dict config (like recipe `decide_overrides`), mutate the loaded `StrategyDef` from the dispatcher (see `cli/strategy.py:_apply_recipe_to_strategy`) rather than trying to interpolate it through YAML.
 - **Recipe JSONs live with the skill that consumes them:** `_legacy_keepa/skills/keepa-product-finder/recipes/{name}.json`. Same convention as `keepa-finder-values.md` — co-located with the consumer. Future strategies that don't go through this skill should put their recipes elsewhere.
 - **`pd.read_csv(on_bad_lines='skip')`:** Real Keepa Product Finder exports occasionally have malformed lines (e.g. `kids_toys_phase1_raw.csv` line 4993 has unbalanced quotes). Skip them rather than crashing the whole run — the engine's "never crash on a single bad row" principle applies at the row-parser level too.
+- **Keepa column rename (post 2026-04):** `"Bought in past month"` → `"Monthly Sales Trends: Bought in past month"`. Both names map to `sales_estimate` in `keepa_finder_csv._KEEPA_TO_CANONICAL`. Test fixtures using the old name (`kids_toys_phase1_raw.csv` from 2026-03) still work via the alias resolution in `_row_from_keepa` (groups source columns by destination, picks the first source with non-empty data). Watch for similar renames — refresh the smoke fixture periodically or the next column drift slips through.
+- **Keepa Browser Pro vs API tier are different products.** Peter has the Browser tier (~£19/mo, gives access to the Product Finder UI + CSV export). The API tier is separate (~£49/mo for Power, more for higher rates). The keepa_finder pipeline uses the BROWSER tier — driven via Claude in Chrome MCP against the logged-in Product Finder UI. No `keepa_client.product_finder()` method exists in the engine because the API path was deliberately not built.
+- **`subprocess` + `timeout` orphans on Windows:** `bash`'s `timeout 120 python run.py ...` sends SIGTERM after 120s, but a Python child blocked on a synchronous SP-API call doesn't release the interpreter to handle the signal. The Python process keeps running after `timeout` exits, eventually overwriting the output file with the original (pre-fix) result. Symptom: stdout shows the right summary (post-fix engine ran), but the on-disk CSV reflects the orphaned earlier run. Detection: compare CSV mtime vs the engine's run_summary.json `started_at` field. Cleanup: `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object CommandLine -like "*run.py*--strategy*" | ForEach-Object Stop-Process` from PowerShell. `pkill` doesn't exist in this bash; PowerShell is the right escape hatch.
+- **`autocomplete-rootCategory` value lives in a hidden field, not the input:** when the keepa-product-finder skill clicks a Toys & Games dropdown match, the visible `<input id="autocomplete-rootCategory">` clears (Keepa UI pattern). The actual selection persists in a sibling hidden field `<input name="autocompleteReal-rootCategory">` carrying Keepa's internal category ID (e.g. `468292` for Toys & Games). Verify post-click via the hidden field, not the visible input.
+- **`autocomplete-categories_exclude` is sub-category scoped, not root scoped:** when `rootCategory` is set, the `categories_exclude` autocomplete searches only sub-categories of that root. Setting "Clothing, Shoes & Jewellery" in `categories_excluded` (the global YAML) is a no-op for any run scoped to "Toys & Games" — the post-export title-keyword filter is the actual safety net for keyword-based exclusions when the root scope already excludes the bad category. Document per-recipe whether category exclusion is meaningful for that scope.
+- **SP-API restrictions endpoint already returns ungate URLs:** `getListingsRestrictions` returns `restrictions[].reasons[].links[].resource` per gated reason. The MCP forwards this as `r["link"]` (singular) — first link only. The engine's `preflight._coerce_result` extracts and surfaces it as the `restriction_links` column (semicolon-joined, deduplicated). Future enhancement: extend the MCP to forward the full `links[]` array if multiple application paths matter.
+- **Reserved schema for ungate-tracking:** `ungate_status`, `ungate_required_docs`, `ungate_brand_required`, `ungate_attempted_at`, `ungate_message` are seeded as None by `preflight._seed_row` and `_coerce_result`. Engine never writes them — operator fills by hand (or future click-through bot fills automatically). Locked in `UNGATE_COLUMNS` constant at top of `preflight.py`. Renaming any of these breaks operator spreadsheets that reference the column names; rename only with a migration plan.
 
 ## Session Protocol
 - At the end of each session, update the "Current State" section above
