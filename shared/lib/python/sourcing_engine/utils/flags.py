@@ -28,15 +28,29 @@ FBM_SHIPPING_ESTIMATED = "FBM_SHIPPING_ESTIMATED"  # FBM fulfilment cost is an e
 PRICE_UNSTABLE = "PRICE_UNSTABLE"                  # high variance in recent price history
 POSSIBLE_PRIVATE_LABEL = "POSSIBLE_PRIVATE_LABEL"  # possible private label product
 INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"      # <30 days qualifying Keepa FBA history
+# Lightweight historical-peak signal — fires when the current Buy Box price
+# is materially above the 90-day average (threshold in
+# decision_thresholds.yaml → buy_box_peak_threshold_pct, default 20%).
+# Browser-tier-friendly: reads buy_box_avg90 from the Keepa export, no API
+# tokens required. Catches "buying at a peak" scenarios where the
+# supplier-negotiation ceiling computed against the current price would
+# lock the operator into a position that erodes if the listing reverts.
+BUY_BOX_ABOVE_AVG90 = "BUY_BOX_ABOVE_AVG90"
 
 # --- Sets used by the decision engine ---
 
-# Flags that block SHORTLIST (any one present -> cannot shortlist)
+# Flags that block SHORTLIST (any one present -> cannot shortlist).
+# A blocked row falls through to REVIEW (or REJECT if other gates also
+# fail), so this set models "needs operator eyes, can't auto-buy".
 SHORTLIST_BLOCKERS = frozenset({
     PRICE_FLOOR_HIT,
     VAT_FIELD_MISMATCH,
     VAT_UNCLEAR,
     PRICE_MISMATCH_RRP,
+    # Peak-buying — needs human judgment to confirm the current price
+    # isn't a temporary spike before committing supplier-negotiation
+    # capital. See flags definition above for the rationale.
+    BUY_BOX_ABOVE_AVG90,
 })
 
 # Flags that force REVIEW (any one present -> route to REVIEW if not rejected)
@@ -56,6 +70,7 @@ REVIEW_FLAGS = frozenset({
     CASE_MATCH_SKIPPED,
     CASE_QTY_UNKNOWN,
     PRICE_MISMATCH_RRP,
+    BUY_BOX_ABOVE_AVG90,
 })
 
 

@@ -95,6 +95,61 @@ class TestCalculateEconomics:
         assert len(out) == 3
 
 
+class TestBuyBoxPeakFlag:
+    """BUY_BOX_ABOVE_AVG90 fires when current Buy Box is materially above
+    the 90-day average. Uses fields already present in the Keepa Browser
+    export — no API tokens needed. Threshold lives in
+    decision_thresholds.yaml (default 20%)."""
+
+    # The check reads the raw `buy_box_price` column (15.0 in the helper
+    # defaults), NOT the post-`_pick_market_price` `market_price` value.
+    # buy_box_price vs buy_box_avg90 is the cleanest like-for-like
+    # comparison — both are Buy Box series.
+
+    def test_flag_fires_when_current_well_above_avg90(self):
+        # buy_box_price=15.0 default. avg90=8.42 → peak_pct = 78.1% — well
+        # over the 20% threshold.
+        df = pd.DataFrame([_match_row(buy_box_avg90=8.42)])
+        out = calculate_economics(df)
+        assert "BUY_BOX_ABOVE_AVG90" in out.iloc[0]["risk_flags"]
+
+    def test_flag_does_not_fire_when_current_below_avg90(self):
+        # current 15.0 below avg90 25 — listing has dropped, not peaked.
+        df = pd.DataFrame([_match_row(buy_box_avg90=25.0)])
+        out = calculate_economics(df)
+        assert "BUY_BOX_ABOVE_AVG90" not in out.iloc[0]["risk_flags"]
+
+    def test_flag_does_not_fire_just_under_threshold(self):
+        # peak_pct = (15 - 12.6) / 12.6 = 19.05% — just below 20%.
+        df = pd.DataFrame([_match_row(buy_box_avg90=12.6)])
+        out = calculate_economics(df)
+        peak_pct = (15.0 - 12.6) / 12.6 * 100
+        assert peak_pct < 20.0
+        assert "BUY_BOX_ABOVE_AVG90" not in out.iloc[0]["risk_flags"]
+
+    def test_flag_fires_at_exactly_threshold(self):
+        # avg90 = 15.0 / 1.20 = 12.5 → peak_pct = 20.0% exactly. Comparison
+        # uses >= so the threshold itself triggers.
+        df = pd.DataFrame([_match_row(buy_box_avg90=15.0 / 1.20)])
+        out = calculate_economics(df)
+        assert "BUY_BOX_ABOVE_AVG90" in out.iloc[0]["risk_flags"]
+
+    def test_flag_does_not_fire_when_avg90_missing(self):
+        # avg90 = 0 is the keepa_finder_csv missing-data sentinel
+        # (numeric canonical schema, can't be None). The check must skip
+        # silently rather than divide-by-zero or raise.
+        df = pd.DataFrame([_match_row(buy_box_avg90=0.0)])
+        out = calculate_economics(df)
+        assert "BUY_BOX_ABOVE_AVG90" not in out.iloc[0]["risk_flags"]
+
+    def test_flag_does_not_fire_when_avg90_none(self):
+        # Belt-and-braces: defensive against an upstream step that emits
+        # None instead of 0 for missing avg90.
+        df = pd.DataFrame([_match_row(buy_box_avg90=None)])
+        out = calculate_economics(df)
+        assert "BUY_BOX_ABOVE_AVG90" not in out.iloc[0]["risk_flags"]
+
+
 class TestRunStep:
     def test_run_step_basic(self):
         df = pd.DataFrame([_match_row()])

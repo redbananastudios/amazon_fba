@@ -27,4 +27,5 @@ from fba_config_loader import (  # noqa: F401
     MIN_PLAUSIBLE_UNIT_PRICE,
     DEFAULT_REFERRAL_FEE_PCT,
     TARGET_ROI,
+    BUY_BOX_PEAK_THRESHOLD_PCT,
 )
