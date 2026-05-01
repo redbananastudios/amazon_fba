@@ -22,7 +22,10 @@ from typing import Any
 import pandas as pd
 
 from fba_engine.steps._helpers import is_missing
-from sourcing_engine.pipeline.decision import decide as _decide_row
+from sourcing_engine.pipeline.decision import (
+    decide as _decide_row,
+    _resolve_thresholds as _resolve_decide_thresholds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,14 @@ def decide_rows(
     """
     if df.empty:
         return df
+
+    # Validate overrides ONCE up front — _resolve_thresholds raises
+    # ValueError on unknown keys / invariant violations. Surfacing the
+    # config bug at row 0 (or before iteration) is louder than letting
+    # it raise per-row inside the catch-all below. Also avoids
+    # re-validating the same dict on every row.
+    if overrides:
+        _resolve_decide_thresholds(overrides)
 
     output_rows: list[dict] = []
     for idx, row in df.iterrows():
@@ -70,11 +81,6 @@ def decide_rows(
                 "buy_cost": row_dict.get("buy_cost"),
             }
             decision, reason = _decide_row(decision_input, overrides=overrides)
-        except ValueError:
-            # _resolve_thresholds raises ValueError on unknown override
-            # keys / invariant violations. These are config bugs — we
-            # want them loud, not buried per-row.
-            raise
         except Exception:
             logger.exception(
                 "[%s] [ROW_%s] [%s] decide error",

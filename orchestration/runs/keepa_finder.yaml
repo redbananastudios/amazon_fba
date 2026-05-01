@@ -140,27 +140,32 @@ tasks:
       the canonical CSV + supplier_leads.md.
 
     command: |
-      python -m fba_engine.strategies.runner \
-        --strategy fba_engine/strategies/keepa_finder.yaml \
-        --context csv_path={output_root}/keepa_{recipe}.csv \
-                  recipe={recipe} \
-                  output_dir={output_root} \
-                  timestamp={run_id}
+      python run.py --strategy keepa_finder \
+        --csv {output_root}/keepa_{recipe}.csv \
+        --recipe {recipe} \
+        --output-dir {output_root} \
+        --timestamp {run_id}
+      # NB: dispatch via run.py (NOT `python -m fba_engine.strategies.runner`)
+      # so cli.strategy._apply_recipe_to_strategy applies the recipe's
+      # calculate_config and decide_overrides to the loaded StrategyDef
+      # before the runner executes. Calling the runner directly bypasses
+      # that wiring and silently drops every recipe-driven config knob —
+      # in particular `compute_stability_score` (amazon_oos / stable_price)
+      # and `decide_overrides` (no_rank_hidden_gem).
 
     expected_outputs:
       - "{output_root}/keepa_finder_{recipe}_{run_id}.csv"
       - "{output_root}/supplier_leads_{recipe}_{run_id}.md"
 
-    expected_telemetry:
-      # Verification metrics the orchestrator should surface to the operator.
-      # Sourced from the engine's stdout (run summary line) — no separate
-      # telemetry channel.
-      - rows_in: int            # rows in the Keepa export (Task 1 output)
-      - rows_dropped_by_global_exclusions: int   # category + title keyword filters
-      - rows_dropped_by_asin_dedup: int          # exclusions.csv hits
-      - shortlist_count: int
-      - review_count: int
-      - reject_count: int
+    expected_stdout:
+      # cli.strategy.main prints these lines on a successful run. The
+      # orchestrator can match against them for verification / surfacing.
+      - "strategy=keepa_finder recipe={recipe}"
+      - "rows: <int>"
+      - "  SHORTLIST : <int>"
+      - "  REVIEW    : <int>"
+      - "  REJECT    : <int>"
+      - "output_dir: {output_root}"
 
     on_failure:
       - retry_once: true

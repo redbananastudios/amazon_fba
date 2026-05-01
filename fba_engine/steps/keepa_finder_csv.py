@@ -204,7 +204,13 @@ class RecipeMetadata:
     The canonical layout is documented in the skill's SKILL.md ("Output
     sidecar"). Fields not present in the file default to None — this step
     treats the metadata as additive context, never as load-bearing
-    config (load-bearing config goes in the strategy YAML).
+    config.
+
+    NB: ``calculate_config`` and ``decide_overrides`` are deliberately
+    NOT exposed here even though the sidecar JSON includes them. The
+    canonical source of those configs is the recipe JSON consumed by
+    ``cli.strategy._apply_recipe_to_strategy`` — having two sources of
+    truth would just create drift.
     """
 
     recipe: str | None = None
@@ -212,8 +218,6 @@ class RecipeMetadata:
     brands: list[str] | None = None
     rows_exported: int | None = None
     rendered_url: str | None = None
-    calculate_config: dict[str, Any] | None = None
-    decide_overrides: dict[str, Any] | None = None
 
 
 def _load_metadata(metadata_path: Path | None) -> RecipeMetadata:
@@ -239,8 +243,6 @@ def _load_metadata(metadata_path: Path | None) -> RecipeMetadata:
         brands=data.get("brands"),
         rows_exported=data.get("rows_exported"),
         rendered_url=data.get("rendered_url"),
-        calculate_config=data.get("calculate_config"),
-        decide_overrides=data.get("decide_overrides"),
     )
 
 

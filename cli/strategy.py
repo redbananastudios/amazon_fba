@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,10 +58,40 @@ _RECIPES_DIR = (
     / "keepa-product-finder" / "recipes"
 )
 
+# Strategy / recipe identifiers MUST match this pattern. Restricting the
+# character class to letters / digits / underscore / hyphen (with no dots
+# or slashes) blocks path traversal: a value like "../../etc/passwd" is
+# rejected before it reaches Path joining. Belt-and-braces below also
+# verifies the resolved path stays inside the parent dir.
+_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _validate_name(name: str, kind: str) -> None:
+    """Reject any name that could escape its parent directory.
+
+    Raises ``SystemExit`` (loud, not silent) so a typo or a malicious
+    invocation surfaces immediately rather than reading an unexpected file.
+    """
+    if not _NAME_RE.fullmatch(name):
+        raise SystemExit(
+            f"Invalid {kind} name {name!r}. Names must match {_NAME_RE.pattern} "
+            f"(letters, digits, underscore, hyphen) — no path separators."
+        )
+
 
 def _resolve_strategy_yaml(name: str) -> Path:
     """Resolve a strategy name to its YAML path. Raises if missing."""
+    _validate_name(name, "strategy")
     p = _STRATEGIES_DIR / f"{name}.yaml"
+    # Defence-in-depth: even with the regex above, confirm the resolved
+    # path stays inside the strategies directory. Catches symlinks
+    # planted by an attacker who controls part of the filesystem.
+    resolved = p.resolve()
+    strategies_resolved = _STRATEGIES_DIR.resolve()
+    if not str(resolved).startswith(str(strategies_resolved)):
+        raise SystemExit(
+            f"Strategy path {resolved} resolves outside {strategies_resolved}"
+        )
     if not p.exists():
         available = sorted(
             f.stem for f in _STRATEGIES_DIR.glob("*.yaml")
@@ -77,7 +108,14 @@ def _resolve_recipe_json(name: str | None) -> dict[str, Any]:
     """Load a recipe JSON if --recipe is supplied; return {} otherwise."""
     if not name:
         return {}
+    _validate_name(name, "recipe")
     p = _RECIPES_DIR / f"{name}.json"
+    resolved = p.resolve()
+    recipes_resolved = _RECIPES_DIR.resolve()
+    if not str(resolved).startswith(str(recipes_resolved)):
+        raise SystemExit(
+            f"Recipe path {resolved} resolves outside {recipes_resolved}"
+        )
     if not p.exists():
         logger.warning(
             "recipe %r not found at %s — running with engine defaults", name, p,
@@ -105,6 +143,10 @@ def _apply_recipe_to_strategy(strat, recipe_data: dict[str, Any]) -> None:
     Mutating the loaded config (rather than going through the YAML
     interpolation layer) keeps the YAML free of recipe-specific syntax —
     each strategy YAML stays generic, recipes drive the differences.
+
+    Logs a WARNING (loud but non-fatal) if the recipe declares a knob
+    but no step in the strategy can receive it — surfaces a strategy /
+    recipe mismatch instead of silently dropping config.
     """
     calc_cfg = recipe_data.get("calculate_config") or {}
     decide_overrides = recipe_data.get("decide_overrides") or {}
@@ -112,13 +154,30 @@ def _apply_recipe_to_strategy(strat, recipe_data: dict[str, Any]) -> None:
     if not calc_cfg and not decide_overrides:
         return
 
+    calc_applied = False
+    decide_applied = False
     for step in strat.steps:
         if step.name == "calculate" and calc_cfg:
             step.config.update(calc_cfg)
+            calc_applied = True
         elif step.name == "decide" and decide_overrides:
             # decide.run_step reads config["overrides"] — wrap the dict
             # one level deep so the contract matches.
             step.config["overrides"] = dict(decide_overrides)
+            decide_applied = True
+
+    if calc_cfg and not calc_applied:
+        logger.warning(
+            "recipe %r declares calculate_config %r but strategy %r has no "
+            "'calculate' step — config dropped",
+            recipe_data.get("name", "?"), calc_cfg, strat.name,
+        )
+    if decide_overrides and not decide_applied:
+        logger.warning(
+            "recipe %r declares decide_overrides %r but strategy %r has no "
+            "'decide' step — config dropped",
+            recipe_data.get("name", "?"), decide_overrides, strat.name,
+        )
 
 
 # ────────────────────────────────────────────────────────────────────────

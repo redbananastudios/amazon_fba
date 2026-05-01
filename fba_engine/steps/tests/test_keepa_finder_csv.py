@@ -295,7 +295,7 @@ def test_title_with_excluded_keyword_is_dropped(tmp_path):
         _fixture_row(ASIN="B0DROP0001", Title="Mens Shoes Size 10"),                # drop: shoe
         _fixture_row(ASIN="B0DROP0002", Title="Premium Apparel Hanger"),            # drop: apparel
         _fixture_row(ASIN="B0DROP0003", Title="Hiking Boots — All Terrain"),        # drop: boot
-        _fixture_row(ASIN="B0KEEP0002", Title="Bootstrap Programming Book"),        # drop: boot (substring) — this proves the limitation
+        _fixture_row(ASIN="B0BSTRAP01", Title="Bootstrap Programming Book"),        # drop: boot (substring) — this proves the limitation
     ])
     cdir = _write_canonical_config(tmp_path)
     df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
