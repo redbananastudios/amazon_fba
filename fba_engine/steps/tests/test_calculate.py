@@ -69,8 +69,12 @@ class TestCalculateEconomics:
         assert out.iloc[0]["price_basis"] == "FBM"
 
     def test_no_market_price_emits_reject_for_that_row(self):
+        # Set amazon_price=None too — without it the engine now falls
+        # back to Amazon's price (the AMAZON_ONLY_PRICE path) and emits
+        # a verdict instead of rejecting.
         df = pd.DataFrame([_match_row(
-            buy_box_price=None, new_fba_price=None, fba_seller_count=1,
+            buy_box_price=None, new_fba_price=None, amazon_price=None,
+            fba_seller_count=1,
         )])
         out = calculate_economics(df)
         assert out.iloc[0]["decision"] == "REJECT"
@@ -93,6 +97,57 @@ class TestCalculateEconomics:
         df = pd.DataFrame([_match_row(), _reject_row(), _match_row(supplier_sku="SKU-B")])
         out = calculate_economics(df)
         assert len(out) == 3
+
+
+class TestAmazonOnlyPriceFallback:
+    """When both Keepa Buy Box (idx 18) and FBA-only (idx 10) stats are
+    empty, the engine falls back to Amazon's price (idx 0) as the market
+    reference and flags the row with AMAZON_ONLY_PRICE so the operator
+    knows. Real-world calibration: B0B636ZKZQ (Casdon Morphy Richards
+    toaster toy) has -1 sentinels for BB and NEW_FBA but Amazon at
+    £23.86 — was being false-rejected with 'No valid market price'."""
+
+    def test_falls_back_to_amazon_when_bb_and_fba_empty(self):
+        from fba_engine.steps.calculate import _pick_market_price
+        # Both Buy Box and FBA missing — Amazon takes over.
+        assert _pick_market_price(None, None, 23.86) == 23.86
+        assert _pick_market_price(None, None, 0) is None  # Amazon=0 isn't a valid offer
+        # Standard path unchanged when bb/fba present.
+        assert _pick_market_price(15.0, 14.5, 23.86) == 14.5
+
+    def test_amazon_only_price_flag_appears_when_fallback_used(self):
+        df = pd.DataFrame([_match_row(
+            buy_box_price=None,
+            new_fba_price=None,
+            amazon_price=23.86,
+            fba_seller_count=6,
+        )])
+        out = calculate_economics(df)
+        # Engine now produces a verdict-ready row instead of REJECTing
+        # for "No valid market price".
+        assert "AMAZON_ONLY_PRICE" in out.iloc[0]["risk_flags"]
+        assert out.iloc[0]["market_price"] == 23.86
+        # decision is set by the decide step downstream — calculate
+        # itself should NOT short-circuit to REJECT here.
+        assert out.iloc[0].get("decision") != "REJECT", out.iloc[0].get(
+            "decision_reason"
+        )
+
+    def test_no_fallback_flag_when_buy_box_present(self):
+        df = pd.DataFrame([_match_row(amazon_price=23.86)])
+        out = calculate_economics(df)
+        assert "AMAZON_ONLY_PRICE" not in out.iloc[0]["risk_flags"]
+
+    def test_engine_still_rejects_when_amazon_also_missing(self):
+        df = pd.DataFrame([_match_row(
+            buy_box_price=None,
+            new_fba_price=None,
+            amazon_price=None,
+            fba_seller_count=6,
+        )])
+        out = calculate_economics(df)
+        assert out.iloc[0]["decision"] == "REJECT"
+        assert out.iloc[0]["decision_reason"] == "No valid market price"
 
 
 class TestBuyBoxPeakFlag:
