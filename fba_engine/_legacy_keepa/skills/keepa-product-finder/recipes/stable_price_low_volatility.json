@@ -1,0 +1,39 @@
+{
+  "name": "stable_price_low_volatility",
+  "description": "Boring products with stable Buy Box over 90 days. Predictable economics, suitable for repeat-buy wholesale and cash-flow planning.",
+  "thesis": "Lower upside (no spike profits) but lower risk of getting trapped at a price floor. Optimises for predictability over peak ROI.",
+  "marketplace": "GB",
+  "requires_category": true,
+  "requires_brands": false,
+
+  "url_filters": {
+    "BUY_BOX_SHIPPING_current": {"filterType": "number", "type": "inRange", "filter": 12, "filterTo": 40},
+    "SALES_avg90": {"filterType": "number", "type": "lessThanOrEqual", "filter": 60000, "filterTo": null},
+    "COUNT_NEW_FBA_current": {"filterType": "number", "type": "inRange", "filter": 2, "filterTo": 8},
+    "monthlySold": {"filterType": "number", "type": "greaterThanOrEqual", "filter": 30, "filterTo": null}
+  },
+
+  "ui_filters": {
+    "boolean_no": ["isAdultProduct"],
+    "buy_box_volatility": {
+      "max_30d_pct": 10,
+      "max_90d_pct": 10,
+      "_note": "Tight ±10% ceilings on Buy Box deltas — Keepa field keys (likely BUY_BOX_SHIPPING_delta30 / BUY_BOX_SHIPPING_delta90) need first-run verification + save-back."
+    }
+  },
+
+  "sort": [{"colId": "SALES_avg90", "sort": "asc"}],
+  "rows_per_page": 5000,
+
+  "global_exclusions": "auto",
+
+  "calculate_config": {
+    "compute_stability_score": true
+  },
+
+  "notes": [
+    "Volatility filters express ±10% over 30d AND 90d — products have to be tightly stable on both windows.",
+    "compute_stability_score flows into 04_calculate.config — populates stability_score column for capital-allocation decisions.",
+    "BSR avg90 ≤ 60k is tighter than amazon_oos_wholesale (80k): we want products that are genuinely well-known and consistently moving, not just sometimes selling."
+  ]
+}

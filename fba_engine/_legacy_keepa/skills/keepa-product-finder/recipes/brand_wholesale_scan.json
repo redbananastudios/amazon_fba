@@ -1,0 +1,32 @@
+{
+  "name": "brand_wholesale_scan",
+  "description": "Paste a brand list (e.g. all brands a wholesaler carries). Pull every ASIN for those brands, rank by profitability. Best run with the supplier's pricelist pre-loaded for actual buy_cost; without one, the engine emits max_buy_price as the negotiation ceiling.",
+  "thesis": "We hold trade accounts with these brands. Scan their full Amazon catalogue.",
+  "marketplace": "GB",
+  "requires_category": false,
+  "requires_brands": true,
+
+  "url_filters": {
+    "BUY_BOX_SHIPPING_current": {"filterType": "number", "type": "inRange", "filter": 12, "filterTo": 40},
+    "SALES_current": {"filterType": "number", "type": "lessThanOrEqual", "filter": 150000, "filterTo": null},
+    "SALES_avg90": {"filterType": "number", "type": "lessThanOrEqual", "filter": 120000, "filterTo": null},
+    "COUNT_NEW_FBA_current": {"filterType": "number", "type": "greaterThanOrEqual", "filter": 1, "filterTo": null}
+  },
+
+  "ui_filters": {
+    "boolean_no": ["isAdultProduct"],
+    "brands_include": "${brands}"
+  },
+
+  "sort": [{"colId": "SALES_current", "sort": "asc"}],
+  "rows_per_page": 5000,
+
+  "global_exclusions": "auto",
+
+  "notes": [
+    "${brands} is a placeholder — the orchestrator/CLI substitutes the actual brand list (comma-separated string OR list) before invoking the skill. Skill resolves each via Keepa autocomplete and clicks the dropdown match.",
+    "Wider seller-count window than amazon_oos_wholesale: any brand we hold trade for, we want to see the full catalogue. min 1 seller (not 2) because brand-direct sellers may legitimately be solo on a listing.",
+    "BSR ceiling deliberately wider (150k current / 120k avg) — brand catalogues include long-tail SKUs we still want to evaluate.",
+    "If the trade pricelist is supplied via --supplier flag at run time, the engine uses real buy_cost; otherwise it emits max_buy_price."
+  ]
+}
