@@ -647,6 +647,99 @@ class TestSchemaUnification:
         assert set(snap.keys()) == set(KEEPA_ENRICH_COLUMNS) | {"asin"}
 
 
+class TestHistoryFieldWiring:
+    """Pin that history.* helpers wire correctly into market_snapshot
+    (HANDOFF WS2.2). These are the inputs the candidate-score step
+    in WS3 reads directly — silent drift in any of these breaks the
+    entire downstream rubric."""
+
+    def test_bare_payload_emits_none_for_all_history_fields(self):
+        # No csv, no trackingSince, no stats → every history field None.
+        snap = KeepaProduct.model_validate({"asin": "B0BARE"}).market_snapshot()
+        for k in (
+            "bsr_slope_30d", "bsr_slope_90d", "bsr_slope_365d",
+            "fba_offer_count_90d_start", "fba_offer_count_90d_joiners",
+            "buy_box_oos_pct_90", "price_volatility_90d",
+            "listing_age_days", "yoy_bsr_ratio",
+        ):
+            assert snap[k] is None, f"{k} should be None for bare payload"
+
+    def test_listing_age_populated_from_tracking_since(self):
+        from keepa_client.models import _now_keepa_minutes
+        # 200 days ago → listing_age_days ≈ 200.
+        ts = _now_keepa_minutes() - 200 * 24 * 60
+        payload = {"asin": "B0AGE", "trackingSince": ts}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["listing_age_days"] == 200
+
+    def test_bsr_slope_populated_from_csv_3(self):
+        from keepa_client.models import _now_keepa_minutes, _CSV_SALES_RANK
+        now = _now_keepa_minutes()
+        rank_history = []
+        # 5 declining-rank points (improving) inside the 30-day window.
+        for i, day in enumerate([25, 20, 15, 10, 5]):
+            rank_history.extend([now - day * 24 * 60, 100_000 - i * 10_000])
+        csv = [None] * (_CSV_SALES_RANK + 1)
+        csv[_CSV_SALES_RANK] = rank_history
+        payload = {"asin": "B0SLOPE", "csv": csv}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        # Improving rank → slope < 0.
+        assert snap["bsr_slope_30d"] is not None
+        assert snap["bsr_slope_30d"] < 0
+        # 90d also covers — same shape, similar sign.
+        assert snap["bsr_slope_90d"] is not None
+        assert snap["bsr_slope_90d"] < 0
+        # 365d — same shape, slope is comparable scale.
+        assert snap["bsr_slope_365d"] is not None
+
+    def test_offer_count_trend_populated_from_csv_11(self):
+        from keepa_client.models import _now_keepa_minutes, _CSV_COUNT_NEW
+        now = _now_keepa_minutes()
+        # 3 → 5 → 7 sellers over 90 days.
+        offer_history = []
+        for day, count in [(80, 3), (60, 5), (40, 6), (20, 7)]:
+            offer_history.extend([now - day * 24 * 60, count])
+        csv = [None] * (_CSV_COUNT_NEW + 1)
+        csv[_CSV_COUNT_NEW] = offer_history
+        payload = {"asin": "B0JOINERS", "csv": csv}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["fba_offer_count_90d_start"] == 3
+        assert snap["fba_offer_count_90d_joiners"] == 4  # 7 - 3
+
+    def test_buy_box_oos_pct_populated_from_csv_18(self):
+        from keepa_client.models import _now_keepa_minutes, _CSV_BUY_BOX
+        now = _now_keepa_minutes()
+        # 5 in-window points: 3 present, 2 sentinel = 40% OOS.
+        bb_history = [
+            now - 80 * 24 * 60, 1500,
+            now - 60 * 24 * 60, -1,
+            now - 40 * 24 * 60, 1500,
+            now - 20 * 24 * 60, -1,
+            now - 10 * 24 * 60, 1500,
+        ]
+        csv = [None] * (_CSV_BUY_BOX + 1)
+        csv[_CSV_BUY_BOX] = bb_history
+        payload = {"asin": "B0OOS", "csv": csv}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["buy_box_oos_pct_90"] is not None
+        assert 0.39 < snap["buy_box_oos_pct_90"] < 0.41
+
+    def test_price_volatility_populated_from_csv_18(self):
+        from keepa_client.models import _now_keepa_minutes, _CSV_BUY_BOX
+        now = _now_keepa_minutes()
+        # Stable ≈1500 cents → low CV.
+        bb_history = []
+        for day, price in [(80, 1500), (60, 1505), (40, 1495),
+                           (20, 1500), (10, 1500)]:
+            bb_history.extend([now - day * 24 * 60, price])
+        csv = [None] * (_CSV_BUY_BOX + 1)
+        csv[_CSV_BUY_BOX] = bb_history
+        payload = {"asin": "B0STABLE", "csv": csv}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["price_volatility_90d"] is not None
+        assert snap["price_volatility_90d"] < 0.05
+
+
 class TestKeepaSellerModel:
     def test_seller_with_asin_list(self):
         payload = {

@@ -318,6 +318,18 @@ combined count for callers that legitimately want it.
 - `CASE_MATCH_SKIPPED`, `CASE_QTY_UNKNOWN` — case-side incomplete
 - `PRICE_MISMATCH_RRP` — Amazon price differs >2x from supplier RRP
 
+### History-derived REVIEW flags
+
+Added in HANDOFF WS2.3. Each fires off a field populated by
+`keepa_client.history` helpers and surfaced via `market_snapshot()`.
+Thresholds are configurable in `decision_thresholds.yaml::data_signals`.
+
+- `LISTING_TOO_NEW` — `listing_age_days < listing_age_min_days` (default 365)
+- `COMPETITION_GROWING` — `fba_offer_count_90d_joiners ≥ competition_joiners_critical` (default 10)
+- `BSR_DECLINING` — `bsr_slope_90d > bsr_decline_threshold` (default 0.05 normalised slope)
+- `HIGH_OOS` — `buy_box_oos_pct_90 > oos_threshold_pct` (default 0.15)
+- `PRICE_UNSTABLE` — `price_volatility_90d > price_volatility_threshold` (default 0.20 CV)
+
 ### Visible flags (don't block SHORTLIST)
 
 - `INSUFFICIENT_HISTORY` — under 30 qualifying days of Keepa data

@@ -271,6 +271,12 @@ class KeepaProduct(BaseModel):
     package_height: Optional[int] = Field(default=None, alias="packageHeight")
     package_length: Optional[int] = Field(default=None, alias="packageLength")
     package_width: Optional[int] = Field(default=None, alias="packageWidth")
+    # Keepa-epoch minutes when Keepa first started tracking this ASIN.
+    # Used by `history.listing_age_days` to derive the LISTING_TOO_NEW
+    # signal — new listings carry meaningful risk because they're still
+    # finding their market price. None when Keepa hasn't recorded a
+    # tracking-start timestamp.
+    tracking_since: Optional[int] = Field(default=None, alias="trackingSince")
 
     def market_snapshot(self) -> dict[str, Any]:
         """Extract the canonical engine's market-data columns from `stats`.
@@ -375,6 +381,38 @@ class KeepaProduct(BaseModel):
             if isinstance(name, str) and name:
                 category_root = name
 
+        # History-derived signals. These read directly off the csv
+        # arrays via the helpers in `keepa_client.history`. All
+        # optional, all None when input data is insufficient — the
+        # candidate-score step in WS3 reads None as "signal missing"
+        # and adjusts data confidence accordingly.
+        from .history import (
+            bsr_slope,
+            listing_age_days,
+            offer_count_trend,
+            out_of_stock_pct,
+            price_volatility,
+            yoy_bsr_ratio,
+        )
+
+        rank_csv = csv[_CSV_SALES_RANK] if len(csv) > _CSV_SALES_RANK else None
+        bb_csv = csv[_CSV_BUY_BOX] if len(csv) > _CSV_BUY_BOX else None
+        # COUNT_NEW (idx 11) is the closest FBA-offer-count proxy
+        # available via the csv path. Per PR #52 we know this is
+        # FBM + FBA combined — but for *trend* detection (joiners
+        # over time) the combined count is the right signal: a new
+        # FBM seller landing on the listing is also competition the
+        # operator should know about.
+        count_csv = csv[_CSV_COUNT_NEW] if len(csv) > _CSV_COUNT_NEW else None
+
+        offer_trend = offer_count_trend(count_csv, window_days=90)
+        offer_count_start = (
+            offer_trend.get("start") if offer_trend is not None else None
+        )
+        offer_count_joiners = (
+            offer_trend.get("joiners_90d") if offer_trend is not None else None
+        )
+
         return {
             "asin": self.asin,
             "amazon_price": _stat_money(self.stats, _CSV_AMAZON),
@@ -399,6 +437,16 @@ class KeepaProduct(BaseModel):
             "package_weight_g": self.package_weight,
             "package_volume_cm3": package_volume_cm3,
             "category_root": category_root,
+            # History-derived signals (added in PR 4).
+            "bsr_slope_30d": bsr_slope(rank_csv, window_days=30),
+            "bsr_slope_90d": bsr_slope(rank_csv, window_days=90),
+            "bsr_slope_365d": bsr_slope(rank_csv, window_days=365),
+            "fba_offer_count_90d_start": offer_count_start,
+            "fba_offer_count_90d_joiners": offer_count_joiners,
+            "buy_box_oos_pct_90": out_of_stock_pct(bb_csv, window_days=90),
+            "price_volatility_90d": price_volatility(bb_csv, window_days=90),
+            "listing_age_days": listing_age_days(self.tracking_since),
+            "yoy_bsr_ratio": yoy_bsr_ratio(rank_csv),
         }
 
 

@@ -205,6 +205,100 @@ class TestBuyBoxPeakFlag:
         assert "BUY_BOX_ABOVE_AVG90" not in out.iloc[0]["risk_flags"]
 
 
+class TestHistoryDerivedFlags:
+    """HANDOFF WS2.3 — five new REVIEW flags fire from history fields:
+    LISTING_TOO_NEW, COMPETITION_GROWING, BSR_DECLINING, HIGH_OOS,
+    PRICE_UNSTABLE. All thresholds live in
+    decision_thresholds.yaml::data_signals (defaults: 365 days, 10
+    joiners, 0.05 normalised slope, 0.15 OOS, 0.20 CV)."""
+
+    def test_listing_too_new_fires_below_one_year(self):
+        df = pd.DataFrame([_match_row(listing_age_days=180)])
+        out = calculate_economics(df)
+        assert "LISTING_TOO_NEW" in out.iloc[0]["risk_flags"]
+
+    def test_listing_too_new_does_not_fire_for_mature_listing(self):
+        df = pd.DataFrame([_match_row(listing_age_days=720)])
+        out = calculate_economics(df)
+        assert "LISTING_TOO_NEW" not in out.iloc[0]["risk_flags"]
+
+    def test_listing_too_new_silent_when_field_missing(self):
+        df = pd.DataFrame([_match_row(listing_age_days=None)])
+        out = calculate_economics(df)
+        assert "LISTING_TOO_NEW" not in out.iloc[0]["risk_flags"]
+
+    def test_competition_growing_fires_at_critical(self):
+        # Default critical = 10. Test exactly at the threshold.
+        df = pd.DataFrame([_match_row(fba_offer_count_90d_joiners=10)])
+        out = calculate_economics(df)
+        assert "COMPETITION_GROWING" in out.iloc[0]["risk_flags"]
+
+    def test_competition_growing_does_not_fire_at_warn_level(self):
+        # warn = 5; critical = 10. 7 sits in the warn zone — visible
+        # in candidate score but no hard flag.
+        df = pd.DataFrame([_match_row(fba_offer_count_90d_joiners=7)])
+        out = calculate_economics(df)
+        assert "COMPETITION_GROWING" not in out.iloc[0]["risk_flags"]
+
+    def test_competition_growing_silent_when_field_missing(self):
+        df = pd.DataFrame([_match_row(fba_offer_count_90d_joiners=None)])
+        out = calculate_economics(df)
+        assert "COMPETITION_GROWING" not in out.iloc[0]["risk_flags"]
+
+    def test_bsr_declining_fires_above_threshold(self):
+        # Default bsr_decline_threshold = 0.05.
+        df = pd.DataFrame([_match_row(bsr_slope_90d=0.10)])
+        out = calculate_economics(df)
+        assert "BSR_DECLINING" in out.iloc[0]["risk_flags"]
+
+    def test_bsr_declining_does_not_fire_for_improving_rank(self):
+        # Negative slope = rank improving — must not flag.
+        df = pd.DataFrame([_match_row(bsr_slope_90d=-0.10)])
+        out = calculate_economics(df)
+        assert "BSR_DECLINING" not in out.iloc[0]["risk_flags"]
+
+    def test_high_oos_fires_above_threshold(self):
+        # Default oos_threshold_pct = 0.15.
+        df = pd.DataFrame([_match_row(buy_box_oos_pct_90=0.25)])
+        out = calculate_economics(df)
+        assert "HIGH_OOS" in out.iloc[0]["risk_flags"]
+
+    def test_high_oos_does_not_fire_under_threshold(self):
+        df = pd.DataFrame([_match_row(buy_box_oos_pct_90=0.05)])
+        out = calculate_economics(df)
+        assert "HIGH_OOS" not in out.iloc[0]["risk_flags"]
+
+    def test_price_unstable_fires_above_threshold(self):
+        # Default price_volatility_threshold = 0.20.
+        df = pd.DataFrame([_match_row(price_volatility_90d=0.35)])
+        out = calculate_economics(df)
+        assert "PRICE_UNSTABLE" in out.iloc[0]["risk_flags"]
+
+    def test_price_unstable_does_not_fire_for_stable_price(self):
+        df = pd.DataFrame([_match_row(price_volatility_90d=0.05)])
+        out = calculate_economics(df)
+        assert "PRICE_UNSTABLE" not in out.iloc[0]["risk_flags"]
+
+    def test_price_unstable_silent_when_field_missing(self):
+        # Pre-PR-4 rows from older runs / strategies that don't enrich
+        # via keepa_enrich won't have the field. Must not fire.
+        df = pd.DataFrame([_match_row(price_volatility_90d=None)])
+        out = calculate_economics(df)
+        assert "PRICE_UNSTABLE" not in out.iloc[0]["risk_flags"]
+
+    def test_all_history_flags_independent_of_legacy_flags(self):
+        """Pin that adding history flags didn't change pre-existing flag
+        firing on rows that don't have history fields populated."""
+        df = pd.DataFrame([_match_row()])  # No history fields set.
+        out = calculate_economics(df)
+        flags = out.iloc[0]["risk_flags"]
+        for new_flag in (
+            "LISTING_TOO_NEW", "COMPETITION_GROWING",
+            "BSR_DECLINING", "HIGH_OOS", "PRICE_UNSTABLE",
+        ):
+            assert new_flag not in flags
+
+
 class TestRunStep:
     def test_run_step_basic(self):
         df = pd.DataFrame([_match_row()])

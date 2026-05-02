@@ -27,10 +27,20 @@ FBM_ONLY = "FBM_ONLY"                              # no FBA sellers — FBM fee 
 FBM_SHIPPING_ESTIMATED = "FBM_SHIPPING_ESTIMATED"  # FBM fulfilment cost is an estimate
 POSSIBLE_PRIVATE_LABEL = "POSSIBLE_PRIVATE_LABEL"  # possible private label product
 INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"      # <30 days qualifying Keepa FBA history
-# PRICE_UNSTABLE was declared but never set. Removed in the schema-
-# unification PR (HANDOFF_candidate_validation.md WS1.2). Will be
-# reintroduced with a real computation in WS2.3 once the time-series
-# helpers in keepa_client/history.py exist to back it.
+
+# --- History-derived REVIEW flags (HANDOFF WS2.3) ---
+# Each fires from `calculate.py` based on the corresponding
+# market_snapshot field. All thresholds live in
+# `decision_thresholds.yaml::data_signals` and are loaded via
+# `fba_config_loader.get_data_signals()`. They route to REVIEW (not
+# SHORTLIST_BLOCKERS) — the candidate-score step in WS3 already
+# penalises listings on these dimensions, and double-penalising via a
+# hard SHORTLIST block would over-reject otherwise viable products.
+LISTING_TOO_NEW = "LISTING_TOO_NEW"                # listing_age_days < listing_age_min_days (default 365)
+COMPETITION_GROWING = "COMPETITION_GROWING"        # joiners_90d >= competition_joiners_critical (default 10)
+BSR_DECLINING = "BSR_DECLINING"                    # bsr_slope_90d > bsr_decline_threshold (default 0.05)
+HIGH_OOS = "HIGH_OOS"                              # buy_box_oos_pct_90 > oos_threshold_pct (default 0.15)
+PRICE_UNSTABLE = "PRICE_UNSTABLE"                  # price_volatility_90d > price_volatility_threshold (default 0.20)
 # Lightweight historical-peak signal — fires when the current Buy Box price
 # is materially above the 90-day average (threshold in
 # decision_thresholds.yaml → buy_box_peak_threshold_pct, default 20%).
@@ -83,6 +93,14 @@ REVIEW_FLAGS = frozenset({
     PRICE_MISMATCH_RRP,
     BUY_BOX_ABOVE_AVG90,
     AMAZON_ONLY_PRICE,
+    # History-derived signals (HANDOFF WS2.3). Visible flags that
+    # route to REVIEW; the candidate-score step in WS3 reads the
+    # underlying numeric fields and penalises proportionally.
+    LISTING_TOO_NEW,
+    COMPETITION_GROWING,
+    BSR_DECLINING,
+    HIGH_OOS,
+    PRICE_UNSTABLE,
 })
 
 

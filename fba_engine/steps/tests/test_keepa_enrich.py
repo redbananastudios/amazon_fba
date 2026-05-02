@@ -217,6 +217,15 @@ class TestColumnsConstant:
             "package_weight_g",
             "package_volume_cm3",
             "category_root",
+            "bsr_slope_30d",
+            "bsr_slope_90d",
+            "bsr_slope_365d",
+            "fba_offer_count_90d_start",
+            "fba_offer_count_90d_joiners",
+            "buy_box_oos_pct_90",
+            "price_volatility_90d",
+            "listing_age_days",
+            "yoy_bsr_ratio",
         )
 
 
