@@ -21,6 +21,7 @@ _KEEPA_COLUMN_MAP = {
     "Sales Rank: Current": "sales_rank",
     "Bought in past month": "monthly_sales_estimate",
     "Buy Box: 90 days avg.": "buy_box_avg90",
+    "Buy Box: 30 days avg.": "buy_box_avg30",
     "Buy Box: Is FBA": "buy_box_is_fba",
     "New, 3rd Party FBA: Current": "new_fba_price",
     "FBA Pick&Pack Fee": "fba_pick_pack_fee",
@@ -30,9 +31,16 @@ _KEEPA_COLUMN_MAP = {
     "Product Codes: UPC": "upc",
     "Sales Rank: 90 days avg.": "sales_rank_avg90",
     "Sales Rank: Drops last 90 days": "sales_rank_drops_90",
+    # PR F — chart-readable conservative sales proxy. The Browser CSV
+    # exports this as a precomputed column; on the API path we
+    # compute it from csv[3] in keepa_client.history.
+    "Sales Rank: Drops last 30 days": "bsr_drops_30d",
     "Buy Box: 90 days drop %": "buy_box_drop_pct_90",
     "Buy Box: Lowest": "buy_box_lowest",
     "Buy Box: Highest": "buy_box_highest",
+    # PR B — 12-month BB floor. Browser CSV has the precomputed
+    # column; API path derives from csv[18] window.
+    "Buy Box: Lowest 365 days": "buy_box_min_365d",
     "Buy Box: 90 days OOS": "buy_box_oos_pct_90",
     "Buy Box: % Amazon 90 days": "amazon_bb_pct_90",
     "Reviews: Rating": "rating",
@@ -80,14 +88,16 @@ def load_market_data(source=None) -> dict:
     df = df.rename(columns=rename_map)
 
     # Parse numeric fields that may have currency symbols or percentage signs
-    for col in ["buy_box_price", "amazon_price", "new_fba_price", "buy_box_avg90",
-                 "buy_box_lowest", "buy_box_highest", "fba_pick_pack_fee",
-                 "referral_fee_amount"]:
+    for col in ["buy_box_price", "amazon_price", "new_fba_price",
+                 "buy_box_avg30", "buy_box_avg90",
+                 "buy_box_lowest", "buy_box_highest", "buy_box_min_365d",
+                 "fba_pick_pack_fee", "referral_fee_amount"]:
         if col in df.columns:
             df[col] = df[col].apply(_parse_numeric)
 
     for col in ["fba_seller_count", "monthly_sales_estimate", "sales_rank",
-                 "sales_rank_avg90", "sales_rank_drops_90", "review_count"]:
+                 "sales_rank_avg90", "sales_rank_drops_90", "bsr_drops_30d",
+                 "review_count"]:
         if col in df.columns:
             df[col] = df[col].apply(_parse_numeric)
 

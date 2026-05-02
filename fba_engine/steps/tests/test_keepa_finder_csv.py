@@ -40,17 +40,24 @@ _KEEPA_HEADER = [
     "ASIN", "Title", "Brand", "Manufacturer",
     "Categories: Root", "Categories: Sub", "Categories: Tree",
     "Product Codes: EAN", "Product Codes: UPC",
-    "Buy Box: Current", "Buy Box: 90 days avg.",
+    "Buy Box: Current",
+    # PR H — Browser CSV columns the validator + candidate-score
+    # consume. Names align with the API path so signals fire on
+    # both enrichment paths.
+    "Buy Box: 30 days avg.", "Buy Box: 90 days avg.",
+    "Buy Box: Lowest 365 days",
     "New, 3rd Party FBA: Current",
     "Amazon: Current",
     "FBA Pick&Pack Fee", "Referral Fee %",
     "Bought in past month",
     "New FBA Offer Count: Current",
     "Sales Rank: Current", "Sales Rank: 90 days avg.",
+    "Sales Rank: Drops last 30 days",
     "Buy Box: % Amazon 90 days", "Buy Box: 90 days OOS",
     "Buy Box: 30 days drop %", "Buy Box: 90 days drop %",
+    "Reviews: Rating", "Reviews: Rating Count",
     # Extras the step ignores (proves we don't choke on full exports):
-    "Last Price Change", "Reviews: Rating Count",
+    "Last Price Change",
 ]
 
 
@@ -176,8 +183,46 @@ def test_numeric_coercion_money_fields(tmp_path):
     assert row["buy_box_price"] == 24.99
     assert row["buy_box_avg90"] == 26.5
     assert row["new_fba_price"] == 25.49
-    assert row["bsr_current"] == 12345.0
-    assert row["buy_box_pct_amazon_90d"] == 8.0
+    # PR H — field names aligned with API-path schema so the
+    # validator + candidate-score read consistently across both
+    # enrichment paths.
+    assert row["sales_rank"] == 12345.0
+    assert row["amazon_bb_pct_90"] == 8.0
+
+
+def test_browser_csv_populates_validator_signals(tmp_path):
+    """PR H — Browser CSV columns map to the validator's expected
+    field names. Runs validator-flag-firing through the CSV path.
+    Pins parity with the API path (PRs A-G)."""
+    csv = _write_fixture(tmp_path, [
+        _fixture_row(**{
+            "Buy Box: Current": "16.90",
+            "Buy Box: 30 days avg.": "16.50",
+            "Buy Box: 90 days avg.": "16.32",
+            "Buy Box: Lowest 365 days": "8.00",
+            "Buy Box: 90 days OOS": "26 %",
+            "Buy Box: % Amazon 90 days": "2 %",
+            "Sales Rank: Current": "48870",
+            "Sales Rank: 90 days avg.": "57329",
+            "Sales Rank: Drops last 30 days": "25",
+            "Reviews: Rating": "4.3",
+            "Reviews: Rating Count": "1318",
+        })
+    ])
+    cdir = _write_canonical_config(tmp_path)
+    df = step.discover_keepa_finder(csv, "x", config_dir=cdir)
+    row = df.iloc[0]
+    # All under the validator-canonical names.
+    assert row["amazon_bb_pct_90"] == 2.0
+    assert row["buy_box_oos_pct_90"] == 26.0
+    assert row["buy_box_avg30"] == 16.50
+    assert row["buy_box_avg90"] == 16.32
+    assert row["buy_box_min_365d"] == 8.00
+    assert row["sales_rank"] == 48870.0
+    assert row["sales_rank_avg90"] == 57329.0
+    assert row["bsr_drops_30d"] == 25.0
+    assert row["rating"] == 4.3
+    assert row["review_count"] == 1318.0
 
 
 def test_keepa_dash_sentinel_becomes_zero(tmp_path):
