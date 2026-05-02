@@ -174,6 +174,27 @@ class TestDemandDimension:
         out = score_candidate(row, config=cfg)
         assert any("reviews flat" in r for r in out["candidate_reasons"])
 
+    def test_spiky_sales_rank_penalises_demand_subscore(self, cfg):
+        # Same sales tier, but spiky rank → lower Demand sub-score.
+        steady = _perfect_row()
+        steady["sales_rank_cv_90d"] = 0.10    # very steady
+        spiky = _perfect_row()
+        spiky["sales_rank_cv_90d"] = 1.20     # very spiky
+        out_steady = score_candidate(steady, config=cfg)
+        out_spiky = score_candidate(spiky, config=cfg)
+        assert out_spiky["candidate_score"] < out_steady["candidate_score"]
+        assert any(
+            "spiky rank" in r for r in out_spiky["candidate_reasons"]
+        )
+
+    def test_missing_sales_rank_cv_does_not_penalise(self, cfg):
+        # Old runs without history wiring — no CV → score unchanged.
+        no_cv = _perfect_row()
+        no_cv.pop("sales_rank_cv_90d", None)
+        out = score_candidate(no_cv, config=cfg)
+        # Demand max is 25, perfect row should hit it with no penalty.
+        assert out["candidate_score"] == 100
+
 
 class TestCompetitionDimension:
     def test_seller_count_below_ceiling_at_low_sales(self, cfg):

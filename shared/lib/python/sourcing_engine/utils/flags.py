@@ -41,6 +41,8 @@ COMPETITION_GROWING = "COMPETITION_GROWING"        # joiners_90d >= competition_
 BSR_DECLINING = "BSR_DECLINING"                    # bsr_slope_90d > bsr_decline_threshold (default 0.05)
 HIGH_OOS = "HIGH_OOS"                              # buy_box_oos_pct_90 > oos_threshold_pct (default 0.15)
 PRICE_UNSTABLE = "PRICE_UNSTABLE"                  # price_volatility_90d > price_volatility_threshold (default 0.20)
+BUY_BOX_ABOVE_FLOOR_365D = "BUY_BOX_ABOVE_FLOOR_365D"  # current BB vs 12mo low — peak-buying tell beyond BUY_BOX_ABOVE_AVG90
+LOW_LISTING_QUALITY = "LOW_LISTING_QUALITY"        # image_count low + no A+ content + mature listing
 # Lightweight historical-peak signal — fires when the current Buy Box price
 # is materially above the 90-day average (threshold in
 # decision_thresholds.yaml → buy_box_peak_threshold_pct, default 20%).
@@ -101,6 +103,8 @@ REVIEW_FLAGS = frozenset({
     BSR_DECLINING,
     HIGH_OOS,
     PRICE_UNSTABLE,
+    BUY_BOX_ABOVE_FLOOR_365D,
+    LOW_LISTING_QUALITY,
 })
 
 

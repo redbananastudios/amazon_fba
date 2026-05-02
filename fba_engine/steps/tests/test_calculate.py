@@ -286,6 +286,73 @@ class TestHistoryDerivedFlags:
         out = calculate_economics(df)
         assert "PRICE_UNSTABLE" not in out.iloc[0]["risk_flags"]
 
+    def test_buy_box_above_floor_365d_fires_above_threshold(self):
+        # Default buy_box_floor_threshold_pct = 50%. Current 15.00 vs
+        # 12mo floor 9.00 → 66.7% above floor → fires.
+        df = pd.DataFrame([_match_row(buy_box_min_365d=9.00)])
+        out = calculate_economics(df)
+        assert "BUY_BOX_ABOVE_FLOOR_365D" in out.iloc[0]["risk_flags"]
+
+    def test_buy_box_above_floor_365d_does_not_fire_when_close_to_floor(self):
+        # Current 15.00 vs floor 14.00 → 7.1% above. Below threshold.
+        df = pd.DataFrame([_match_row(buy_box_min_365d=14.00)])
+        out = calculate_economics(df)
+        assert "BUY_BOX_ABOVE_FLOOR_365D" not in out.iloc[0]["risk_flags"]
+
+    def test_buy_box_above_floor_silent_when_floor_missing(self):
+        df = pd.DataFrame([_match_row(buy_box_min_365d=None)])
+        out = calculate_economics(df)
+        assert "BUY_BOX_ABOVE_FLOOR_365D" not in out.iloc[0]["risk_flags"]
+
+    def test_low_listing_quality_fires_when_all_conditions_met(self):
+        # All three negatives co-occur on a mature listing → fire.
+        df = pd.DataFrame([_match_row(
+            catalog_image_count=2,
+            catalog_has_aplus_content=False,
+            listing_age_days=900,    # > 730 mature threshold
+        )])
+        out = calculate_economics(df)
+        assert "LOW_LISTING_QUALITY" in out.iloc[0]["risk_flags"]
+
+    def test_low_listing_quality_does_not_fire_for_new_listings(self):
+        # Listing is young — LISTING_TOO_NEW handles this case;
+        # LOW_LISTING_QUALITY only fires on mature listings that should
+        # have been polished by now.
+        df = pd.DataFrame([_match_row(
+            catalog_image_count=2,
+            catalog_has_aplus_content=False,
+            listing_age_days=180,   # young
+        )])
+        out = calculate_economics(df)
+        assert "LOW_LISTING_QUALITY" not in out.iloc[0]["risk_flags"]
+
+    def test_low_listing_quality_does_not_fire_when_aplus_present(self):
+        df = pd.DataFrame([_match_row(
+            catalog_image_count=2,
+            catalog_has_aplus_content=True,    # has A+ → not low quality
+            listing_age_days=900,
+        )])
+        out = calculate_economics(df)
+        assert "LOW_LISTING_QUALITY" not in out.iloc[0]["risk_flags"]
+
+    def test_low_listing_quality_does_not_fire_when_image_count_healthy(self):
+        df = pd.DataFrame([_match_row(
+            catalog_image_count=7,    # rich images
+            catalog_has_aplus_content=False,
+            listing_age_days=900,
+        )])
+        out = calculate_economics(df)
+        assert "LOW_LISTING_QUALITY" not in out.iloc[0]["risk_flags"]
+
+    def test_low_listing_quality_silent_when_any_field_missing(self):
+        df = pd.DataFrame([_match_row(
+            catalog_image_count=None,
+            catalog_has_aplus_content=False,
+            listing_age_days=900,
+        )])
+        out = calculate_economics(df)
+        assert "LOW_LISTING_QUALITY" not in out.iloc[0]["risk_flags"]
+
     def test_all_history_flags_independent_of_legacy_flags(self):
         """Pin that adding history flags didn't change pre-existing flag
         firing on rows that don't have history fields populated."""
