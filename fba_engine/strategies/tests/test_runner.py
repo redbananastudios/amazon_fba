@@ -1085,12 +1085,15 @@ class TestKeepaFinderStrategy:
         assert strat.name == "keepa_finder"
         assert strat.input_discover is True
         # discover → enrich (leads) → calculate → decide →
-        # candidate_score → validate_opportunity → supplier_leads.
-        # candidate_score + validate_opportunity wired in PR (post-#71)
-        # so bulk Browser-CSV runs also produce the operator-facing
-        # BUY/SOURCE_ONLY/NEGOTIATE/WATCH/KILL verdict.
+        # keepa_browser_enrich → candidate_score → validate_opportunity
+        # → supplier_leads.
+        # keepa_browser_enrich applies the .cache/keepa_browser
+        # scrape if present (silent no-op otherwise) before the
+        # validator runs, so the share-aware velocity predictor sees
+        # real per-seller BB data when the operator has scraped it.
         assert [s.name for s in strat.steps] == [
             "discover", "enrich", "calculate", "decide",
+            "keepa_browser_enrich",
             "candidate_score", "validate_opportunity", "supplier_leads",
         ]
         # All step modules import.

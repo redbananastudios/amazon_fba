@@ -70,6 +70,13 @@ steps:
   - name: decide
     module: fba_engine.steps.decide
 
+  # Stage 05.5 — keepa_browser_enrich: when a per-ASIN Browser
+  # scrape exists at .cache/keepa_browser/<asin>.json, merge the
+  # chart-quality signals (per-seller BB share, named sellers,
+  # precomputed 365d low). Silent no-op when missing.
+  - name: keepa_browser_enrich
+    module: fba_engine.steps.keepa_browser_enrich
+
   # Stage 06 — candidate_score: 0-100 strength + HIGH/MEDIUM/LOW
   # data confidence. Pure additive; feeds validate_opportunity.
   # Without this, validate_opportunity would never see candidate_score
