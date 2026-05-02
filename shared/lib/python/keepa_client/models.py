@@ -49,7 +49,9 @@ def _now_keepa_minutes() -> int:
 _CSV_AMAZON: int = 0           # Amazon's own offer
 _CSV_SALES_RANK: int = 3       # Sales rank
 _CSV_NEW_FBA: int = 10         # Lowest 3rd-party FBA
-_CSV_COUNT_NEW: int = 11       # New offer count (proxy for FBA seller count)
+_CSV_COUNT_NEW: int = 11       # New offer count (FBM + FBA combined)
+_CSV_RATING: int = 16          # Reviews: rating (stored as int, rating × 10)
+_CSV_COUNT_REVIEWS: int = 17   # Reviews: total review count
 _CSV_BUY_BOX: int = 18         # Buy Box Shipping (winner price + shipping)
 
 
@@ -206,13 +208,16 @@ class KeepaStats(BaseModel):
     """Subset of `stats` block from `/product?stats=N`.
 
     Each list is indexed by the Keepa CSV enum. `current` holds the
-    most-recent observation; `avg90` holds the rolling 90-day average
-    (set when the request includes ``stats=90``).
+    most-recent observation; `avg30` and `avg90` hold rolling averages
+    (populated when the request includes ``stats=30`` / ``stats=90``).
+    The `avg30` lane is useful as a 30d-vs-90d compare for momentum
+    signals — e.g. "Buy Box trending up vs 90d baseline".
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     current: list[int] = Field(default_factory=list)
+    avg30: list[int] = Field(default_factory=list)
     avg90: list[int] = Field(default_factory=list)
 
 
@@ -254,6 +259,18 @@ class KeepaProduct(BaseModel):
     # -1 sentinels for many ASINs even when active FBA offers exist —
     # the offers list is the authoritative source.
     offers: list[KeepaOffer] = Field(default_factory=list)
+    # Variation grouping. ASINs sharing a parent are size / colour
+    # variants of the same product — knowing this lets the operator
+    # spot whether they're competing across a variation cluster.
+    parent_asin: Optional[str] = Field(default=None, alias="parentAsin")
+    # Physical dimensions Keepa surfaces for FBA fee + shipping math.
+    # Weight is grams; height/length/width are millimetres. All
+    # optional — Keepa returns None for ASINs without dimensions on
+    # file. `market_snapshot` derives `package_volume_cm3` (mm³ → cm³).
+    package_weight: Optional[int] = Field(default=None, alias="packageWeight")
+    package_height: Optional[int] = Field(default=None, alias="packageHeight")
+    package_length: Optional[int] = Field(default=None, alias="packageLength")
+    package_width: Optional[int] = Field(default=None, alias="packageWidth")
 
     def market_snapshot(self) -> dict[str, Any]:
         """Extract the canonical engine's market-data columns from `stats`.
@@ -318,12 +335,53 @@ class KeepaProduct(BaseModel):
         else:
             fba_seller_count = _stat_int(self.stats, _CSV_COUNT_NEW)
 
+        # Rating and review_count come from the csv time-series (not
+        # stats.current). Keepa stores rating as integer × 10
+        # (e.g. 45 → 4.5).
+        csv = self.csv or []
+        rating_raw = (
+            _csv_last_value(csv[_CSV_RATING])
+            if len(csv) > _CSV_RATING else None
+        )
+        rating = rating_raw / 10.0 if rating_raw is not None else None
+        review_count = (
+            _csv_last_value(csv[_CSV_COUNT_REVIEWS])
+            if len(csv) > _CSV_COUNT_REVIEWS else None
+        )
+
+        # Package volume in cm³, derived from H × L × W (mm). Keepa
+        # returns None for ASINs without dimensions on file. mm³ → cm³
+        # divides by 1000.
+        package_volume_cm3: Optional[int] = None
+        if (
+            self.package_height is not None
+            and self.package_length is not None
+            and self.package_width is not None
+            and self.package_height > 0
+            and self.package_length > 0
+            and self.package_width > 0
+        ):
+            package_volume_cm3 = (
+                self.package_height * self.package_length * self.package_width
+            ) // 1000
+
+        # categoryTree is root → leaf. The first element is the
+        # marketplace root (e.g. "Toys & Games" on amazon.co.uk). When
+        # categoryTree is empty (popular ASINs sometimes return null),
+        # category_root falls through to None.
+        category_root: Optional[str] = None
+        if self.category_tree:
+            name = self.category_tree[0].get("name")
+            if isinstance(name, str) and name:
+                category_root = name
+
         return {
             "asin": self.asin,
             "amazon_price": _stat_money(self.stats, _CSV_AMAZON),
             "new_fba_price": new_fba_price,
             "buy_box_price": _stat_money(self.stats, _CSV_BUY_BOX),
-            "buy_box_avg90": _stat_money(self.stats, _CSV_BUY_BOX, avg=True),
+            "buy_box_avg30": _stat_money(self.stats, _CSV_BUY_BOX, lane="avg30"),
+            "buy_box_avg90": _stat_money(self.stats, _CSV_BUY_BOX, lane="avg90"),
             "fba_seller_count": fba_seller_count,
             # Total new-offer count (FBM + FBA combined) from
             # stats.current[11]. Some calculators legitimately want the
@@ -331,19 +389,43 @@ class KeepaProduct(BaseModel):
             # density independent of fulfilment channel.
             "total_offer_count": _stat_int(self.stats, _CSV_COUNT_NEW),
             "sales_rank": _stat_int(self.stats, _CSV_SALES_RANK),
+            "sales_rank_avg90": _stat_int(self.stats, _CSV_SALES_RANK, lane="avg90"),
             "sales_estimate": _coerce_positive_int(sales_estimate),
+            "rating": rating,
+            "review_count": review_count,
+            "parent_asin": self.parent_asin,
+            # Grams. Keepa's package_weight is None for ASINs without
+            # dimensions on file.
+            "package_weight_g": self.package_weight,
+            "package_volume_cm3": package_volume_cm3,
+            "category_root": category_root,
         }
 
 
-def _stat_money(stats: Optional[KeepaStats], idx: int, *, avg: bool = False) -> Optional[float]:
-    """Pull a money cell out of stats.current[idx] (or avg90 when ``avg=True``).
+def _stat_money(
+    stats: Optional[KeepaStats],
+    idx: int,
+    *,
+    avg: bool = False,
+    lane: str = "current",
+) -> Optional[float]:
+    """Pull a money cell out of one of stats' lanes.
 
-    Keepa stores prices as integer cents; we return pounds. -1 / missing
-    stats / out-of-range index → None.
+    By default reads ``stats.current[idx]``. Pass ``avg=True`` for the
+    legacy 90-day shortcut (kept for back-compat) or ``lane="avg30"`` /
+    ``lane="avg90"`` to be explicit. Returns pounds (cents/100). Missing
+    stats / out-of-range index / -1 sentinel → None.
     """
     if stats is None:
         return None
-    arr = stats.avg90 if avg else stats.current
+    if avg:
+        arr = stats.avg90
+    elif lane == "avg30":
+        arr = stats.avg30
+    elif lane == "avg90":
+        arr = stats.avg90
+    else:
+        arr = stats.current
     if idx >= len(arr):
         return None
     cents = arr[idx]
@@ -352,13 +434,21 @@ def _stat_money(stats: Optional[KeepaStats], idx: int, *, avg: bool = False) -> 
     return cents / 100.0
 
 
-def _stat_int(stats: Optional[KeepaStats], idx: int) -> Optional[int]:
-    """Pull an integer cell (rank, count) out of stats.current[idx]."""
+def _stat_int(
+    stats: Optional[KeepaStats], idx: int, *, lane: str = "current",
+) -> Optional[int]:
+    """Pull an integer cell (rank, count) out of stats' chosen lane."""
     if stats is None:
         return None
-    if idx >= len(stats.current):
+    if lane == "avg30":
+        arr = stats.avg30
+    elif lane == "avg90":
+        arr = stats.avg90
+    else:
+        arr = stats.current
+    if idx >= len(arr):
         return None
-    val = stats.current[idx]
+    val = arr[idx]
     if val is None or val < 0:
         return None
     return int(val)
@@ -373,6 +463,43 @@ def _coerce_positive_int(val: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return n if n >= 0 else None
+
+
+def _csv_last_value(series: Any) -> Optional[int]:
+    """Return the last non-sentinel value in a Keepa csv time-series.
+
+    Keepa's `csv[N]` arrays are interleaved `[time, value, time, value, ...]`
+    — the value sits at every odd index. -1 means "no observation".
+    This helper walks the value-positions right-to-left and returns
+    the most recent real (non-(-1), non-None) observation, or None
+    when the series is empty / all sentinels.
+
+    Real Keepa exports are always even-length, but odd-length arrays
+    can creep in from manual fixtures or truncated transports — so we
+    explicitly start from the largest *value* index (odd) rather than
+    `len-1` to avoid treating a stray timestamp as a value.
+
+    Used by `market_snapshot()` for `rating` (csv[16]) and
+    `review_count` (csv[17]) which Keepa doesn't expose via stats.
+    """
+    if not isinstance(series, list) or len(series) < 2:
+        return None
+    # Largest value index — odd. For a length-N array:
+    #   N even → start = N-1 (which is odd)
+    #   N odd  → start = N-2 (drop trailing dangling timestamp)
+    start = len(series) - 1 if len(series) % 2 == 0 else len(series) - 2
+    for i in range(start, 0, -2):
+        v = series[i]
+        if v is None:
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n < 0:
+            continue
+        return n
+    return None
 
 
 class KeepaSeller(BaseModel):

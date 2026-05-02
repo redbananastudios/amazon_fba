@@ -204,11 +204,19 @@ class TestColumnsConstant:
             "amazon_price",
             "new_fba_price",
             "buy_box_price",
+            "buy_box_avg30",
             "buy_box_avg90",
             "fba_seller_count",
             "total_offer_count",
             "sales_rank",
+            "sales_rank_avg90",
             "sales_estimate",
+            "rating",
+            "review_count",
+            "parent_asin",
+            "package_weight_g",
+            "package_volume_cm3",
+            "category_root",
         )
 
 

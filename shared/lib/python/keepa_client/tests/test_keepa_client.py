@@ -470,6 +470,183 @@ class TestFbaSellerCountFromOffers:
         assert snap["total_offer_count"] == 12
 
 
+class TestSchemaUnification:
+    """Pin the new snapshot fields added by the schema-unification PR
+    (WS1.2/1.3 of HANDOFF_candidate_validation.md). The whole point is
+    that the API path (`market_snapshot`) and the CSV-export path
+    (`market_data._KEEPA_COLUMN_MAP`) produce the same column set.
+    These tests pin the API side; the CSV-export side is unit-tested
+    in the legacy market_data tests."""
+
+    def test_csv_last_value_walks_right_to_left(self):
+        from keepa_client.models import _csv_last_value
+        # Interleaved [t, v, t, v, ...] — last v wins.
+        assert _csv_last_value([100, 5, 200, 10, 300, 15]) == 15
+
+    def test_csv_last_value_skips_minus_one_sentinel(self):
+        from keepa_client.models import _csv_last_value
+        # Most recent observation is -1 (no data); fall back to the
+        # one before it.
+        assert _csv_last_value([100, 5, 200, -1]) == 5
+
+    def test_csv_last_value_returns_none_for_empty(self):
+        from keepa_client.models import _csv_last_value
+        assert _csv_last_value([]) is None
+        assert _csv_last_value(None) is None
+        assert _csv_last_value([100]) is None  # one timestamp, no value
+
+    def test_csv_last_value_returns_none_when_all_sentinels(self):
+        from keepa_client.models import _csv_last_value
+        assert _csv_last_value([100, -1, 200, -1]) is None
+
+    def test_csv_last_value_handles_odd_length_array(self):
+        """Latent bug guard: a length-5 array like `[t, v, t, v, t]`
+        has a dangling trailing timestamp. Naively walking from len-1
+        with stride -2 would visit the timestamp as if it were a value
+        and return it. The helper must skip the trailing timestamp
+        and return the most recent real value instead."""
+        from keepa_client.models import _csv_last_value
+        # [10=t, 1=v, 20=t, 2=v, 99=t (dangling)] — last value is 2.
+        assert _csv_last_value([10, 1, 20, 2, 99]) == 2
+
+    def test_csv_last_value_odd_length_returns_none_when_no_value(self):
+        # Length 3 means only one value position — at index 1.
+        from keepa_client.models import _csv_last_value
+        assert _csv_last_value([10, -1, 99]) is None
+        assert _csv_last_value([10, 5, 99]) == 5
+
+    def test_market_snapshot_extracts_rating_and_review_count(self):
+        """Keepa stores rating × 10 in csv[16]; review count is the
+        last value of csv[17]. Snapshot divides rating by 10 so callers
+        see the human-readable form (4.5)."""
+        from keepa_client.models import _CSV_RATING, _CSV_COUNT_REVIEWS
+        csv: list = [None] * 20
+        csv[_CSV_RATING] = [100, 40, 200, 45]      # 4.0 then 4.5
+        csv[_CSV_COUNT_REVIEWS] = [100, 50, 200, 73]  # last review count = 73
+        payload = {"asin": "B0RATED", "csv": csv}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["rating"] == 4.5
+        assert snap["review_count"] == 73
+
+    def test_market_snapshot_rating_none_when_csv_missing(self):
+        # No csv entries → rating + review_count default to None.
+        snap = KeepaProduct.model_validate({"asin": "B0BARE"}).market_snapshot()
+        assert snap["rating"] is None
+        assert snap["review_count"] is None
+
+    def test_market_snapshot_buy_box_avg30(self):
+        """Add stats.avg30 lane and surface the 30-day Buy Box average.
+        Useful for momentum signals (current vs avg30 vs avg90)."""
+        current = [-1] * 19
+        avg30 = [-1] * 19
+        avg90 = [-1] * 19
+        current[18] = 1525   # £15.25
+        avg30[18] = 1500     # £15.00
+        avg90[18] = 1475     # £14.75
+        payload = {
+            "asin": "B0AVG",
+            "stats": {"current": current, "avg30": avg30, "avg90": avg90},
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["buy_box_price"] == 15.25
+        assert snap["buy_box_avg30"] == 15.00
+        assert snap["buy_box_avg90"] == 14.75
+
+    def test_market_snapshot_buy_box_avg30_none_when_lane_empty(self):
+        # Pre-PR responses don't include avg30 — surface None, not 0.
+        current = [-1] * 19
+        avg90 = [-1] * 19
+        current[18] = 1525
+        avg90[18] = 1500
+        payload = {
+            "asin": "B0NOAVG30",
+            "stats": {"current": current, "avg90": avg90},
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["buy_box_avg30"] is None
+        assert snap["buy_box_avg90"] == 15.00
+
+    def test_market_snapshot_sales_rank_avg90(self):
+        current = [-1] * 19
+        avg90 = [-1] * 19
+        current[3] = 5234
+        avg90[3] = 4800
+        payload = {
+            "asin": "B0RANK",
+            "stats": {"current": current, "avg90": avg90},
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["sales_rank"] == 5234
+        assert snap["sales_rank_avg90"] == 4800
+
+    def test_market_snapshot_parent_asin(self):
+        payload = {
+            "asin": "B0CHILD",
+            "parentAsin": "B0PARENT",
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["parent_asin"] == "B0PARENT"
+
+    def test_market_snapshot_parent_asin_none_for_non_variation(self):
+        snap = KeepaProduct.model_validate({"asin": "B0SOLO"}).market_snapshot()
+        assert snap["parent_asin"] is None
+
+    def test_market_snapshot_package_dimensions(self):
+        """Weight in grams; volume derived from H × L × W (mm) ÷ 1000."""
+        payload = {
+            "asin": "B0BOX",
+            "packageWeight": 250,         # 250 g
+            "packageHeight": 100,         # 100 mm
+            "packageLength": 200,         # 200 mm
+            "packageWidth": 150,          # 150 mm
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["package_weight_g"] == 250
+        # 100 * 200 * 150 = 3,000,000 mm³ = 3000 cm³
+        assert snap["package_volume_cm3"] == 3000
+
+    def test_market_snapshot_package_volume_none_when_dimensions_missing(self):
+        payload = {"asin": "B0NODIM", "packageWeight": 100}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["package_weight_g"] == 100
+        # No height/length/width → volume can't be computed.
+        assert snap["package_volume_cm3"] is None
+
+    def test_market_snapshot_package_volume_none_when_any_zero(self):
+        payload = {
+            "asin": "B0FLAT",
+            "packageHeight": 0, "packageLength": 100, "packageWidth": 100,
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["package_volume_cm3"] is None
+
+    def test_market_snapshot_category_root(self):
+        payload = {
+            "asin": "B0CAT",
+            "categoryTree": [
+                {"catId": 1, "name": "Toys & Games"},
+                {"catId": 2, "name": "Action Figures"},
+            ],
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["category_root"] == "Toys & Games"
+
+    def test_market_snapshot_category_root_none_when_tree_empty(self):
+        payload = {"asin": "B0NOCAT", "categoryTree": None}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["category_root"] is None
+
+    def test_snapshot_keys_match_keepa_enrich_columns(self):
+        """Schema parity: the set of keys emitted by `market_snapshot`
+        must equal `set(KEEPA_ENRICH_COLUMNS) | {"asin"}`. Drift here
+        means downstream calculate / decide silently misses data, or
+        the enrich step asks for columns that don't exist."""
+        from fba_engine.steps.keepa_enrich import KEEPA_ENRICH_COLUMNS
+        payload = {"asin": "B0SCHEMA"}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert set(snap.keys()) == set(KEEPA_ENRICH_COLUMNS) | {"asin"}
+
+
 class TestKeepaSellerModel:
     def test_seller_with_asin_list(self):
         payload = {

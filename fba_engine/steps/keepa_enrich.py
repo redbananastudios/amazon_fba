@@ -12,12 +12,24 @@ Output columns appended (per `market_snapshot()` in
   - amazon_price          (current Amazon offer)
   - new_fba_price         (lowest 3rd-party FBA)
   - buy_box_price         (current Buy Box winner)
+  - buy_box_avg30         (30-day Buy Box average)
   - buy_box_avg90         (90-day Buy Box average)
   - fba_seller_count      (FBA-only count from offers list; falls back
                            to COUNT_NEW when ``with_offers=False``)
   - total_offer_count     (FBM + FBA combined from stats.current[11])
   - sales_rank
+  - sales_rank_avg90      (90-day average rank)
   - sales_estimate        (Keepa "Bought in past month" — what calculate reads)
+  - rating                (Reviews: rating, e.g. 4.5)
+  - review_count          (Reviews: total review count)
+  - parent_asin           (variation parent — None when not a variation)
+  - package_weight_g      (grams)
+  - package_volume_cm3    (derived from packageHeight × Length × Width)
+  - category_root         (categoryTree[0].name when present)
+
+Naming aligns with the Keepa CSV-export reader at
+`shared/lib/python/sourcing_engine/pipeline/market_data.py` so both
+enrichment paths produce the same schema.
 
 Market-data columns only. Descriptive fields (product_name, brand,
 category) belong to the discovery step (oa_csv, seller_storefront)
@@ -55,11 +67,19 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     "amazon_price",
     "new_fba_price",
     "buy_box_price",
+    "buy_box_avg30",
     "buy_box_avg90",
     "fba_seller_count",
     "total_offer_count",
     "sales_rank",
+    "sales_rank_avg90",
     "sales_estimate",
+    "rating",
+    "review_count",
+    "parent_asin",
+    "package_weight_g",
+    "package_volume_cm3",
+    "category_root",
 )
 
 DEFAULT_KEEPA_CONFIG_PATH: Path = (
