@@ -112,11 +112,21 @@ class TestKill:
         out = validate_opportunity(row)
         assert out["opportunity_verdict"] == VERDICT_KILL
 
-    def test_restricted_becomes_kill(self):
+    def test_restricted_does_not_become_kill(self):
+        # Gating (RESTRICTED, BRAND_GATED) is no longer a KILL —
+        # operator may hold a brand letter or apply for ungating.
+        # Verdict routes to WATCH/SOURCE_ONLY with ungate link surfaced.
         row = _shortlist_row(restriction_status="RESTRICTED")
         out = validate_opportunity(row)
-        assert out["opportunity_verdict"] == VERDICT_KILL
-        assert any("RESTRICTED" in r for r in out["opportunity_blockers"])
+        assert out["opportunity_verdict"] != VERDICT_KILL
+        # Still blocks BUY (gating is a BUY blocker, not a KILL).
+        assert out["opportunity_verdict"] != "BUY"
+
+    def test_brand_gated_does_not_become_kill(self):
+        row = _shortlist_row(restriction_status="BRAND_GATED")
+        out = validate_opportunity(row)
+        assert out["opportunity_verdict"] != VERDICT_KILL
+        assert out["opportunity_verdict"] != "BUY"
 
     def test_fba_ineligible_becomes_kill(self):
         row = _shortlist_row(fba_eligible=False)
