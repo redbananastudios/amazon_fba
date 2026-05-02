@@ -80,5 +80,18 @@ steps:
         min_sales_review: 0
         min_sales_shortlist: 0
 
+  # Stage 06 — candidate_score: 0-100 strength + HIGH/MEDIUM/LOW data
+  # confidence. Pure additive; feeds validate_opportunity. Without
+  # this, validate_opportunity would never see candidate_score and
+  # would over-route rows to WATCH.
+  - name: candidate_score
+    module: fba_engine.steps.candidate_score
+
+  # Stage 07 — validate_opportunity: BUY / SOURCE_ONLY / NEGOTIATE /
+  # WATCH / KILL verdict. The "should I act on this now?" answer.
+  # Pure additive — never changes the decide-step verdict.
+  - name: validate_opportunity
+    module: fba_engine.steps.validate_opportunity
+
 output:
   csv: "{output_dir}/single_asin_{asin}_{timestamp}.csv"
