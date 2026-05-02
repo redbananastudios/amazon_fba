@@ -70,6 +70,19 @@ steps:
   - name: decide
     module: fba_engine.steps.decide
 
+  # Stage 06 — candidate_score: 0-100 strength + HIGH/MEDIUM/LOW
+  # data confidence. Pure additive; feeds validate_opportunity.
+  # Without this, validate_opportunity would never see candidate_score
+  # and would over-route rows to WATCH.
+  - name: candidate_score
+    module: fba_engine.steps.candidate_score
+
+  # Stage 07a — validate_opportunity: BUY / SOURCE_ONLY / NEGOTIATE /
+  # WATCH / KILL. Pure additive — never alters the decide-step verdict.
+  # Operator-facing answer to "is this worth acting on now?".
+  - name: validate_opportunity
+    module: fba_engine.steps.validate_opportunity
+
   # Stage 07 — supplier_leads: append Brand-distributor / Product-
   # wholesale / Brand-trade-account search URLs per row. The recipe
   # name passes through as `niche` for output organisation.
