@@ -13,6 +13,13 @@ COLUMNS = [
     ("supplier",                "Supplier",             18, "text"),
     ("supplier_sku",            "Supplier Part No.",    16, "text"),
     ("decision",                "Decision",             14, "text"),
+    # Candidate score (HANDOFF WS3.6) — informational columns,
+    # do NOT alter the decision column.
+    ("candidate_band",          "Strength",             12, "text"),
+    ("candidate_score",         "Score",                10, "int"),
+    ("data_confidence",         "Confidence",           14, "text"),
+    ("candidate_reasons",       "Strength Notes",       50, "text"),
+    ("data_confidence_reasons", "Confidence Notes",     40, "text"),
     ("gated",                   "Gated",                10, "text"),
     ("buy_cost",                "Cost inc VAT",         14, "gbp"),
     ("market_price",            "Buy Box",              12, "gbp"),
@@ -98,6 +105,41 @@ def write_excel(
         if "risk_flags" in out.columns:
             out["risk_flags"] = out["risk_flags"].apply(
                 lambda x: "; ".join(x) if isinstance(x, list) else str(x))
+
+        # Flatten candidate-score reason lists to "; "-joined strings
+        # (HANDOFF WS3.6). Same pattern as risk_flags.
+        for col in ("candidate_reasons", "data_confidence_reasons"):
+            if col in out.columns:
+                out[col] = out[col].apply(
+                    lambda x: "; ".join(x) if isinstance(x, list) else (
+                        "" if pd.isna(x) else str(x)
+                    )
+                )
+
+        # Sort SHORTLIST then REVIEW; within each band, candidate_score
+        # descending. Strongest products land at the top so the operator
+        # sees the best opportunities without scrolling. Falls through
+        # gracefully when candidate_score is absent (older runs).
+        if "decision" in out.columns:
+            decision_priority = {"SHORTLIST": 0, "REVIEW": 1}
+            out["__sort_decision"] = out["decision"].map(decision_priority).fillna(99)
+            score_col = (
+                out["candidate_score"]
+                if "candidate_score" in out.columns
+                else pd.Series([0] * len(out), index=out.index)
+            )
+            out["__sort_score"] = pd.to_numeric(
+                score_col, errors="coerce"
+            ).fillna(0) * -1   # negative for descending
+            # `kind="stable"` keeps insertion order on score ties.
+            # Default `quicksort` is not stable.
+            out = (
+                out.sort_values(
+                    ["__sort_decision", "__sort_score"], kind="stable",
+                )
+                .drop(columns=["__sort_decision", "__sort_score"])
+                .reset_index(drop=True)
+            )
 
         # Derive amazon_on_listing from risk_flags. Skip when risk_flags
         # is missing entirely — `out.get("risk_flags", "")` returns the
@@ -271,6 +313,35 @@ def write_excel(
             if str(row.get("amazon_on_listing", "")).upper() == "Y":
                 amz_cell.fill = PatternFill(start_color="FDEBD0", end_color="FDEBD0", fill_type="solid")
                 amz_cell.font = Font(bold=True, size=10, color="E67E22")
+
+            # Candidate-score colour coding (HANDOFF WS3.6 §6.4):
+            #   STRONG + HIGH         → green fill, bold green font
+            #   STRONG + (MED/LOW)    → amber fill, bold dark-amber font
+            #   OK / WEAK             → no special highlight
+            #   FAIL                  → grey fill, grey font (greyed out)
+            band_col_idx = next(
+                (i for i, c in enumerate(COLUMNS) if c[0] == "candidate_band"),
+                None,
+            )
+            if band_col_idx is not None:
+                band_cell = ws.cell(row=row_idx, column=band_col_idx + 1)
+                band_val = str(row.get("candidate_band", "")).upper()
+                conf_val = str(row.get("data_confidence", "")).upper()
+                if band_val == "STRONG" and conf_val == "HIGH":
+                    band_cell.fill = PatternFill(
+                        start_color="ABEBC6", end_color="ABEBC6", fill_type="solid",
+                    )
+                    band_cell.font = Font(bold=True, size=10, color="186A3B")
+                elif band_val == "STRONG":
+                    band_cell.fill = PatternFill(
+                        start_color="FAD7A0", end_color="FAD7A0", fill_type="solid",
+                    )
+                    band_cell.font = Font(bold=True, size=10, color="9C640C")
+                elif band_val == "FAIL":
+                    band_cell.fill = PatternFill(
+                        start_color="D5D8DC", end_color="D5D8DC", fill_type="solid",
+                    )
+                    band_cell.font = Font(size=10, color="7F8C8D")
 
             ws.row_dimensions[row_idx].height = 22
 

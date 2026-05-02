@@ -47,10 +47,34 @@ def _supplier_sections(sdf):
     lines = []
     display_cols = ["ean", "asin", "product_name", "buy_cost", "market_price",
                     "profit_conservative", "margin_conservative", "sales_estimate",
+                    "candidate_band", "candidate_score", "data_confidence",
                     "risk_flags", "decision_reason"]
     shortlisted = sdf[sdf["decision"] == "SHORTLIST"] if "decision" in sdf.columns else pd.DataFrame()
     review = sdf[sdf["decision"] == "REVIEW"] if "decision" in sdf.columns else pd.DataFrame()
     rejected = sdf[sdf["decision"] == "REJECT"] if "decision" in sdf.columns else pd.DataFrame()
+
+    # Sort within each band: candidate_score descending so the
+    # strongest opportunities lead each section. Falls through
+    # gracefully when candidate_score is absent (older runs).
+    # `kind="stable"` so equal-score rows preserve insertion order
+    # (default `quicksort` is not stable; documented contract from
+    # the WS3.6 acceptance is that ties keep their original order).
+    if not shortlisted.empty and "candidate_score" in shortlisted.columns:
+        shortlisted = shortlisted.assign(
+            __score=pd.to_numeric(
+                shortlisted["candidate_score"], errors="coerce",
+            ).fillna(0),
+        ).sort_values(
+            "__score", ascending=False, kind="stable",
+        ).drop(columns="__score")
+    if not review.empty and "candidate_score" in review.columns:
+        review = review.assign(
+            __score=pd.to_numeric(
+                review["candidate_score"], errors="coerce",
+            ).fillna(0),
+        ).sort_values(
+            "__score", ascending=False, kind="stable",
+        ).drop(columns="__score")
 
     for pb in ["FBA", "FBM"]:
         for mt, label in [("UNIT", "Unit"), ("CASE", "Case/Multipack")]:
@@ -60,10 +84,22 @@ def _supplier_sections(sdf):
             if not subset.empty and "match_type" in subset.columns:
                 subset = subset[subset["match_type"] == mt]
             lines.append(f"\n### Shortlist — {pb} {label} Matches\n")
-            lines.append("_None_\n" if subset.empty else _make_table(subset, display_cols))
+            if subset.empty:
+                lines.append("_None_\n")
+            else:
+                summary = _candidate_score_summary(subset)
+                if summary:
+                    lines.append(summary)
+                lines.append(_make_table(subset, display_cols))
 
     lines.append("\n### Manual Review\n")
-    lines.append("_None_\n" if review.empty else _make_table(review, display_cols))
+    if review.empty:
+        lines.append("_None_\n")
+    else:
+        summary = _candidate_score_summary(review)
+        if summary:
+            lines.append(summary)
+        lines.append(_make_table(review, display_cols))
 
     reject_cols = ["ean", "product_name", "match_type", "decision_reason"]
     lines.append("\n### Rejected\n")
@@ -128,3 +164,58 @@ def _make_table(df, cols):
         vals = [str(row.get(c, "")) for c in available]
         lines.append("| " + " | ".join(vals) + " |")
     return "\n".join(lines) + "\n"
+
+
+def _candidate_score_summary(df: pd.DataFrame) -> str:
+    """Per-row leading lines summarising candidate score + confidence.
+
+    HANDOFF WS3.6: "In the markdown report, add a leading line per
+    row: **STRONG** (HIGH confidence) \u2014 score 82/100".
+
+    Emitted as a fenced bullet list above each band's table for the
+    SHORTLIST and REVIEW sections. Falls through silently when
+    candidate_score isn't present (older runs).
+
+    NaN handling: `pd.DataFrame.from_records` fills missing dict keys
+    with NaN, which is truthy for floats \u2014 `value or ""` does NOT
+    coerce a NaN cell to "". Every cell read here therefore goes
+    through `_clean_str` to keep NaN out of the output.
+    """
+    if "candidate_band" not in df.columns or df.empty:
+        return ""
+    lines = []
+    for _, row in df.iterrows():
+        band = _clean_str(row.get("candidate_band"))
+        score = row.get("candidate_score")
+        conf = _clean_str(row.get("data_confidence"))
+        asin = _clean_str(row.get("asin"))
+        title = _clean_str(row.get("product_name"))
+        # Truncate the title so the bullet stays scannable.
+        title_short = (title[:60] + "\u2026") if len(title) > 60 else title
+        try:
+            score_int = (
+                int(score)
+                if score is not None and not pd.isna(score)
+                else None
+            )
+        except (ValueError, TypeError):
+            score_int = None
+        if not band:
+            # Row has the column but no usable band value \u2014 skip.
+            continue
+        if score_int is not None:
+            lead = (
+                f"- **{band}** ({conf} confidence) \u2014 score {score_int}/100  "
+                f"`{asin}` {title_short}"
+            )
+        else:
+            lead = f"- **{band}** ({conf} confidence)  `{asin}` {title_short}"
+        lines.append(lead)
+    return "\n".join(lines) + "\n" if lines else ""
+
+
+def _clean_str(value) -> str:
+    """Coerce a cell to a clean string. NaN / None \u2192 \"\"."""
+    if value is None or pd.isna(value):
+        return ""
+    return str(value)
