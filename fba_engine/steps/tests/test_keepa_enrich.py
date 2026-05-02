@@ -227,6 +227,7 @@ class TestColumnsConstant:
             "listing_age_days",
             "yoy_bsr_ratio",
             "review_velocity_90d",
+            "amazon_bb_pct_90",
         )
 
 

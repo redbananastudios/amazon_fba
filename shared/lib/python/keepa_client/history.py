@@ -309,6 +309,96 @@ def price_volatility(
 # ────────────────────────────────────────────────────────────────────────
 
 
+def amazon_bb_share_pct(
+    bb_csv: Any,
+    amazon_csv: Any,
+    *,
+    window_days: int = 90,
+    tolerance_units: int = 1,
+) -> Optional[float]:
+    """Approximate Amazon's Buy-Box-share % over a window from csv arrays.
+
+    Aligns ``bb_csv`` (csv[18], Buy Box price observations) against
+    ``amazon_csv`` (csv[0], Amazon-as-seller price observations) by
+    timestamp using a step-function lookup: for each in-window BB
+    observation, look up Amazon's then-current price (last Amazon
+    observation at-or-before the BB observation's timestamp) and
+    count it as "Amazon held the BB" when they match within
+    ``tolerance_units`` (default 1 = ±1p / ±1¢).
+
+    Why this matters:
+      - Browser CSV exports carry "Buy Box: % Amazon 90 days" as a
+        precomputed column. The API path doesn't — operators
+        running the single_asin strategy on a niche listing would
+        see ``amazon_bb_pct_90 = None``, which drops opportunity-
+        confidence to LOW even when every other signal is healthy.
+      - This helper closes that gap by deriving the same metric
+        from data Keepa already returns.
+
+    Approximation note: the step-function lookup undercounts brief
+    Amazon-BB-win windows that fall between Amazon-price observations.
+    Real-world drift vs the Browser's number is typically <5%; the
+    candidate-score thresholds (warn 30%, block 70%) have plenty of
+    headroom for that.
+
+    Returns 0.0–1.0, or None when either input is empty / has no
+    in-window observations.
+    """
+    if not isinstance(amazon_csv, list) or len(amazon_csv) < 2:
+        return None
+    bb_pairs = _window_pairs_with_sentinels(bb_csv, window_days=window_days)
+    bb_real = [(t, v) for t, v in bb_pairs if v is not None]
+    if not bb_real:
+        return None
+
+    # Build the Amazon-price step function from csv[0]. Keep all
+    # observations across the entire history (not just in-window) so
+    # in-window BB lookups against an Amazon observation that landed
+    # 100 days ago still resolve. Sentinels stay as None — they mean
+    # "Amazon was OOS" and a BB matching nothing wouldn't be Amazon.
+    amz_times: list[int] = []
+    amz_prices: list[Optional[int]] = []
+    n = len(amazon_csv) - (len(amazon_csv) % 2)
+    for i in range(0, n, 2):
+        try:
+            t = int(amazon_csv[i])
+        except (TypeError, ValueError):
+            continue
+        try:
+            v_raw = amazon_csv[i + 1]
+            v: Optional[int] = (
+                int(v_raw) if v_raw is not None else None
+            )
+        except (TypeError, ValueError):
+            v = None
+        if v is not None and v < 0:
+            v = None
+        amz_times.append(t)
+        amz_prices.append(v)
+    if not amz_times:
+        return None
+
+    # Sort by time so bisect works. Keepa returns chronological data
+    # but defend against transports that don't.
+    paired = sorted(zip(amz_times, amz_prices), key=lambda p: p[0])
+    amz_times = [p[0] for p in paired]
+    amz_prices = [p[1] for p in paired]
+
+    import bisect
+    matches = 0
+    for t_bb, v_bb in bb_real:
+        idx = bisect.bisect_right(amz_times, t_bb) - 1
+        if idx < 0:
+            continue
+        v_amz = amz_prices[idx]
+        if v_amz is None:
+            continue
+        if abs(v_bb - v_amz) <= tolerance_units:
+            matches += 1
+
+    return matches / len(bb_real)
+
+
 def review_count_change(
     review_count_csv: Any, *, window_days: int = 90,
 ) -> Optional[int]:

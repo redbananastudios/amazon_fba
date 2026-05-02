@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from keepa_client.history import (
+    amazon_bb_share_pct,
     bsr_slope,
     buy_box_winner_flips,
     listing_age_days,
@@ -430,6 +431,123 @@ class TestListingAgeDays:
 # ────────────────────────────────────────────────────────────────────────
 # yoy_bsr_ratio
 # ────────────────────────────────────────────────────────────────────────
+
+
+class TestAmazonBbSharePct:
+    """Pin the API-path derivation of Amazon's Buy-Box share %.
+
+    The Browser CSV path carries this as a precomputed column; the
+    API path didn't until PR A wired this helper. Without it,
+    single_asin runs against niche listings landed at LOW
+    data_confidence on the missing-amazon_bb_pct_90 critical field.
+    """
+
+    def test_returns_zero_when_amazon_never_holds_bb(self):
+        # Amazon priced 23.86 throughout; BB priced 16.90 throughout
+        # — Amazon never held the BB.
+        now = _now_keepa_minutes()
+        bb = []
+        amz = []
+        for day in range(80, 0, -10):
+            bb.extend([now - day * DAY, 1690])
+            amz.extend([now - day * DAY, 2386])
+        assert amazon_bb_share_pct(bb, amz, window_days=90) == 0.0
+
+    def test_returns_one_when_amazon_always_matches(self):
+        # BB and Amazon the same price for every observation — Amazon
+        # held the BB the entire time.
+        now = _now_keepa_minutes()
+        bb = []
+        amz = []
+        for day in range(80, 0, -10):
+            bb.extend([now - day * DAY, 1500])
+            amz.extend([now - day * DAY, 1500])
+        assert amazon_bb_share_pct(bb, amz, window_days=90) == 1.0
+
+    def test_partial_share(self):
+        # 5 BB observations; Amazon matched 2 of them (40%).
+        now = _now_keepa_minutes()
+        bb = [
+            now - 80 * DAY, 1500,
+            now - 60 * DAY, 1500,    # match
+            now - 40 * DAY, 1690,
+            now - 20 * DAY, 1500,    # match
+            now - 10 * DAY, 1690,
+        ]
+        # Amazon priced 1500 from day 60 onwards; 1690 before that.
+        # Step-function lookup: BB at day 80 sees Amazon=1690 (no match).
+        # BB at day 60 sees Amazon's last obs at-or-before — 1500 (match).
+        # BB at day 40 sees Amazon=1500 (vs BB=1690, no match).
+        # BB at day 20 sees Amazon=1500 (match).
+        # BB at day 10 sees Amazon=1500 (vs BB=1690, no match).
+        amz = [
+            now - 100 * DAY, 1690,
+            now - 60 * DAY, 1500,
+        ]
+        result = amazon_bb_share_pct(bb, amz, window_days=90)
+        assert result is not None
+        assert 0.39 < result < 0.41   # 2/5 = 0.4
+
+    def test_tolerance_units_handles_rounding(self):
+        # BB and Amazon differ by 1 cent — counts as a match (default
+        # tolerance=1).
+        now = _now_keepa_minutes()
+        bb = [now - 60 * DAY, 1500, now - 30 * DAY, 1500]
+        amz = [now - 60 * DAY, 1499, now - 30 * DAY, 1501]
+        assert amazon_bb_share_pct(bb, amz, window_days=90) == 1.0
+
+    def test_returns_none_when_either_input_empty(self):
+        assert amazon_bb_share_pct([], [], window_days=90) is None
+        assert amazon_bb_share_pct(None, None, window_days=90) is None
+        assert amazon_bb_share_pct(
+            [_now_keepa_minutes(), 1500], None, window_days=90,
+        ) is None
+
+    def test_returns_none_when_no_in_window_bb(self):
+        # All BB observations outside the 90-day window.
+        now = _now_keepa_minutes()
+        bb = [now - 200 * DAY, 1500, now - 150 * DAY, 1500]
+        amz = [now - 200 * DAY, 1500, now - 150 * DAY, 1500]
+        assert amazon_bb_share_pct(bb, amz, window_days=90) is None
+
+    def test_skips_amazon_sentinels(self):
+        # Amazon's price arrays sometimes carry -1 sentinels (Amazon
+        # OOS at that point). A BB observation with no live Amazon
+        # price can't be Amazon-held — counted as no-match.
+        now = _now_keepa_minutes()
+        bb = [
+            now - 80 * DAY, 1500,
+            now - 40 * DAY, 1500,
+        ]
+        amz = [
+            now - 80 * DAY, -1,        # Amazon OOS — BB at this time can't match
+            now - 40 * DAY, 1500,      # match
+        ]
+        result = amazon_bb_share_pct(bb, amz, window_days=90)
+        assert result is not None
+        assert result == 0.5
+
+    def test_b0b636zkzq_calibration(self):
+        """Real-world: B0B636ZKZQ has Amazon dormant at £23.86 while
+        the actual Buy Box bounces around £16.90. Expected
+        amazon_bb_pct_90 ≈ 0.0 (Amazon never holds the BB).
+
+        This pins the calibration scenario from the operator's
+        first-run smoke test — the result must match a human
+        looking at the chart and saying 'Amazon never wins this BB'."""
+        now = _now_keepa_minutes()
+        bb_observations: list[int] = []
+        for day in range(85, 0, -2):
+            bb_observations.extend([now - day * DAY, 1690])
+        amazon_observations = [
+            now - 85 * DAY, 2386,
+            now - 30 * DAY, 2386,
+            now - 5 * DAY, 2386,
+        ]
+        result = amazon_bb_share_pct(
+            bb_observations, amazon_observations, window_days=90,
+        )
+        assert result == 0.0
 
 
 class TestReviewCountChange:

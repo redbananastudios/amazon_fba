@@ -94,6 +94,11 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     # Review velocity (PR 5) — net change in review_count over 90d.
     # Drives the candidate_score Demand dimension.
     "review_velocity_90d",
+    # Amazon BB share % over 90d (PR A) — derived from csv[18] vs
+    # csv[0] when API path; sourced from "Buy Box: % Amazon 90 days"
+    # column on Browser CSV path. Drives competition-safety scoring
+    # and candidate_score data-confidence calculation.
+    "amazon_bb_pct_90",
 )
 
 DEFAULT_KEEPA_CONFIG_PATH: Path = (
