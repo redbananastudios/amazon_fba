@@ -153,3 +153,55 @@ candidate_scoring:
       - fba_seller_count
       - sales_estimate
       - buy_box_oos_pct_90
+
+# === Final opportunity validation (07_validate_opportunity) ===
+# Runs after candidate_score + decide; before output. Adds an
+# operator-facing verdict (BUY / SOURCE_ONLY / NEGOTIATE / WATCH /
+# KILL) on top of the existing SHORTLIST/REVIEW/REJECT decision.
+# Pure additive: never changes the existing decision column.
+#
+# Verdict precedence (first match wins):
+#   1. KILL       — hard rejects (REJECT, profit < 0, RESTRICTED, etc.)
+#   2. SOURCE_ONLY — strong product but buy_cost missing (find supplier)
+#   3. BUY        — every BUY-gate passes
+#   4. NEGOTIATE  — strong demand + current profit but conservative-
+#                   profit below threshold (price the supplier down)
+#   5. WATCH      — default ("not safe today, monitor")
+opportunity_validation:
+  # --- BUY gate thresholds ---
+  target_monthly_sales: 100             # min sales to even consider BUY
+  min_candidate_score_buy: 75
+  min_data_confidence_buy: HIGH         # HIGH only — MEDIUM/LOW route to WATCH
+  min_profit_absolute_buy: 2.50
+  min_roi_buy: 0.30
+  max_amazon_bb_share_buy: 0.30
+  max_amazon_bb_share_watch: 0.70       # above this routes to WATCH/KILL
+  max_price_volatility_buy: 0.20
+  max_buy_box_oos_buy: 0.15
+  max_competition_joiners_buy: 5
+  max_fba_sellers_low_sales: 3          # at <100 sales/month
+  max_fba_sellers_100_sales: 8          # at 100-200 sales/month
+  max_fba_sellers_200_sales: 12         # at 200+ sales/month
+  allow_gated_buy: false                # gated == "Y" can still BUY when true
+  allow_restricted_buy: false           # restriction_status == RESTRICTED → BUY when true
+
+  # --- KILL thresholds (severe — beyond REVIEW-flag firing) ---
+  kill_min_sales: 20                    # below this → KILL
+  kill_min_roi: 0.15                    # below this → KILL
+  kill_amazon_bb_share: 0.90            # at/above → KILL
+  kill_price_volatility: 0.40           # 2x the BUY ceiling → KILL
+  kill_bsr_decline_slope: 0.10          # 2x the BSR_DECLINING threshold
+
+  # --- SOURCE_ONLY thresholds (find supplier; demand looks viable) ---
+  source_only_min_sales: 100
+  source_only_min_candidate_score: 75
+  source_only_max_volatility: 0.20
+  source_only_max_amazon_bb_share: 0.70
+
+  # --- NEGOTIATE thresholds ---
+  negotiate_min_sales: 100
+  negotiate_min_candidate_score: 65
+
+  # --- Opportunity score bands (independent of verdict) ---
+  strong_score: 80                      # opportunity_score ≥ this → "strong"
+  watch_score: 60                       # opportunity_score ≥ this → "viable, watch"

@@ -238,6 +238,52 @@ exposed for backward compatibility (`MIN_PROFIT`, `MIN_SALES_SHORTLIST`, etc.).
 
 ---
 
+## 8c. Final opportunity validation
+
+Added by the **`07_validate_opportunity`** step. Runs after candidate
+scoring + decide, before output. **Pure additive** — does NOT alter
+SHORTLIST/REVIEW/REJECT.
+
+Six output columns:
+
+| Column | Type | Notes |
+|---|---|---|
+| `opportunity_verdict` | BUY / SOURCE_ONLY / NEGOTIATE / WATCH / KILL | Operator-facing answer to "is this worth acting on now?" |
+| `opportunity_score` | int 0-100 | 5 dimensions weighted: Demand 25 / Profit 25 / Competition 20 / Stability 15 / Operational 15 |
+| `opportunity_confidence` | HIGH / MEDIUM / LOW | Drops on missing critical inputs; pulled-down by upstream `data_confidence` |
+| `opportunity_reasons` | list[str] | Per-dimension contributors |
+| `opportunity_blockers` | list[str] | KILL reasons or BUY blockers |
+| `next_action` | string | Operator playbook keyed by verdict |
+
+### Verdict precedence
+
+First match wins:
+
+1. **KILL** — `decision == REJECT` OR `sales < kill_min_sales` (20) OR `profit_conservative < 0` OR `roi_conservative < kill_min_roi` (0.15) OR `PRICE_FLOOR_HIT` flag OR `price_volatility ≥ kill_price_volatility` (0.40 — 2× BUY ceiling) OR `bsr_slope_90d ≥ kill_bsr_decline_slope` (0.10) OR `amazon_bb_share ≥ kill_amazon_bb_share` (0.90) OR `restriction_status == RESTRICTED` OR `fba_eligible == false`.
+2. **SOURCE_ONLY** — `buy_cost` missing AND demand strong (`sales ≥ 100`, `candidate_score ≥ 75`, `data_confidence != LOW`, `amazon_bb_share < 0.70`, `volatility ≤ 0.20`). Operator should find a supplier.
+3. **BUY** — every BUY gate passes (decision SHORTLIST, candidate_score ≥ 75, data_confidence HIGH, sales ≥ 100, profit + ROI thresholds, BB share, volatility, OOS, joiners, restriction, FBA-eligible, gated rules).
+4. **NEGOTIATE** — strong demand + currently profitable + conservative profit below `min_profit_absolute_buy`. Reasons line includes `max_buy_cost` ceiling.
+5. **WATCH** — default. Visible blockers tell the operator what's holding it back.
+
+### Configuration
+
+All thresholds in `decision_thresholds.yaml::opportunity_validation`.
+Loaded via `fba_config_loader.get_opportunity_validation()`. Permissive
+defaults for older configs.
+
+### Operational rule
+
+`opportunity_verdict` is the operator's primary action signal in the
+XLSX (left-most after `decision`). It is colour-coded:
+- BUY → bright green
+- SOURCE_ONLY → blue
+- NEGOTIATE → amber
+- WATCH → yellow
+- KILL → grey
+
+Output sort: BUY → SOURCE_ONLY → NEGOTIATE → WATCH → KILL; within each
+verdict by candidate_score desc, then opportunity_score desc.
+
 ## 8b. Candidate scoring
 
 Added in HANDOFF WS3. Runs as a step **after** `calculate` and

@@ -47,6 +47,7 @@ def _supplier_sections(sdf):
     lines = []
     display_cols = ["ean", "asin", "product_name", "buy_cost", "market_price",
                     "profit_conservative", "margin_conservative", "sales_estimate",
+                    "opportunity_verdict", "opportunity_score", "next_action",
                     "candidate_band", "candidate_score", "data_confidence",
                     "risk_flags", "decision_reason"]
     shortlisted = sdf[sdf["decision"] == "SHORTLIST"] if "decision" in sdf.columns else pd.DataFrame()

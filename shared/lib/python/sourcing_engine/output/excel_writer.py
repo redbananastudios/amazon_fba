@@ -13,6 +13,14 @@ COLUMNS = [
     ("supplier",                "Supplier",             18, "text"),
     ("supplier_sku",            "Supplier Part No.",    16, "text"),
     ("decision",                "Decision",             14, "text"),
+    # Final opportunity verdict (HANDOFF: validate_opportunity).
+    # Operator-facing answer to "is this worth acting on now?"
+    ("opportunity_verdict",     "Verdict",              14, "text"),
+    ("next_action",             "Next Action",          50, "text"),
+    ("opportunity_score",       "Opp. Score",           12, "int"),
+    ("opportunity_confidence",  "Opp. Confidence",      16, "text"),
+    ("opportunity_reasons",     "Opp. Notes",           50, "text"),
+    ("opportunity_blockers",    "Opp. Blockers",        50, "text"),
     # Candidate score (HANDOFF WS3.6) — informational columns,
     # do NOT alter the decision column.
     ("candidate_band",          "Strength",             12, "text"),
@@ -106,9 +114,12 @@ def write_excel(
             out["risk_flags"] = out["risk_flags"].apply(
                 lambda x: "; ".join(x) if isinstance(x, list) else str(x))
 
-        # Flatten candidate-score reason lists to "; "-joined strings
-        # (HANDOFF WS3.6). Same pattern as risk_flags.
-        for col in ("candidate_reasons", "data_confidence_reasons"):
+        # Flatten candidate-score + opportunity reason lists to
+        # "; "-joined strings. Same pattern as risk_flags.
+        for col in (
+            "candidate_reasons", "data_confidence_reasons",
+            "opportunity_reasons", "opportunity_blockers",
+        ):
             if col in out.columns:
                 out[col] = out[col].apply(
                     lambda x: "; ".join(x) if isinstance(x, list) else (
@@ -116,30 +127,59 @@ def write_excel(
                     )
                 )
 
-        # Sort SHORTLIST then REVIEW; within each band, candidate_score
-        # descending. Strongest products land at the top so the operator
-        # sees the best opportunities without scrolling. Falls through
-        # gracefully when candidate_score is absent (older runs).
+        # Sort priority (HANDOFF: validate_opportunity §9):
+        #   1. opportunity_verdict (BUY / SOURCE_ONLY / NEGOTIATE / WATCH / KILL)
+        #   2. decision (SHORTLIST / REVIEW)
+        #   3. candidate_score descending
+        #   4. opportunity_score descending
+        # Strongest products land at the top so the operator sees the
+        # best opportunities first. Falls through gracefully when any
+        # of the score / verdict columns are absent (older runs).
+        from sourcing_engine.opportunity import VERDICT_SORT_PRIORITY
+        decision_priority = {"SHORTLIST": 0, "REVIEW": 1}
+        if "opportunity_verdict" in out.columns:
+            out["__sort_verdict"] = (
+                out["opportunity_verdict"]
+                .map(VERDICT_SORT_PRIORITY)
+                .fillna(99)
+            )
+        else:
+            out["__sort_verdict"] = 99
         if "decision" in out.columns:
-            decision_priority = {"SHORTLIST": 0, "REVIEW": 1}
             out["__sort_decision"] = out["decision"].map(decision_priority).fillna(99)
-            score_col = (
-                out["candidate_score"]
-                if "candidate_score" in out.columns
-                else pd.Series([0] * len(out), index=out.index)
+        else:
+            out["__sort_decision"] = 99
+        score_col = (
+            out["candidate_score"]
+            if "candidate_score" in out.columns
+            else pd.Series([0] * len(out), index=out.index)
+        )
+        out["__sort_score"] = pd.to_numeric(
+            score_col, errors="coerce"
+        ).fillna(0) * -1   # negative for descending
+        opp_score_col = (
+            out["opportunity_score"]
+            if "opportunity_score" in out.columns
+            else pd.Series([0] * len(out), index=out.index)
+        )
+        out["__sort_opp"] = pd.to_numeric(
+            opp_score_col, errors="coerce"
+        ).fillna(0) * -1
+        # `kind="stable"` keeps insertion order on ties.
+        out = (
+            out.sort_values(
+                [
+                    "__sort_verdict", "__sort_decision",
+                    "__sort_score", "__sort_opp",
+                ],
+                kind="stable",
             )
-            out["__sort_score"] = pd.to_numeric(
-                score_col, errors="coerce"
-            ).fillna(0) * -1   # negative for descending
-            # `kind="stable"` keeps insertion order on score ties.
-            # Default `quicksort` is not stable.
-            out = (
-                out.sort_values(
-                    ["__sort_decision", "__sort_score"], kind="stable",
-                )
-                .drop(columns=["__sort_decision", "__sort_score"])
-                .reset_index(drop=True)
-            )
+            .drop(columns=[
+                "__sort_verdict", "__sort_decision",
+                "__sort_score", "__sort_opp",
+            ])
+            .reset_index(drop=True)
+        )
 
         # Derive amazon_on_listing from risk_flags. Skip when risk_flags
         # is missing entirely — `out.get("risk_flags", "")` returns the
@@ -313,6 +353,45 @@ def write_excel(
             if str(row.get("amazon_on_listing", "")).upper() == "Y":
                 amz_cell.fill = PatternFill(start_color="FDEBD0", end_color="FDEBD0", fill_type="solid")
                 amz_cell.font = Font(bold=True, size=10, color="E67E22")
+
+            # Opportunity verdict colour coding (validate_opportunity §9):
+            #   BUY          → bold green (the action signal)
+            #   SOURCE_ONLY  → blue (find a supplier)
+            #   NEGOTIATE    → amber (work the supplier)
+            #   WATCH        → light yellow (revisit later)
+            #   KILL         → grey (do not pursue)
+            verdict_col_idx = next(
+                (i for i, c in enumerate(COLUMNS) if c[0] == "opportunity_verdict"),
+                None,
+            )
+            if verdict_col_idx is not None:
+                v_cell = ws.cell(row=row_idx, column=verdict_col_idx + 1)
+                verdict_val = str(row.get("opportunity_verdict", "")).upper()
+                if verdict_val == "BUY":
+                    v_cell.fill = PatternFill(
+                        start_color="58D68D", end_color="58D68D", fill_type="solid",
+                    )
+                    v_cell.font = Font(bold=True, size=10, color="186A3B")
+                elif verdict_val == "SOURCE_ONLY":
+                    v_cell.fill = PatternFill(
+                        start_color="AED6F1", end_color="AED6F1", fill_type="solid",
+                    )
+                    v_cell.font = Font(bold=True, size=10, color="1B4F72")
+                elif verdict_val == "NEGOTIATE":
+                    v_cell.fill = PatternFill(
+                        start_color="F8C471", end_color="F8C471", fill_type="solid",
+                    )
+                    v_cell.font = Font(bold=True, size=10, color="9C640C")
+                elif verdict_val == "WATCH":
+                    v_cell.fill = PatternFill(
+                        start_color="F9E79F", end_color="F9E79F", fill_type="solid",
+                    )
+                    v_cell.font = Font(bold=True, size=10, color="7D6608")
+                elif verdict_val == "KILL":
+                    v_cell.fill = PatternFill(
+                        start_color="D5D8DC", end_color="D5D8DC", fill_type="solid",
+                    )
+                    v_cell.font = Font(size=10, color="7F8C8D")
 
             # Candidate-score colour coding (HANDOFF WS3.6 §6.4):
             #   STRONG + HIGH         → green fill, bold green font

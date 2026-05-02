@@ -64,6 +64,13 @@ steps:
     config:
       enabled: true
 
+  # Stage 07 — validate_opportunity (BUY / SOURCE_ONLY / NEGOTIATE /
+  # WATCH / KILL). Final operator-facing verdict on top of the
+  # SHORTLIST/REVIEW/REJECT decision. Runs after enrich so it sees
+  # restriction_status + fba_eligible from SP-API. Pure additive.
+  - name: validate_opportunity
+    module: fba_engine.steps.validate_opportunity
+
   # Stage 06 — output (CSV + XLSX + MD writers).
   - name: output
     module: fba_engine.steps.supplier_pricelist_output

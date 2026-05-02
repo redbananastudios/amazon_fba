@@ -62,5 +62,13 @@ steps:
   - name: decision_engine
     module: fba_engine.steps.decision_engine
 
+  # Phase 7: validate_opportunity — final operator-facing verdict
+  # (BUY / SOURCE_ONLY / NEGOTIATE / WATCH / KILL). Pure additive on
+  # top of the existing decision_engine verdicts. Keepa-niche rows
+  # without buy_cost can land as SOURCE_ONLY ("worth finding a
+  # supplier for"). See sourcing_engine.opportunity.
+  - name: validate_opportunity
+    module: fba_engine.steps.validate_opportunity
+
 output:
   csv: "{base}/working/{niche_snake}_phase6_decisions.csv"
