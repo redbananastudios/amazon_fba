@@ -526,6 +526,27 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
     v_high = row.get("predicted_velocity_high")
     p_unit = row.get("profit_conservative") or row.get("profit_current") or 0
     share_src = row.get("predicted_velocity_share_source")
+    # Browser-cache hit indicators (when keepa_browser_enrich applied)
+    browser_present = bool(row.get("browser_scrape_present"))
+    browser_top = row.get("browser_top_seller")
+    browser_top_pct = row.get("browser_top_seller_pct")
+    browser_top_is_fba = row.get("browser_top_seller_is_fba")
+    browser_active_count = row.get("browser_active_seller_count")
+    browser_active_fba = row.get("browser_active_fba_seller_count")
+    if browser_present:
+        print("Buy Box dominance (Keepa Browser scrape):")
+        if browser_top:
+            fba_label = "FBA" if browser_top_is_fba else "FBM"
+            try:
+                pct = float(browser_top_pct) if browser_top_pct is not None else None
+            except (TypeError, ValueError):
+                pct = None
+            pct_str = f"{pct:.0%}" if pct is not None else "?"
+            print(f"  Top seller:            {browser_top} ({fba_label}) — {pct_str} BB share")
+        if browser_active_count is not None:
+            print(f"  Currently active:      {int(browser_active_count)} sellers "
+                  f"({int(browser_active_fba) if browser_active_fba is not None else '?'} FBA)")
+        print()
     if (
         any(not _is_missing(v) for v in (v_low, v_mid, v_high))
         and float(p_unit) > 0

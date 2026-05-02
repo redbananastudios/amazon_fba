@@ -80,6 +80,18 @@ steps:
         min_sales_review: 0
         min_sales_shortlist: 0
 
+  # Stage 05.5 — keepa_browser_enrich: when a per-ASIN Keepa
+  # Browser scrape exists at .cache/keepa_browser/<asin>.json,
+  # merge the chart-quality signals (per-seller BB share with
+  # FBA flag, precomputed 365d low / OOS %, real seller names).
+  # Silent no-op when the cache is missing — operator can populate
+  # it via Claude+MCP per docs/KEEPA_BROWSER_SCRAPE.md.
+  #
+  # Runs BEFORE candidate_score so the share-aware velocity
+  # predictor sees the Browser data when it's there.
+  - name: keepa_browser_enrich
+    module: fba_engine.steps.keepa_browser_enrich
+
   # Stage 06 — candidate_score: 0-100 strength + HIGH/MEDIUM/LOW data
   # confidence. Pure additive; feeds validate_opportunity. Without
   # this, validate_opportunity would never see candidate_score and
