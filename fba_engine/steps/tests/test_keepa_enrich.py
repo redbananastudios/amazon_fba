@@ -231,6 +231,7 @@ class TestColumnsConstant:
             "buy_box_min_365d",
             "sales_rank_cv_90d",
             "variation_count",
+            "bsr_drops_30d",
         )
 
 

@@ -110,6 +110,12 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     # member of a variant cluster. Surfaces niche-looking parents
     # whose aggregated demand across children may be much higher.
     "variation_count",
+    # BSR-drop count over 30 days (PR F). Conservative sales proxy
+    # (each rank improvement ≈ 1 sale). sales_estimate uses Keepa's
+    # monthlySold which over-estimates niche listings; this field
+    # carries the chart-readable count so the validator can fall
+    # back to the lower number when they disagree by >50%.
+    "bsr_drops_30d",
 )
 
 DEFAULT_KEEPA_CONFIG_PATH: Path = (
