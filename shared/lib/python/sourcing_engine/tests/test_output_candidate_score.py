@@ -75,9 +75,15 @@ class TestExcelColumns:
     def test_candidate_columns_appear_after_decision(self):
         names = [c[0] for c in COLUMNS]
         decision_idx = names.index("decision")
+        verdict_idx = names.index("opportunity_verdict")
         band_idx = names.index("candidate_band")
-        # band immediately after decision per the WS3.6 layout.
-        assert band_idx == decision_idx + 1
+        # validate_opportunity columns sit between decision and the
+        # candidate-score block (the verdict is the operator's
+        # primary action signal so it leads the columnar layout).
+        assert verdict_idx == decision_idx + 1
+        # candidate_band still sits immediately after the 6 opportunity
+        # columns. Pin both positions so the layout is contractual.
+        assert band_idx == verdict_idx + 6
 
 
 class TestExcelSort:

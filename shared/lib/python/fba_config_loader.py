@@ -156,6 +156,46 @@ class DecisionThresholds:
 
 
 @dataclass(frozen=True)
+class OpportunityValidation:
+    """Final-validation thresholds (07_validate_opportunity).
+
+    Loaded from ``decision_thresholds.yaml::opportunity_validation``.
+    Drives the BUY / SOURCE_ONLY / NEGOTIATE / WATCH / KILL verdict
+    in `sourcing_engine.opportunity`. Pure additive — no field here
+    affects SHORTLIST/REVIEW/REJECT.
+    """
+
+    target_monthly_sales: int
+    min_candidate_score_buy: int
+    min_data_confidence_buy: str
+    min_profit_absolute_buy: float
+    min_roi_buy: float
+    max_amazon_bb_share_buy: float
+    max_amazon_bb_share_watch: float
+    max_price_volatility_buy: float
+    max_buy_box_oos_buy: float
+    max_competition_joiners_buy: int
+    max_fba_sellers_low_sales: int
+    max_fba_sellers_100_sales: int
+    max_fba_sellers_200_sales: int
+    allow_gated_buy: bool
+    allow_restricted_buy: bool
+    kill_min_sales: int
+    kill_min_roi: float
+    kill_amazon_bb_share: float
+    kill_price_volatility: float
+    kill_bsr_decline_slope: float
+    source_only_min_sales: int
+    source_only_min_candidate_score: int
+    source_only_max_volatility: float
+    source_only_max_amazon_bb_share: float
+    negotiate_min_sales: int
+    negotiate_min_candidate_score: int
+    strong_score: int
+    watch_score: int
+
+
+@dataclass(frozen=True)
 class DataSignals:
     """History + competition thresholds added in HANDOFF WS2.4.
 
@@ -186,7 +226,7 @@ class DataSignals:
 @lru_cache(maxsize=1)
 def _load_all(
     config_dir_str: str | None = None,
-) -> tuple[BusinessRules, DecisionThresholds, DataSignals]:
+) -> tuple[BusinessRules, DecisionThresholds, DataSignals, OpportunityValidation]:
     """Internal cached loader keyed on resolved path."""
     config_dir = _find_config_dir(Path(config_dir_str) if config_dir_str else None)
     business_data = _load_yaml(config_dir / "business_rules.yaml")
@@ -254,9 +294,52 @@ def _load_all(
         ),
     )
 
+    # opportunity_validation block (HANDOFF: Final Opportunity Validation).
+    # Permissive defaults so older configs without the block still load.
+    ov_data = thresh_data.get("opportunity_validation") or {}
+    opportunity = OpportunityValidation(
+        target_monthly_sales=int(ov_data.get("target_monthly_sales", 100)),
+        min_candidate_score_buy=int(ov_data.get("min_candidate_score_buy", 75)),
+        min_data_confidence_buy=str(ov_data.get("min_data_confidence_buy", "HIGH")),
+        min_profit_absolute_buy=float(ov_data.get("min_profit_absolute_buy", 2.50)),
+        min_roi_buy=float(ov_data.get("min_roi_buy", 0.30)),
+        max_amazon_bb_share_buy=float(ov_data.get("max_amazon_bb_share_buy", 0.30)),
+        max_amazon_bb_share_watch=float(ov_data.get("max_amazon_bb_share_watch", 0.70)),
+        max_price_volatility_buy=float(ov_data.get("max_price_volatility_buy", 0.20)),
+        max_buy_box_oos_buy=float(ov_data.get("max_buy_box_oos_buy", 0.15)),
+        max_competition_joiners_buy=int(ov_data.get("max_competition_joiners_buy", 5)),
+        max_fba_sellers_low_sales=int(ov_data.get("max_fba_sellers_low_sales", 3)),
+        max_fba_sellers_100_sales=int(ov_data.get("max_fba_sellers_100_sales", 8)),
+        max_fba_sellers_200_sales=int(ov_data.get("max_fba_sellers_200_sales", 12)),
+        allow_gated_buy=bool(ov_data.get("allow_gated_buy", False)),
+        allow_restricted_buy=bool(ov_data.get("allow_restricted_buy", False)),
+        kill_min_sales=int(ov_data.get("kill_min_sales", 20)),
+        kill_min_roi=float(ov_data.get("kill_min_roi", 0.15)),
+        kill_amazon_bb_share=float(ov_data.get("kill_amazon_bb_share", 0.90)),
+        kill_price_volatility=float(ov_data.get("kill_price_volatility", 0.40)),
+        kill_bsr_decline_slope=float(ov_data.get("kill_bsr_decline_slope", 0.10)),
+        source_only_min_sales=int(ov_data.get("source_only_min_sales", 100)),
+        source_only_min_candidate_score=int(
+            ov_data.get("source_only_min_candidate_score", 75)
+        ),
+        source_only_max_volatility=float(
+            ov_data.get("source_only_max_volatility", 0.20)
+        ),
+        source_only_max_amazon_bb_share=float(
+            ov_data.get("source_only_max_amazon_bb_share", 0.70)
+        ),
+        negotiate_min_sales=int(ov_data.get("negotiate_min_sales", 100)),
+        negotiate_min_candidate_score=int(
+            ov_data.get("negotiate_min_candidate_score", 65)
+        ),
+        strong_score=int(ov_data.get("strong_score", 80)),
+        watch_score=int(ov_data.get("watch_score", 60)),
+    )
+
     _validate(business, thresh)
     _validate_data_signals(data_signals)
-    return business, thresh, data_signals
+    _validate_opportunity_validation(opportunity)
+    return business, thresh, data_signals, opportunity
 
 
 def _validate(business: BusinessRules, thresh: DecisionThresholds) -> None:
@@ -317,6 +400,47 @@ def get_data_signals(config_dir: Path | None = None) -> DataSignals:
     """
     key = str(config_dir.resolve()) if config_dir else None
     return _load_all(key)[2]
+
+
+def get_opportunity_validation(
+    config_dir: Path | None = None,
+) -> OpportunityValidation:
+    """Get final-validation thresholds. Cached.
+
+    Loaded from ``decision_thresholds.yaml::opportunity_validation``.
+    Permissive defaults when the block is absent (older configs).
+    """
+    key = str(config_dir.resolve()) if config_dir else None
+    return _load_all(key)[3]
+
+
+def _validate_opportunity_validation(ov: OpportunityValidation) -> None:
+    """Sanity-check opportunity_validation thresholds. Same defensive
+    style as ``_validate`` and ``_validate_data_signals``."""
+    assert ov.target_monthly_sales > 0, "target_monthly_sales must be positive"
+    assert 0 < ov.min_roi_buy < 5, f"min_roi_buy {ov.min_roi_buy} implausible"
+    assert (
+        ov.kill_min_roi <= ov.min_roi_buy
+    ), "kill_min_roi above buy threshold (would never KILL)"
+    assert (
+        ov.kill_min_sales <= ov.target_monthly_sales
+    ), "kill_min_sales above buy target (would never KILL)"
+    assert 0 < ov.max_amazon_bb_share_buy < 1, (
+        "max_amazon_bb_share_buy not a fraction"
+    )
+    assert (
+        ov.max_amazon_bb_share_buy <= ov.max_amazon_bb_share_watch
+        <= ov.kill_amazon_bb_share
+    ), "BB-share thresholds inverted (buy ≤ watch ≤ kill)"
+    assert (
+        ov.max_price_volatility_buy <= ov.kill_price_volatility
+    ), "max_price_volatility_buy above kill threshold"
+    assert ov.min_data_confidence_buy in ("HIGH", "MEDIUM", "LOW"), (
+        f"min_data_confidence_buy={ov.min_data_confidence_buy} not one of HIGH/MEDIUM/LOW"
+    )
+    assert (
+        ov.watch_score <= ov.strong_score
+    ), "watch_score above strong_score"
 
 
 @lru_cache(maxsize=1)
@@ -419,8 +543,10 @@ __all__ = [
     "DataSignals",
     "DecisionThresholds",
     "GlobalExclusions",
+    "OpportunityValidation",
     "get_business_rules",
     "get_data_signals",
+    "get_opportunity_validation",
     "get_thresholds",
     "get_global_exclusions",
     "reset_cache",
