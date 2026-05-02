@@ -389,11 +389,13 @@ class KeepaProduct(BaseModel):
         from .history import (
             amazon_bb_share_pct,
             bsr_slope,
+            buy_box_min_in_window,
             listing_age_days,
             offer_count_trend,
             out_of_stock_pct,
             price_volatility,
             review_count_change,
+            sales_rank_consistency,
             yoy_bsr_ratio,
         )
 
@@ -467,6 +469,22 @@ class KeepaProduct(BaseModel):
                 bb_csv,
                 csv[_CSV_AMAZON] if len(csv) > _CSV_AMAZON else None,
                 window_days=90,
+            ),
+            # Long-term BB floor (PR B). 12-month minimum, in pounds.
+            # Operator's "have we ever seen this cheaper?" check —
+            # current price >> floor = peak-buying risk beyond the 90d
+            # average that BUY_BOX_ABOVE_AVG90 already catches.
+            "buy_box_min_365d": (
+                v / 100.0
+                if (v := buy_box_min_in_window(bb_csv, window_days=365))
+                is not None
+                else None
+            ),
+            # Sales rank consistency (PR B) — coefficient of variation
+            # of in-window rank. Lower = steady seller; higher = spiky.
+            # Distinguishes "70/mo steady" from "burst+flat" listings.
+            "sales_rank_cv_90d": sales_rank_consistency(
+                rank_csv, window_days=90,
             ),
         }
 

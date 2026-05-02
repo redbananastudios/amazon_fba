@@ -309,6 +309,52 @@ def price_volatility(
 # ────────────────────────────────────────────────────────────────────────
 
 
+def buy_box_min_in_window(
+    bb_csv: Any, *, window_days: int = 365,
+) -> Optional[float]:
+    """Lowest in-window Buy Box price (in cents/pence — caller divides).
+
+    "Have we ever seen this listing cheaper than today?" — the
+    floor a human reads off the long-term Keepa chart. A current
+    price 50%+ above the 365d floor is a peak-buying tell beyond
+    what BUY_BOX_ABOVE_AVG90 (which uses the 90d avg) catches.
+
+    Returns None when no real (non-(-1)) observations exist in
+    window. Single-observation case still returns that single
+    value — one data point is genuinely the minimum-so-far.
+    """
+    pairs = _window_pairs_with_sentinels(bb_csv, window_days=window_days)
+    valid = [v for _, v in pairs if v is not None and v > 0]
+    if not valid:
+        return None
+    return float(min(valid))
+
+
+def sales_rank_consistency(
+    rank_csv: Any, *, window_days: int = 90,
+) -> Optional[float]:
+    """Coefficient of variation of in-window sales rank values.
+
+    Lower = more consistent (a steady 70/mo seller). Higher =
+    spiky (sporadic — listing moves up the chart in bursts then
+    sits flat). The candidate-score Demand dimension treats a
+    steady-rank product as more reliable than a spiky one of the
+    same average rank.
+
+    Returns None below 5 in-window real observations or when mean
+    rank is 0 (defensive — unreal for a real listing).
+    """
+    pairs = _window_pairs_with_sentinels(rank_csv, window_days=window_days)
+    valid = [v for _, v in pairs if v is not None and v > 0]
+    if len(valid) < _MIN_POINTS_OOS:
+        return None
+    mean = sum(valid) / len(valid)
+    if mean == 0:
+        return None
+    var = sum((v - mean) ** 2 for v in valid) / len(valid)
+    return math.sqrt(var) / mean
+
+
 def amazon_bb_share_pct(
     bb_csv: Any,
     amazon_csv: Any,
