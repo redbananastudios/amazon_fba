@@ -25,9 +25,12 @@ PRICE_MISMATCH_RRP = "PRICE_MISMATCH_RRP"          # Amazon price >2x or <0.3x s
 # --- Informational flags ---
 FBM_ONLY = "FBM_ONLY"                              # no FBA sellers — FBM fee path applied
 FBM_SHIPPING_ESTIMATED = "FBM_SHIPPING_ESTIMATED"  # FBM fulfilment cost is an estimate
-PRICE_UNSTABLE = "PRICE_UNSTABLE"                  # high variance in recent price history
 POSSIBLE_PRIVATE_LABEL = "POSSIBLE_PRIVATE_LABEL"  # possible private label product
 INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"      # <30 days qualifying Keepa FBA history
+# PRICE_UNSTABLE was declared but never set. Removed in the schema-
+# unification PR (HANDOFF_candidate_validation.md WS1.2). Will be
+# reintroduced with a real computation in WS2.3 once the time-series
+# helpers in keepa_client/history.py exist to back it.
 # Lightweight historical-peak signal — fires when the current Buy Box price
 # is materially above the 90-day average (threshold in
 # decision_thresholds.yaml → buy_box_peak_threshold_pct, default 20%).

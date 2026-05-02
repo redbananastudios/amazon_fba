@@ -277,6 +277,23 @@ decision_reason             # populated for every row
 risk_flags                  # list of flag strings (joined with "; " in output)
 ```
 
+In addition to the decision-critical fields above, every output row
+carries the Keepa enrichment columns listed in
+`fba_engine/steps/keepa_enrich.py::KEEPA_ENRICH_COLUMNS` —
+`amazon_price`, `buy_box_avg30`, `buy_box_avg90`, `fba_seller_count`,
+`total_offer_count`, `sales_rank_avg90`, `rating`, `review_count`,
+`parent_asin`, `package_weight_g`, `package_volume_cm3`,
+`category_root` etc. These are informational; the decision logic in
+section 3 is purely a function of the fields above.
+
+`fba_seller_count` is FBA-only when the offers list was loaded
+(`with_offers=True` — single-ASIN strategies and any path that needs
+precise SINGLE_FBA_SELLER detection). Bulk paths default to
+`with_offers=False` for token economy and the field falls back to
+`stats.current[11]` (FBM + FBA combined) — degraded precision,
+preserved historical behaviour. `total_offer_count` always holds the
+combined count for callers that legitimately want it.
+
 ---
 
 ## 10. Risk flags reference
@@ -306,7 +323,6 @@ risk_flags                  # list of flag strings (joined with "; " in output)
 - `INSUFFICIENT_HISTORY` — under 30 qualifying days of Keepa data
 - `FBM_ONLY` — no FBA sellers; FBM fee path applied
 - `FBM_SHIPPING_ESTIMATED` — FBM shipping cost is an estimate
-- `PRICE_UNSTABLE` — high recent price variance
 - `POSSIBLE_PRIVATE_LABEL` — listing meets private-label heuristics
 
 ---
