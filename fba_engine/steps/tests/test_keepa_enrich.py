@@ -41,6 +41,7 @@ def _product(
     monthly_sold: int | None = 250,
     title: str | None = None,
     brand: str | None = None,
+    offers: list | None = None,
 ) -> KeepaProduct:
     """Build a stats-bearing KeepaProduct with the indices the engine needs."""
     current: list[int] = [-1] * 19
@@ -50,13 +51,16 @@ def _product(
     current[11] = -1 if fba_offers is None else fba_offers
     current[18] = -1 if buy_box is None else buy_box
     avg90 = list(current)
-    return KeepaProduct(
+    kwargs: dict = dict(
         asin=asin,
         title=title,
         brand=brand,
         stats=KeepaStats(current=current, avg90=avg90),
         monthlySold=-1 if monthly_sold is None else monthly_sold,
     )
+    if offers is not None:
+        kwargs["offers"] = offers
+    return KeepaProduct(**kwargs)
 
 
 class TestEnrichWithKeepa:
@@ -202,6 +206,7 @@ class TestColumnsConstant:
             "buy_box_price",
             "buy_box_avg90",
             "fba_seller_count",
+            "total_offer_count",
             "sales_rank",
             "sales_estimate",
         )
@@ -253,6 +258,57 @@ class TestDiscoveryToEnrichChain:
         # Market columns appended.
         assert out.iloc[0]["buy_box_price"] == 15.25
         assert out.iloc[0]["fba_seller_count"] == 5
+
+
+class TestFbaSellerCountColumnPlumbing:
+    """End-to-end pin that the model-layer fix (count live FBA offers
+    instead of stats.current[11]) propagates correctly through
+    keepa_enrich into the output DataFrame, alongside the new
+    `total_offer_count` column.
+
+    The model-level tests in `test_keepa_client.py` cover the snapshot
+    contract; this catches future plumbing regressions where someone
+    drops a column from `KEEPA_ENRICH_COLUMNS` or rename-splits the
+    snapshot keys without noticing."""
+
+    def test_total_offer_count_present_in_enriched_output(self):
+        """Default `_product()` factory has fba_offers=5 (COUNT_NEW=5)
+        and no offers list — fallback path. fba_seller_count should
+        be 5; total_offer_count should also be 5."""
+        df = pd.DataFrame([{"asin": "B0AAA"}])
+        client = _stub_client([_product("B0AAA")])
+        out = enrich_with_keepa(df, client=client)
+        assert out.iloc[0]["fba_seller_count"] == 5
+        assert out.iloc[0]["total_offer_count"] == 5
+
+    def test_offers_drive_fba_seller_count_at_enrich_layer(self):
+        """Stats says COUNT_NEW=10 but offers list has 2 live FBA + 3
+        FBM. The enriched output should report fba_seller_count=2 and
+        total_offer_count=10 — divergence between FBA-only and total
+        surfaced cleanly to downstream calculate / decide."""
+        from keepa_client.models import KeepaOffer, _now_keepa_minutes
+        now = _now_keepa_minutes()
+        offers = [
+            # 2 live 3rd-party FBA
+            KeepaOffer(sellerId="A1", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 10, offerCSV=[100, 1500, 0]),
+            KeepaOffer(sellerId="A2", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 60, offerCSV=[100, 1550, 0]),
+            # 3 live FBM — must not count
+            KeepaOffer(sellerId="B1", isFBA=False, isAmazon=False, condition=1,
+                       lastSeen=now - 30, offerCSV=[100, 1100, 0]),
+            KeepaOffer(sellerId="B2", isFBA=False, isAmazon=False, condition=1,
+                       lastSeen=now - 30, offerCSV=[100, 1200, 0]),
+            KeepaOffer(sellerId="B3", isFBA=False, isAmazon=False, condition=1,
+                       lastSeen=now - 30, offerCSV=[100, 1300, 0]),
+        ]
+        df = pd.DataFrame([{"asin": "B0AAA"}])
+        client = _stub_client([
+            _product("B0AAA", fba_offers=10, offers=offers),
+        ])
+        out = enrich_with_keepa(df, client=client)
+        assert out.iloc[0]["fba_seller_count"] == 2
+        assert out.iloc[0]["total_offer_count"] == 10
 
 
 class TestRowOrderWithNonDefaultIndex:
