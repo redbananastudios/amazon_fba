@@ -6,19 +6,31 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-02 night — velocity prediction + Browser-CSV validator parity (PRs #67–#69) closed the chart-vs-engine fidelity gap.
-**Currently working on:** Nothing in flight. Browser-CSV-first workflow is now the default and emits every validator signal that fits in pre-computed CSV columns. Single branch (main) holds all work.
-**Status:** main at HEAD of #69. **1250 Python tests pass** (was 1021 baseline; +229 net across PRs #52-#69). MCP suite at 114 (was 110; +4 net) + 5 live SP-API still green. Working tree clean after CLAUDE.md refresh.
+**Last updated:** 2026-05-02 late night — Keepa Browser scrape cache (PR #74) makes the engine read chart-quality per-seller data for single-ASIN deep dives.
+**Currently working on:** Nothing in flight. The cache-as-contract architecture (scraper writes JSON, engine reads JSON) means the engine stays MCP-free while consuming the richest Keepa-Browser data per ASIN. Single branch (main) holds all work.
+**Status:** main at HEAD of #74. **1268 Python tests pass** (was 1250 pre-PR; +18 in this PR). MCP suite at 114 + 5 live SP-API still green. Working tree clean.
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                          # 114/114 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 1250/1250 in ~43s
+       fba_engine/strategies/tests/ cli/tests/                       # 1268/1268 in ~46s
 ```
 
-### What landed this session (2026-05-02 night — velocity + Browser-CSV parity)
+### What landed this session (2026-05-02 late night — Keepa Browser cache)
+
+| PR | Summary |
+|---|---|
+| **#74** | `keepa_browser_enrich` step + per-ASIN browser cache. Scraper (Claude+MCP today / Playwright tomorrow) writes `.cache/keepa_browser/<asin>.json`; engine reads and merges chart-level signals into the row. Browser data overrides API where Browser is more accurate (precomputed 365d signals, per-seller %BB-won with names, current active offers). Silent no-op when cache missing. Locked `pct_won` convention to raw percent (0-100) — sub-1% tail sellers are real values; the dual-format heuristic was caught + fixed in pre-merge code review. ASIN path-traversal guard. Wired into `single_asin.yaml` + `keepa_finder.yaml`. Single-ASIN printer adds "Buy Box dominance (Keepa Browser scrape)" block. +18 tests. Live demo on B001Y54F88 (Okatsune secateurs): velocity went from 1/mo → 6/mo via `[share: median-of-7-sellers]` after writing the cache. |
+
+**Key new files / contracts:**
+- `shared/lib/python/keepa_client/browser_cache.py` — Pydantic schema (`BrowserScrape`, `BrowserSellerStat`, `BrowserActiveOffer`, `BrowserProductDetails`) + cache I/O (`read`, `write`, `cache_path_for`, `cache_root`). The cache file is the contract — any future scraper that writes the same JSON shape works.
+- `fba_engine/steps/keepa_browser_enrich.py` — `add_browser_enrich(df)` reads cache per row. Browser-derived `buy_box_seller_stats` replaces API-shape dict with real seller names + isFBA. Browser-precomputed `buy_box_min_365d` / `buy_box_avg_*d` / `buy_box_oos_pct_90` / `sales_rank_avg_365d` / `bsr_drops_30d` override API-derived versions. `BROWSER_ENRICH_COLUMNS` tuple for downstream output writers.
+- `docs/KEEPA_BROWSER_SCRAPE.md` — operator workflow ("ask Claude to scrape ASIN X" → run engine).
+- `.cache/keepa_browser/<asin>.json` is gitignored.
+
+### Earlier in this session (2026-05-02 night — velocity + Browser-CSV parity)
 
 Three more PRs (#67-#69) on top of the operator-validator-fidelity
 sweep, answering "how many units would I sell?" and closing a real
