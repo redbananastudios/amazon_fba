@@ -33,6 +33,15 @@ steps:
   - name: scoring
     module: fba_engine.steps.scoring
 
+  # Phase 3b: candidate_score — 4-dimension 0-100 strength + HIGH/
+  # MEDIUM/LOW data confidence (HANDOFF_candidate_validation.md WS3).
+  # Complementary to scoring.py (which produces lane verdicts);
+  # candidate_score uses richer history fields and surfaces a
+  # data-quality label so the operator can spot strong-but-low-trust
+  # rows.
+  - name: candidate_score
+    module: fba_engine.steps.candidate_score
+
   # Phase 4: IP risk scoring (9 columns appended).
   - name: ip_risk
     module: fba_engine.steps.ip_risk

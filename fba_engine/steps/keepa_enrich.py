@@ -91,6 +91,9 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     "price_volatility_90d",
     "listing_age_days",
     "yoy_bsr_ratio",
+    # Review velocity (PR 5) — net change in review_count over 90d.
+    # Drives the candidate_score Demand dimension.
+    "review_velocity_90d",
 )
 
 DEFAULT_KEEPA_CONFIG_PATH: Path = (

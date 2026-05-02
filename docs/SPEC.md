@@ -238,6 +238,28 @@ exposed for backward compatibility (`MIN_PROFIT`, `MIN_SALES_SHORTLIST`, etc.).
 
 ---
 
+## 8b. Candidate scoring
+
+Added in HANDOFF WS3. Runs as a step **after** `calculate` and
+**before** `decide`. **Pure additive** — does NOT alter
+SHORTLIST/REVIEW/REJECT.
+
+Five output columns:
+
+| Column | Type | Notes |
+|---|---|---|
+| `candidate_score` | int 0-100 | Sum of 4 dimensions (Demand/Stability/Competition/Margin), 25 each |
+| `candidate_band` | STRONG / OK / WEAK / FAIL | Cuts at 75 / 50 / 25 (configurable) |
+| `candidate_reasons` | list[str] | Per-sub-score contributors, e.g. `"sales=180/mo→7"` |
+| `data_confidence` | HIGH / MEDIUM / LOW | Computed from history_days + how many of {rating, review_count, fba_seller_count, sales_estimate, buy_box_oos_pct_90} are present |
+| `data_confidence_reasons` | list[str] | Empty for HIGH; lists the gaps for MEDIUM/LOW |
+
+The two scores are independent. `STRONG / LOW` and `STRONG / HIGH` are
+different operator decisions. The XLSX output (PR 6) colour-codes the
+combination.
+
+All thresholds live in `decision_thresholds.yaml::candidate_scoring`.
+
 ## 9. Output schema
 
 Three files per run in `fba_engine/data/pricelists/{supplier}/results/{timestamp}/`:

@@ -226,6 +226,7 @@ class TestColumnsConstant:
             "price_volatility_90d",
             "listing_age_days",
             "yoy_bsr_ratio",
+            "review_velocity_90d",
         )
 
 

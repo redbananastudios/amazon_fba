@@ -46,6 +46,12 @@ steps:
   - name: calculate
     module: fba_engine.steps.calculate
 
+  # Stage 04.5 — candidate_score (data-driven 0-100 strength signal +
+  # data-confidence label). Pure additive: appends 5 columns, does NOT
+  # influence decide. See HANDOFF_candidate_validation.md WS3.
+  - name: candidate_score
+    module: fba_engine.steps.candidate_score
+
   # Stage 05 — decide (SHORTLIST / REVIEW / REJECT).
   - name: decide
     module: fba_engine.steps.decide

@@ -23,6 +23,7 @@ from keepa_client.history import (
     out_of_stock_pct,
     parse_keepa_csv_series,
     price_volatility,
+    review_count_change,
     yoy_bsr_ratio,
 )
 from keepa_client.models import _now_keepa_minutes
@@ -429,6 +430,47 @@ class TestListingAgeDays:
 # ────────────────────────────────────────────────────────────────────────
 # yoy_bsr_ratio
 # ────────────────────────────────────────────────────────────────────────
+
+
+class TestReviewCountChange:
+    def test_positive_delta_for_growing_reviews(self):
+        now = _now_keepa_minutes()
+        # 50 → 60 → 73 over the 90-day window.
+        series = [
+            now - 80 * DAY, 50,
+            now - 40 * DAY, 60,
+            now - 10 * DAY, 73,
+        ]
+        assert review_count_change(series, window_days=90) == 23
+
+    def test_zero_delta_for_flat_reviews(self):
+        now = _now_keepa_minutes()
+        series = [now - 80 * DAY, 100, now - 10 * DAY, 100]
+        assert review_count_change(series, window_days=90) == 0
+
+    def test_negative_delta_when_count_dropped(self):
+        # Amazon occasionally prunes reviews; rare but possible.
+        now = _now_keepa_minutes()
+        series = [now - 80 * DAY, 100, now - 10 * DAY, 95]
+        assert review_count_change(series, window_days=90) == -5
+
+    def test_single_observation_returns_zero_not_none(self):
+        # Only one observation in window — no change observable, but
+        # the helper returns 0 (flat) rather than None so the
+        # candidate-score's "flat → 2 points" path still scores it.
+        now = _now_keepa_minutes()
+        series = [now - 10 * DAY, 100]
+        assert review_count_change(series, window_days=90) == 0
+
+    def test_no_observations_returns_none(self):
+        # All sentinels in window → genuinely insufficient → None.
+        now = _now_keepa_minutes()
+        series = [now - 10 * DAY, -1, now - 5 * DAY, -1]
+        assert review_count_change(series, window_days=90) is None
+
+    def test_empty_returns_none(self):
+        assert review_count_change([], window_days=90) is None
+        assert review_count_change(None, window_days=90) is None
 
 
 class TestYoyBsrRatio:
