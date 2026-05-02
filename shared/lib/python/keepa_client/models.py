@@ -277,6 +277,14 @@ class KeepaProduct(BaseModel):
     # finding their market price. None when Keepa hasn't recorded a
     # tracking-start timestamp.
     tracking_since: Optional[int] = Field(default=None, alias="trackingSince")
+    # Variation cluster — Keepa returns the sibling/child ASIN list
+    # under `variations`. For a parent: list of children. For a child:
+    # list of siblings (typically the same length, includes itself).
+    # Empty for single-listing products. Used to surface
+    # `variation_count` in the snapshot — operator-level signal that a
+    # niche-looking parent ASIN may aggregate to real demand once
+    # children are summed.
+    variations: list[dict[str, Any]] = Field(default_factory=list)
 
     def market_snapshot(self) -> dict[str, Any]:
         """Extract the canonical engine's market-data columns from `stats`.
@@ -485,6 +493,14 @@ class KeepaProduct(BaseModel):
             # Distinguishes "70/mo steady" from "burst+flat" listings.
             "sales_rank_cv_90d": sales_rank_consistency(
                 rank_csv, window_days=90,
+            ),
+            # Variation cluster size (PR C). Number of ASINs in this
+            # variant family. 1 = standalone listing. >1 = parent or
+            # one of N siblings — niche-looking parents often aggregate
+            # to real demand once children are summed. Operator-level
+            # signal to look at the cluster, not just this leaf.
+            "variation_count": (
+                len(self.variations) if self.variations else 1
             ),
         }
 

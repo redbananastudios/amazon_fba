@@ -230,6 +230,7 @@ class TestColumnsConstant:
             "amazon_bb_pct_90",
             "buy_box_min_365d",
             "sales_rank_cv_90d",
+            "variation_count",
         )
 
 
