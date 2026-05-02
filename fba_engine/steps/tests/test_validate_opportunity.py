@@ -26,6 +26,7 @@ from sourcing_engine.opportunity import (
     VERDICT_SOURCE_ONLY,
     VERDICT_WATCH,
     VERDICTS,
+    predict_seller_velocity,
     validate_opportunity,
 )
 
@@ -413,6 +414,131 @@ class TestDataFrameApi:
 # ────────────────────────────────────────────────────────────────────────
 # Decision invariant — the WHOLE POINT of this step
 # ────────────────────────────────────────────────────────────────────────
+
+
+class TestPredictSellerVelocity:
+    """PR F — units/mo prediction for a new entrant taking equal BB share."""
+
+    def test_basic_equal_split(self):
+        # 100 sales/mo, 0% Amazon BB share, 4 sellers → 25/mo equal share.
+        row = {
+            "sales_estimate": 100,
+            "fba_seller_count": 4,
+            "amazon_bb_pct_90": 0.0,
+        }
+        v = predict_seller_velocity(row)
+        assert v is not None
+        assert v["mid"] == 25
+        assert v["low"] == 8     # 25 × 0.30 = 7.5 → 8
+        assert v["high"] == 38   # 25 × 1.50 = 37.5 → 38
+
+    def test_amazon_bb_share_reduces_non_amazon_volume(self):
+        # 100 sales/mo, 50% Amazon BB share → 50 left for 3rd-party.
+        # 4 sellers → 12.5 each.
+        row = {
+            "sales_estimate": 100,
+            "fba_seller_count": 4,
+            "amazon_bb_pct_90": 0.5,
+        }
+        v = predict_seller_velocity(row)
+        assert v["mid"] == 12
+
+    def test_bsr_drops_caps_overestimated_sales(self):
+        # Real-world B0B636ZKZQ: Keepa says monthlySold=70 but BSR drops
+        # show only ~25 (so bsr_drops × 1.5 = 37.5 < 70 × 0.5).
+        # Predictor should use the lower number (37.5), not 70.
+        row = {
+            "sales_estimate": 70,
+            "bsr_drops_30d": 25,
+            "fba_seller_count": 3,
+            "amazon_bb_pct_90": 0.02,
+        }
+        v = predict_seller_velocity(row)
+        # 37.5 × 0.98 / 3 = 12.25 → 12
+        assert v is not None
+        assert v["mid"] == 12
+
+    def test_bsr_drops_only_when_disagreement_is_large(self):
+        # When Keepa's monthlySold and bsr_drops × 1.5 are close, prefer
+        # Keepa's number (their model is closer to ground truth).
+        # 100/mo monthlySold, 80 BSR drops × 1.5 = 120 — they're close,
+        # use 100.
+        row = {
+            "sales_estimate": 100,
+            "bsr_drops_30d": 80,
+            "fba_seller_count": 4,
+            "amazon_bb_pct_90": 0.0,
+        }
+        v = predict_seller_velocity(row)
+        assert v["mid"] == 25     # 100 / 4 = 25
+
+    def test_uses_bsr_drops_when_sales_estimate_missing(self):
+        row = {
+            "bsr_drops_30d": 30,    # × 1.5 = 45
+            "fba_seller_count": 3,
+            "amazon_bb_pct_90": 0.0,
+        }
+        v = predict_seller_velocity(row)
+        # 45 × 1.0 / 3 = 15
+        assert v is not None
+        assert v["mid"] == 15
+
+    def test_joiners_dilute_share(self):
+        row = {
+            "sales_estimate": 100,
+            "fba_seller_count": 4,
+            "amazon_bb_pct_90": 0.0,
+            "fba_offer_count_90d_joiners": 5,
+        }
+        v = predict_seller_velocity(row)
+        # 25 × 0.7 (joiners penalty) = 17.5 → 18
+        assert v["mid"] == 18
+
+    def test_oos_lifts_estimate_for_latent_demand(self):
+        row = {
+            "sales_estimate": 100,
+            "fba_seller_count": 4,
+            "amazon_bb_pct_90": 0.0,
+            "buy_box_oos_pct_90": 0.30,
+        }
+        v = predict_seller_velocity(row)
+        # 25 × 1.15 = 28.75 → 29
+        assert v["mid"] == 29
+
+    def test_high_capped_at_total_non_amazon(self):
+        # High shouldn't exceed total non-Amazon sales — a single seller
+        # can't sell more than 100% of the BB rotation.
+        row = {
+            "sales_estimate": 30,
+            "fba_seller_count": 2,
+            "amazon_bb_pct_90": 0.0,
+        }
+        v = predict_seller_velocity(row)
+        # mid = 15; high = 22.5 → capped at 30 (total non-Amazon).
+        assert v["high"] <= 30
+
+    def test_returns_none_when_sales_signal_absent(self):
+        row = {"fba_seller_count": 4, "amazon_bb_pct_90": 0.0}
+        assert predict_seller_velocity(row) is None
+
+    def test_returns_none_when_no_fba_sellers(self):
+        row = {
+            "sales_estimate": 100,
+            "fba_seller_count": 0,
+            "amazon_bb_pct_90": 0.0,
+        }
+        assert predict_seller_velocity(row) is None
+
+    def test_returns_none_for_empty_row(self):
+        assert predict_seller_velocity({}) is None
+
+    def test_validate_opportunity_includes_velocity_fields(self):
+        # End-to-end: velocity fields appear in every verdict's output.
+        out = validate_opportunity(_shortlist_row())
+        assert "predicted_velocity_low" in out
+        assert "predicted_velocity_mid" in out
+        assert "predicted_velocity_high" in out
+        assert isinstance(out["predicted_velocity_mid"], int)
 
 
 class TestDecisionInvariant:

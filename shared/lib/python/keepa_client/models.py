@@ -502,6 +502,15 @@ class KeepaProduct(BaseModel):
             "variation_count": (
                 len(self.variations) if self.variations else 1
             ),
+            # PR F — BSR-drop-count over 30 days. The conservative
+            # sales-velocity proxy (each rank improvement ≈ 1 sale).
+            # `sales_estimate` above prefers Keepa's monthlySold model
+            # which over-estimates niche listings; this field carries
+            # the chart-readable count so the validator + operator
+            # can spot the discrepancy. None when csv[3] is empty.
+            "bsr_drops_30d": estimate_sales_from_rank_drops(
+                rank_csv, window_days=30,
+            ),
         }
 
 

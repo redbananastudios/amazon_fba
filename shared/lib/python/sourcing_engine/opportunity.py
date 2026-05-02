@@ -495,6 +495,97 @@ def _check_negotiate(
 # ────────────────────────────────────────────────────────────────────────
 
 
+def predict_seller_velocity(row: dict) -> Optional[dict[str, int]]:
+    """Predict units/month a new entrant would sell on this listing.
+
+    Returns ``{"low": int, "mid": int, "high": int}`` or None when
+    inputs are insufficient.
+
+    Model:
+        non_amazon_sales = sales × (1 - amazon_bb_pct_90)
+        equal_share     = non_amazon_sales / fba_seller_count
+        low             = equal_share × 0.30   (worst-priced / OOS often)
+        mid             = equal_share × 1.00   (equal BB rotation)
+        high            = equal_share × 1.50   (best-priced / always stocked)
+
+    The "sales" input is `min(sales_estimate, bsr_drops_30d × 1.5)`
+    when both are present and `bsr_drops_30d` is materially below
+    `sales_estimate`. The 1.5 multiplier on BSR drops covers the
+    fact that some sales don't move the rank visibly; using the raw
+    BSR-drop count alone slightly under-counts. Real-world: niche
+    listings where Keepa's `monthlySold` over-estimates by 3× —
+    this caps the prediction at the conservative number.
+
+    Adjustment factors:
+        joiners >= 3 in 90d           : multiplier × 0.7 (share dilutes)
+        oos_pct_90 > 0.10             : multiplier × 1.15 (latent demand)
+        bsr_slope_90d < -flat_thresh  : multiplier × 1.10 (improving)
+        bsr_slope_90d > +flat_thresh  : multiplier × 0.85 (declining)
+
+    Returns None when:
+        - sales signal absent (both sales_estimate and bsr_drops_30d None)
+        - fba_seller_count missing or zero
+    """
+    sales_est = _num(row.get("sales_estimate"))
+    bsr_drops = _num(row.get("bsr_drops_30d"))
+
+    # Pick the conservative sales signal. BSR drops × 1.5 covers the
+    # under-counting for sales that don't move the rank visibly.
+    bsr_proxy = bsr_drops * 1.5 if bsr_drops is not None else None
+    if sales_est is None and bsr_proxy is None:
+        return None
+    if sales_est is None:
+        sales = bsr_proxy
+    elif bsr_proxy is None:
+        sales = sales_est
+    else:
+        # Use min — the operator-observed pattern (B0B636ZKZQ
+        # calibration: Keepa monthlySold=70 vs BSR drops=25) shows
+        # Keepa's model over-estimates niche listings. Conservative
+        # is right for sourcing decisions: better to under-promise
+        # capacity than over-buy inventory.
+        sales = min(sales_est, bsr_proxy)
+
+    if sales is None or sales <= 0:
+        return None
+
+    fba = _num(row.get("fba_seller_count"))
+    if fba is None or fba <= 0:
+        return None
+
+    bb_share = _num(row.get("amazon_bb_pct_90"))
+    non_amazon_share = sales * (1.0 - (bb_share if bb_share is not None else 0.0))
+    equal_share = non_amazon_share / fba
+
+    multiplier = 1.0
+    joiners = _num(row.get("fba_offer_count_90d_joiners"))
+    if joiners is not None and joiners >= 3:
+        multiplier *= 0.7
+    oos = _num(row.get("buy_box_oos_pct_90"))
+    if oos is not None and oos > 0.10:
+        multiplier *= 1.15
+    bsr_slope = _num(row.get("bsr_slope_90d"))
+    if bsr_slope is not None:
+        if bsr_slope < -0.05:
+            multiplier *= 1.10
+        elif bsr_slope > 0.05:
+            multiplier *= 0.85
+
+    mid = equal_share * multiplier
+    low = mid * 0.30
+    high = mid * 1.50
+
+    # Cap high at the total non-Amazon sales — a single seller can't
+    # take more than 100% of the BB rotation.
+    high = min(high, non_amazon_share)
+
+    return {
+        "low": max(0, int(round(low))),
+        "mid": max(0, int(round(mid))),
+        "high": max(0, int(round(high))),
+    }
+
+
 def _required_buy_cost(row: dict, cfg: OpportunityValidation) -> Optional[float]:
     """Maximum buy_cost that would clear both ROI and profit gates.
 
@@ -538,6 +629,16 @@ def validate_opportunity(
     cfg = config or get_opportunity_validation()
     score, score_reasons = _calculate_opportunity_score(row, cfg)
     confidence, confidence_reasons = _opportunity_confidence(row)
+    velocity = predict_seller_velocity(row)
+    velocity_low = velocity["low"] if velocity else None
+    velocity_mid = velocity["mid"] if velocity else None
+    velocity_high = velocity["high"] if velocity else None
+
+    velocity_fields = {
+        "predicted_velocity_low": velocity_low,
+        "predicted_velocity_mid": velocity_mid,
+        "predicted_velocity_high": velocity_high,
+    }
 
     # 1. KILL — always wins.
     is_kill, kill_reasons = _check_kill(row, cfg)
@@ -549,6 +650,7 @@ def validate_opportunity(
             "opportunity_reasons": score_reasons,
             "opportunity_blockers": kill_reasons,
             "next_action": NEXT_ACTIONS[VERDICT_KILL],
+            **velocity_fields,
         }
 
     # 2. SOURCE_ONLY — strong demand, no buy_cost yet. Check BEFORE BUY
@@ -563,6 +665,7 @@ def validate_opportunity(
             "opportunity_reasons": reasons,
             "opportunity_blockers": [],
             "next_action": NEXT_ACTIONS[VERDICT_SOURCE_ONLY],
+            **velocity_fields,
         }
 
     # 3. BUY — every gate passes.
@@ -575,6 +678,7 @@ def validate_opportunity(
             "opportunity_reasons": score_reasons,
             "opportunity_blockers": [],
             "next_action": NEXT_ACTIONS[VERDICT_BUY],
+            **velocity_fields,
         }
 
     # 4. NEGOTIATE — strong demand + current profit + weak conservative.
@@ -590,6 +694,7 @@ def validate_opportunity(
             "opportunity_reasons": reasons,
             "opportunity_blockers": buy_blockers,
             "next_action": NEXT_ACTIONS[VERDICT_NEGOTIATE],
+            **velocity_fields,
         }
 
     # 5. WATCH — default.
@@ -600,4 +705,5 @@ def validate_opportunity(
         "opportunity_reasons": score_reasons,
         "opportunity_blockers": buy_blockers,
         "next_action": NEXT_ACTIONS[VERDICT_WATCH],
+        **velocity_fields,
     }

@@ -517,6 +517,37 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
               f"   <- supplier-negotiation ceiling")
     print()
 
+    # PR F — predicted seller velocity (units/mo for a new entrant).
+    # Print before risk flags so the operator sees the volume reality
+    # alongside the unit-economics. Skipped silently when validator
+    # didn't compute (sales / fba_seller_count missing).
+    v_low = row.get("predicted_velocity_low")
+    v_mid = row.get("predicted_velocity_mid")
+    v_high = row.get("predicted_velocity_high")
+    p_unit = row.get("profit_conservative") or row.get("profit_current") or 0
+    if (
+        any(not _is_missing(v) for v in (v_low, v_mid, v_high))
+        and float(p_unit) > 0
+    ):
+        print("Velocity (predicted units/mo at your share):")
+        if not _is_missing(v_low):
+            print(f"  Low (worst case):      {int(v_low)}/mo  "
+                  f"(~{_fmt(int(v_low) * float(p_unit))})")
+        if not _is_missing(v_mid):
+            print(f"  Mid (equal share):     {int(v_mid)}/mo  "
+                  f"(~{_fmt(int(v_mid) * float(p_unit))})")
+        if not _is_missing(v_high):
+            print(f"  High (best case):      {int(v_high)}/mo  "
+                  f"(~{_fmt(int(v_high) * float(p_unit))})")
+        # Test-order recommendation: ~3 weeks of mid (75% of monthly).
+        # Conservative — lets the operator validate sell-through before
+        # scaling. Skipped when mid isn't computable.
+        if not _is_missing(v_mid) and int(v_mid) > 0:
+            test_units = max(5, int(round(int(v_mid) * 0.75)))
+            print(f"  Test-order rec:        {test_units} units "
+                  f"(~3 weeks of mid)")
+        print()
+
     risk = row.get("risk_flags")
     # risk_flags can come back as a list, a stringified list, or empty
     # string depending on whether the row went through DataFrame round-

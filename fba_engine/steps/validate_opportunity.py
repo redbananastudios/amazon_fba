@@ -40,6 +40,12 @@ OPPORTUNITY_COLUMNS: tuple[str, ...] = (
     "opportunity_reasons",
     "opportunity_blockers",
     "next_action",
+    # PR F — predicted seller velocity (units/mo for a new entrant).
+    # Range: low (worst case) → mid (equal share) → high (best case).
+    # None when sales / fba_seller_count signals missing.
+    "predicted_velocity_low",
+    "predicted_velocity_mid",
+    "predicted_velocity_high",
 )
 
 
@@ -77,6 +83,9 @@ def add_opportunity_verdict(df: pd.DataFrame) -> pd.DataFrame:
                 "opportunity_reasons": [],
                 "opportunity_blockers": ["validate_opportunity error — see logs"],
                 "next_action": NEXT_ACTIONS[VERDICT_KILL],
+                "predicted_velocity_low": None,
+                "predicted_velocity_mid": None,
+                "predicted_velocity_high": None,
             })
         rows.append(d)
     return pd.DataFrame(rows)
