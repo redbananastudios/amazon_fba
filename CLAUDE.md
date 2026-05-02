@@ -6,17 +6,76 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-02 afternoon — `HANDOFF_candidate_validation.md` shipped end-to-end across PRs #52-#57.
-**Currently working on:** Nothing in flight. The handoff is fully implemented; every supplier_pricelist + keepa_niche XLSX now carries data-driven candidate strength + data confidence visible at a glance. Single branch (main) holds all work.
-**Status:** main at HEAD of #57. **1166 Python tests pass** (was 1021 baseline; +145 net across the 6-PR series). MCP suite untouched (110 unit + 5 integration still green). Working tree clean after CLAUDE.md refresh.
+**Last updated:** 2026-05-02 evening — `07_validate_opportunity` step shipped (PR #58) on top of the candidate-validation handoff series.
+**Currently working on:** Nothing in flight. Every output row now carries both `decision` (SHORTLIST/REVIEW/REJECT) AND `opportunity_verdict` (BUY/SOURCE_ONLY/NEGOTIATE/WATCH/KILL) plus `next_action`. Single branch (main) holds all work.
+**Status:** main at HEAD of #58. **1204 Python tests pass** (was 1021 baseline; +183 net across PRs #52-#58). MCP suite untouched (110 unit + 5 integration still green). Working tree clean after CLAUDE.md refresh.
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                          # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 1166/1166 in ~43s
+       fba_engine/strategies/tests/ cli/tests/                       # 1204/1204 in ~43s
 ```
+
+### What landed this session (2026-05-02 evening — final opportunity validation)
+
+**PR #58** — Adds `07_validate_opportunity` step. Pure additive — never alters
+SHORTLIST/REVIEW/REJECT. Decides whether a profitable product is **actually
+worth acting on now**.
+
+Six new output columns:
+- `opportunity_verdict` — BUY / SOURCE_ONLY / NEGOTIATE / WATCH / KILL
+- `opportunity_score` — 0-100 (Demand 25 / Profit 25 / Competition 20 / Stability 15 / Operational 15)
+- `opportunity_confidence` — HIGH/MEDIUM/LOW (degrades on missing critical inputs)
+- `opportunity_reasons` — per-dimension contributors
+- `opportunity_blockers` — KILL reasons or BUY blockers
+- `next_action` — operator playbook keyed by verdict
+
+Verdict precedence (first match wins):
+1. **KILL** — REJECT, profit < 0, ROI < 0.15, sales < 20, `PRICE_FLOOR_HIT`,
+   severe volatility (≥0.40), severe BSR decline (≥0.10), Amazon BB ≥ 0.90,
+   RESTRICTED, FBA-ineligible
+2. **SOURCE_ONLY** — `buy_cost` missing AND demand strong (sales ≥ 100,
+   candidate_score ≥ 75, confidence not LOW, BB share < 0.70, volatility ≤ 0.20)
+3. **BUY** — every gate passes (decision SHORTLIST + candidate_score ≥ 75 +
+   confidence HIGH + sales ≥ 100 + ROI/profit/BB/volatility/OOS/joiners gates)
+4. **NEGOTIATE** — strong demand + currently profitable + conservative profit
+   < £2.50 (reasons line carries `max_buy_cost` ceiling)
+5. **WATCH** — default; blockers list explains what's holding it back
+
+Implementation:
+- `shared/lib/python/sourcing_engine/opportunity.py` (~440 lines) — pure
+  function core, NaN-safe coercion, string-typed-CSV-numerics safe
+- `fba_engine/steps/validate_opportunity.py` — DataFrame wrapper +
+  runner step, per-row try/except → KILL fallback
+- `OpportunityValidation` dataclass + `get_opportunity_validation()` accessor
+  in `fba_config_loader.py` with invariant validator (BB-share ladder,
+  ROI/sales kill ≤ buy thresholds)
+- 27-key `opportunity_validation:` block in `decision_thresholds.yaml`
+  (permissive defaults so older configs load cleanly)
+- Wired into both `supplier_pricelist.yaml` (after `enrich`) and
+  `keepa_niche.yaml` (after `decision_engine`)
+- XLSX: 6 new columns immediately after `decision`. Sort priority extended
+  to opportunity_verdict → decision → candidate_score desc → opportunity_score
+  desc (stable). Per-cell verdict colour: BUY=green, SOURCE_ONLY=blue,
+  NEGOTIATE=amber, WATCH=yellow, KILL=grey
+- Markdown: verdict + score + next_action added to display_cols
+- SPEC.md §8c documents the full contract
+
+Tests: +38 in `test_validate_opportunity.py` covering every verdict path,
+all 12 handoff acceptance scenarios, missing-data robustness (NaN-safe,
+string-typed numerics, completely empty row), and the **load-bearing
+decision-column-unchanged invariant**.
+
+Code-reviewed: approved with no blocking issues. Reviewer verified verdict
+precedence, `_required_buy_cost` algebra, NaN handling, output sort key
+composition, and the decision-invariant pin.
+
+**Operator-facing answer to "is this worth acting on now?"** is now visible
+in 5 seconds at the top-left of every XLSX, colour-coded by urgency, sorted
+so BUY rows lead. Across PRs #52-#58 (this session), test count grew from
+1021 → 1204 (+183) with zero regressions.
 
 ### What landed this session (2026-05-02 afternoon — candidate validation handoff)
 
