@@ -354,6 +354,29 @@ carries the Keepa enrichment columns listed in
 `category_root` etc. These are informational; the decision logic in
 section 3 is purely a function of the fields above.
 
+### Signal availability by enrichment path
+
+| Signal | Keepa API (single_asin) | Keepa Browser CSV (keepa_finder, supplier_pricelist) |
+|---|---|---|
+| `amazon_bb_pct_90` | ✅ derived from csv arrays | ✅ "Buy Box: % Amazon 90 days" column |
+| `buy_box_min_365d` | ✅ from csv[18] window | ✅ "Buy Box: Lowest 365 days" column |
+| `buy_box_avg30` / `avg90` | ✅ stats lanes | ✅ precomputed columns |
+| `bsr_drops_30d` | ✅ from csv[3] | ✅ "Sales Rank: Drops last 30 days" column |
+| `rating` / `review_count` | ✅ csv[16] / csv[17] | ✅ "Reviews: Rating" / "Reviews: Rating Count" |
+| `bsr_slope_30d` / `90d` / `365d` | ✅ from csv[3] window | ❌ needs raw csv array (Browser CSV is precomputed-only) |
+| `price_volatility_90d` | ✅ from csv[18] | ❌ needs raw csv array |
+| `sales_rank_cv_90d` | ✅ from csv[3] | ❌ needs raw csv array |
+| `buy_box_oos_pct_90` | ✅ from csv[18] sentinels | ✅ "Buy Box: 90 days OOS" column |
+| `buy_box_seller_stats` (per-seller %BB-won) | ✅ stats.buyBoxStats | ❌ only on Keepa Browser BB Statistics tab (not standard CSV export) |
+| `variation_count` | ✅ KeepaProduct.variations | ❌ not exported |
+| `listing_age_days` / `yoy_bsr_ratio` | ✅ trackingSince + csv | ❌ needs raw csv |
+
+The validator gracefully degrades: signals that aren't populated on
+the Browser CSV path stay `None` and the validator treats them as
+"signal missing" (degrades confidence) rather than "bad signal"
+(false negatives). For full chart-level fidelity on a single ASIN,
+use the API path (`single_asin` strategy, ~7 tokens per call).
+
 `fba_seller_count` is FBA-only when the offers list was loaded
 (`with_offers=True` — single-ASIN strategies and any path that needs
 precise SINGLE_FBA_SELLER detection). Bulk paths default to

@@ -48,9 +48,11 @@ Output columns (canonical schema consumed downstream by 04_calculate):
                                   max_buy_price as the negotiation ceiling)
         moq                     — 1 (Keepa-finder flow is leads, no MOQ)
 
-    Informational / used by stability_score (commit 6)
-        bsr_current, bsr_avg90, buy_box_pct_amazon_90d,
-        buy_box_oos_90, delta_buy_box_30d_pct, delta_buy_box_90d_pct
+    Informational + validator signals (PR H — names align with API path)
+        sales_rank, sales_rank_avg90, bsr_drops_30d,
+        amazon_bb_pct_90, buy_box_oos_pct_90, buy_box_avg30,
+        buy_box_min_365d, rating, review_count,
+        delta_buy_box_30d_pct, delta_buy_box_90d_pct
 
 Filters applied (in order):
     1. ASIN dedup against ``data/niches/exclusions.csv`` (the global
@@ -124,11 +126,19 @@ KEEPA_FINDER_CANONICAL_COLUMNS: tuple[str, ...] = (
     # Keepa-finder strategies are leads, not pre-negotiated pricelists.
     "buy_cost",
     "moq",
-    # Informational / for stability_score (commit 6) and downstream display
-    "bsr_current",
-    "bsr_avg90",
-    "buy_box_pct_amazon_90d",
-    "buy_box_oos_90",
+    # Informational + validator signals (PRs A-G — names align with the
+    # API-path schema in `keepa_client.models.market_snapshot()` so the
+    # validator's flag-firing + scoring logic works on Browser-CSV runs
+    # too).
+    "sales_rank",                  # ← Sales Rank: Current (was bsr_current)
+    "sales_rank_avg90",            # ← Sales Rank: 90 days avg. (was bsr_avg90)
+    "amazon_bb_pct_90",            # ← Buy Box: % Amazon 90 days
+    "buy_box_oos_pct_90",          # ← Buy Box: 90 days OOS
+    "buy_box_avg30",               # ← Buy Box: 30 days avg. (PR B)
+    "buy_box_min_365d",            # ← Buy Box: Lowest 365 days (PR B)
+    "bsr_drops_30d",               # ← Sales Rank: Drops last 30 days (PR F)
+    "rating",                      # ← Reviews: Rating
+    "review_count",                # ← Reviews: Rating Count
     "delta_buy_box_30d_pct",
     "delta_buy_box_90d_pct",
     "amazon_url",
@@ -159,12 +169,24 @@ _KEEPA_TO_CANONICAL: dict[str, str] = {
     "Bought in past month": "sales_estimate",
     "Monthly Sales Trends: Bought in past month": "sales_estimate",
     "New FBA Offer Count: Current": "fba_seller_count",
-    "Sales Rank: Current": "bsr_current",
-    "Sales Rank: 90 days avg.": "bsr_avg90",
-    "Buy Box: % Amazon 90 days": "buy_box_pct_amazon_90d",
-    "Buy Box: 90 days OOS": "buy_box_oos_90",
+    # Sales rank columns — names align with the API-path
+    # market_snapshot schema so validator signals fire identically
+    # on both paths.
+    "Sales Rank: Current": "sales_rank",
+    "Sales Rank: 90 days avg.": "sales_rank_avg90",
+    # PR F — chart-readable BSR drop count = conservative sales proxy.
+    "Sales Rank: Drops last 30 days": "bsr_drops_30d",
+    # Validator-naming aligned (was buy_box_pct_amazon_90d / buy_box_oos_90).
+    "Buy Box: % Amazon 90 days": "amazon_bb_pct_90",
+    "Buy Box: 90 days OOS": "buy_box_oos_pct_90",
+    "Buy Box: 30 days avg.": "buy_box_avg30",
+    "Buy Box: Lowest 365 days": "buy_box_min_365d",
     "Buy Box: 30 days drop %": "delta_buy_box_30d_pct",
     "Buy Box: 90 days drop %": "delta_buy_box_90d_pct",
+    # PR 2 — listing quality signals already on the API path; same
+    # column names so validator + candidate_score read consistently.
+    "Reviews: Rating": "rating",
+    "Reviews: Rating Count": "review_count",
     # NB: "Referral Fee %" is mapped specially in _row_from_keepa
     # because Keepa formats it as "15 %" and calculate.py expects
     # the fraction (0.15). parse_money strips the % sign but
@@ -177,15 +199,20 @@ _NUMERIC_CANONICAL_FIELDS: frozenset[str] = frozenset({
     "buy_box_price",
     "new_fba_price",
     "buy_box_avg90",
+    "buy_box_avg30",
+    "buy_box_min_365d",
     "sales_estimate",
     "fba_seller_count",
     "fba_pick_pack_fee",
-    "bsr_current",
-    "bsr_avg90",
-    "buy_box_pct_amazon_90d",
-    "buy_box_oos_90",
+    "sales_rank",
+    "sales_rank_avg90",
+    "bsr_drops_30d",
+    "amazon_bb_pct_90",
+    "buy_box_oos_pct_90",
     "delta_buy_box_30d_pct",
     "delta_buy_box_90d_pct",
+    "rating",
+    "review_count",
 })
 
 DEFAULT_EXCLUSIONS_PATH: Path = (
