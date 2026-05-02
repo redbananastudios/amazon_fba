@@ -220,6 +220,53 @@ describe("getCatalogItem", () => {
     expect(spApi.getCatalogItemFull).toHaveBeenCalledTimes(2);
   });
 
+  it("populates listing-quality signals (image_count, has_aplus_content, release_date)", async () => {
+    // Listing-quality signals (PR D — operator-validator-fidelity sweep).
+    // image_count derived from images array length; has_aplus_content
+    // detected from attributes; release_date copied from summary.
+    const spApi = mockSpApi({
+      summaries: [
+        {
+          marketplaceId: UK,
+          itemName: "Quality Listing",
+          releaseDate: "2022-06-15T00:00:00Z",
+        },
+      ],
+      images: [
+        {
+          marketplaceId: UK,
+          images: [
+            { variant: "MAIN", link: "https://m.media-amazon.com/i1.jpg" },
+            { variant: "PT01", link: "https://m.media-amazon.com/i2.jpg" },
+            { variant: "PT02", link: "https://m.media-amazon.com/i3.jpg" },
+          ],
+        },
+      ],
+      attributes: {
+        a_plus_content: [
+          { value: "<p>Brand story</p>", marketplace_id: UK },
+        ],
+      },
+    });
+    const result = await getCatalogItem({ asin: "B0QUAL" }, spApi);
+    expect(result.image_count).toBe(3);
+    expect(result.has_aplus_content).toBe(true);
+    expect(result.release_date).toBe("2022-06-15T00:00:00Z");
+  });
+
+  it("listing-quality signals stay undefined when not in SP-API response", async () => {
+    // Bare summary (common for older listings) — fields stay undefined
+    // rather than crashing. The Python preflight reader propagates None
+    // and the validator treats absence as "signal missing", not "bad".
+    const spApi = mockSpApi({
+      summaries: [{ marketplaceId: UK, itemName: "Bare" }],
+    });
+    const result = await getCatalogItem({ asin: "B0BARE" }, spApi);
+    expect(result.image_count).toBeUndefined();
+    expect(result.has_aplus_content).toBeUndefined();
+    expect(result.release_date).toBeUndefined();
+  });
+
   it("serves stale cache when SP-API errors", async () => {
     const spApi = mockSpApi(
       { summaries: [{ marketplaceId: UK, itemName: "Stale Title" }] },

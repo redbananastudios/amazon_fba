@@ -20,6 +20,11 @@ interface SpApiSummary {
   brand?: string;
   manufacturer?: string;
   itemName?: string;
+  releaseDate?: string;
+  // SP-API surfaces "first available" under different keys depending on
+  // the marketplace + product type. Capture all known variants so we
+  // can pick the first non-empty one downstream.
+  websiteDisplayGroupName?: string;
 }
 
 interface SpApiDimensionValue {
@@ -202,6 +207,33 @@ function extractImages(
   return out.length > 0 ? out : undefined;
 }
 
+// Attribute keys SP-API uses to surface A+ content presence. The exact
+// shape varies; we treat any populated value as "has A+ content". The
+// brand-registered seller's A+ Content API is a richer source but is
+// only available with brand-registry credentials; this is the
+// best-effort signal derivable from the standard catalog response.
+const APLUS_HINT_KEYS = [
+  "a_plus_content",
+  "aplus_content",
+  "enhanced_brand_content",
+  "ebc_content",
+];
+
+function detectAplusContent(
+  attributes: Record<string, unknown> | undefined
+): boolean | undefined {
+  if (!attributes) return undefined;
+  for (const key of Object.keys(attributes)) {
+    const lower = key.toLowerCase();
+    if (!APLUS_HINT_KEYS.some((hint) => lower.includes(hint))) continue;
+    const value = attributes[key];
+    if (value === true) return true;
+    if (typeof value === "string" && value.trim().length > 0) return true;
+    if (Array.isArray(value) && value.length > 0) return true;
+  }
+  return undefined;
+}
+
 function normalise(
   asin: string,
   marketplaceId: string,
@@ -209,6 +241,7 @@ function normalise(
 ): CatalogItemResult {
   const summary = pickForMarketplace(raw.summaries, marketplaceId);
   const dims = pickForMarketplace(raw.dimensions, marketplaceId);
+  const images = extractImages(raw.images, marketplaceId);
   return {
     asin,
     title: summary?.itemName,
@@ -217,7 +250,12 @@ function normalise(
     dimensions: extractDimensions(dims),
     hazmat: detectHazmat(raw.attributes),
     classifications: extractClassifications(raw.classifications, marketplaceId),
-    images: extractImages(raw.images, marketplaceId),
+    images,
+    // Listing-quality signals — derived alongside the existing fields
+    // so a single SP-API call surfaces everything the validator needs.
+    image_count: images?.length,
+    has_aplus_content: detectAplusContent(raw.attributes),
+    release_date: summary?.releaseDate,
     marketplace_id: marketplaceId,
     raw,
   };
