@@ -30,6 +30,7 @@ from typing import Any
 import pandas as pd
 
 from fba_engine.steps._helpers import is_missing
+from fba_config_loader import get_data_signals
 from sourcing_engine.config import BUY_BOX_PEAK_THRESHOLD_PCT, CAPITAL_EXPOSURE_LIMIT
 from sourcing_engine.pipeline.conservative_price import calculate_conservative_price
 from sourcing_engine.pipeline.fees import calculate_fees_fba, calculate_fees_fbm
@@ -38,11 +39,16 @@ from sourcing_engine.utils.flags import (
     AMAZON_ON_LISTING,
     AMAZON_ONLY_PRICE,
     AMAZON_STATUS_UNKNOWN,
+    BSR_DECLINING,
     BUY_BOX_ABOVE_AVG90,
+    COMPETITION_GROWING,
     FBM_ONLY,
     HIGH_MOQ,
+    HIGH_OOS,
     INSUFFICIENT_HISTORY,
+    LISTING_TOO_NEW,
     PRICE_MISMATCH_RRP,
+    PRICE_UNSTABLE,
     SINGLE_FBA_SELLER,
 )
 
@@ -200,6 +206,35 @@ def _calculate_match(match: dict) -> dict:
         peak_pct = (bb_now - avg90) / avg90 * 100
         if peak_pct >= BUY_BOX_PEAK_THRESHOLD_PCT:
             risk_flags.append(BUY_BOX_ABOVE_AVG90)
+
+    # History-derived REVIEW flags (HANDOFF WS2.3). Each fires off
+    # the corresponding `market_snapshot` field and the configurable
+    # threshold in `decision_thresholds.yaml::data_signals`. Fields
+    # may be missing (None) on rows that didn't go through
+    # keepa_enrich, on bulk paths where the input csv was sparse, or
+    # for ASINs Keepa hasn't profiled — None always silences the
+    # flag rather than firing on degenerate input.
+    ds = get_data_signals()
+
+    listing_age = match.get("listing_age_days")
+    if listing_age is not None and listing_age < ds.listing_age_min_days:
+        risk_flags.append(LISTING_TOO_NEW)
+
+    joiners = match.get("fba_offer_count_90d_joiners")
+    if joiners is not None and joiners >= ds.competition_joiners_critical:
+        risk_flags.append(COMPETITION_GROWING)
+
+    bsr_slope_90 = match.get("bsr_slope_90d")
+    if bsr_slope_90 is not None and bsr_slope_90 > ds.bsr_decline_threshold:
+        risk_flags.append(BSR_DECLINING)
+
+    oos_pct = match.get("buy_box_oos_pct_90")
+    if oos_pct is not None and oos_pct > ds.oos_threshold_pct:
+        risk_flags.append(HIGH_OOS)
+
+    volatility = match.get("price_volatility_90d")
+    if volatility is not None and volatility > ds.price_volatility_threshold:
+        risk_flags.append(PRICE_UNSTABLE)
 
     risk_flags = list(dict.fromkeys(risk_flags))
 

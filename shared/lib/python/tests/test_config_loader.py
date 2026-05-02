@@ -338,3 +338,80 @@ def test_reset_cache_clears_global_exclusions(tmp_path):
     assert g2.hazmat_strict is False
     assert g1 is not g2
 
+
+
+# --------------------------------------------------------------------------- #
+# DataSignals (HANDOFF WS2.4)                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_data_signals_loads_from_canonical_yaml():
+    """Canonical decision_thresholds.yaml carries the data_signals
+    block as of WS2.4. Pin the values so a typo gets caught early."""
+    cfg.reset_cache()
+    ds = cfg.get_data_signals()
+    assert ds.listing_age_min_days == 365
+    assert ds.history_days_high_confidence == 90
+    assert ds.history_days_medium_confidence == 30
+    assert ds.competition_joiners_warn == 5
+    assert ds.competition_joiners_critical == 10
+    assert ds.bsr_decline_threshold == 0.05
+    assert ds.oos_threshold_pct == 0.15
+    assert ds.price_volatility_threshold == 0.20
+    assert ds.amazon_bb_share_warn_pct == 0.30
+    assert ds.amazon_bb_share_block_pct == 0.70
+
+
+def test_data_signals_uses_defaults_when_block_missing(tmp_path):
+    """Backwards compat: an older decision_thresholds.yaml without
+    the data_signals block must still load. Defaults match the
+    handoff spec."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    # Strip the data_signals block from the canonical thresholds yaml.
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    stripped = raw.split("# === Data signals")[0].rstrip() + "\n"
+    (config_dir / "decision_thresholds.yaml").write_text(stripped)
+    cfg.reset_cache()
+    ds = cfg.get_data_signals(config_dir=config_dir)
+    assert ds.listing_age_min_days == 365
+    assert ds.competition_joiners_critical == 10
+    assert ds.price_volatility_threshold == 0.20
+    cfg.reset_cache()
+
+
+def test_data_signals_validates_warn_below_critical(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    bad = raw.replace(
+        "competition_joiners_warn: 5",
+        "competition_joiners_warn: 20",
+    )
+    (config_dir / "decision_thresholds.yaml").write_text(bad)
+    cfg.reset_cache()
+    with pytest.raises(AssertionError, match="joiners warn"):
+        cfg.get_data_signals(config_dir=config_dir)
+
+
+def test_data_signals_validates_oos_threshold_is_fraction(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    bad = raw.replace(
+        "oos_threshold_pct: 0.15",
+        "oos_threshold_pct: 15",  # operator typo: percent vs fraction
+    )
+    (config_dir / "decision_thresholds.yaml").write_text(bad)
+    cfg.reset_cache()
+    with pytest.raises(AssertionError, match="oos_threshold_pct"):
+        cfg.get_data_signals(config_dir=config_dir)

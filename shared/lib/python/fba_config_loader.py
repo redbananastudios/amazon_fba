@@ -155,8 +155,38 @@ class DecisionThresholds:
     buy_box_peak_threshold_pct: float
 
 
+@dataclass(frozen=True)
+class DataSignals:
+    """History + competition thresholds added in HANDOFF WS2.4.
+
+    Loaded from ``decision_thresholds.yaml::data_signals``. Defaults
+    are conservative — operators tune per-niche over time.
+
+    Used by:
+      - flag-firing in `fba_engine/steps/calculate.py` (LISTING_TOO_NEW,
+        COMPETITION_GROWING, BSR_DECLINING, HIGH_OOS, PRICE_UNSTABLE)
+      - candidate-score data-confidence calc in WS3
+        (history_days_high/medium_confidence)
+      - candidate-score competition dimension in WS3
+        (amazon_bb_share_*, competition_joiners_warn)
+    """
+
+    listing_age_min_days: int
+    history_days_high_confidence: int
+    history_days_medium_confidence: int
+    competition_joiners_warn: int
+    competition_joiners_critical: int
+    bsr_decline_threshold: float
+    oos_threshold_pct: float
+    price_volatility_threshold: float
+    amazon_bb_share_warn_pct: float
+    amazon_bb_share_block_pct: float
+
+
 @lru_cache(maxsize=1)
-def _load_all(config_dir_str: str | None = None) -> tuple[BusinessRules, DecisionThresholds]:
+def _load_all(
+    config_dir_str: str | None = None,
+) -> tuple[BusinessRules, DecisionThresholds, DataSignals]:
     """Internal cached loader keyed on resolved path."""
     config_dir = _find_config_dir(Path(config_dir_str) if config_dir_str else None)
     business_data = _load_yaml(config_dir / "business_rules.yaml")
@@ -196,8 +226,37 @@ def _load_all(config_dir_str: str | None = None) -> tuple[BusinessRules, Decisio
         ),
     )
 
+    # data_signals block added in HANDOFF WS2.4. Permissive defaults
+    # so older config files without the block load cleanly.
+    ds_data = thresh_data.get("data_signals") or {}
+    data_signals = DataSignals(
+        listing_age_min_days=int(ds_data.get("listing_age_min_days", 365)),
+        history_days_high_confidence=int(
+            ds_data.get("history_days_high_confidence", 90)
+        ),
+        history_days_medium_confidence=int(
+            ds_data.get("history_days_medium_confidence", 30)
+        ),
+        competition_joiners_warn=int(ds_data.get("competition_joiners_warn", 5)),
+        competition_joiners_critical=int(
+            ds_data.get("competition_joiners_critical", 10)
+        ),
+        bsr_decline_threshold=float(ds_data.get("bsr_decline_threshold", 0.05)),
+        oos_threshold_pct=float(ds_data.get("oos_threshold_pct", 0.15)),
+        price_volatility_threshold=float(
+            ds_data.get("price_volatility_threshold", 0.20)
+        ),
+        amazon_bb_share_warn_pct=float(
+            ds_data.get("amazon_bb_share_warn_pct", 0.30)
+        ),
+        amazon_bb_share_block_pct=float(
+            ds_data.get("amazon_bb_share_block_pct", 0.70)
+        ),
+    )
+
     _validate(business, thresh)
-    return business, thresh
+    _validate_data_signals(data_signals)
+    return business, thresh, data_signals
 
 
 def _validate(business: BusinessRules, thresh: DecisionThresholds) -> None:
@@ -215,6 +274,28 @@ def _validate(business: BusinessRules, thresh: DecisionThresholds) -> None:
     assert thresh.buy_box_peak_threshold_pct > 0, "peak threshold must be positive"
 
 
+def _validate_data_signals(ds: DataSignals) -> None:
+    """Sanity-check data_signals ranges. Same defensive style as `_validate`."""
+    assert ds.listing_age_min_days > 0, "listing_age_min_days must be positive"
+    assert (
+        ds.history_days_medium_confidence
+        <= ds.history_days_high_confidence
+    ), "medium-confidence history window above high-confidence"
+    assert (
+        ds.competition_joiners_warn
+        <= ds.competition_joiners_critical
+    ), "joiners warn threshold above critical"
+    assert 0 < ds.oos_threshold_pct < 1, "oos_threshold_pct not a fraction"
+    assert (
+        0 < ds.price_volatility_threshold < 5
+    ), "price_volatility_threshold implausible"
+    assert 0 < ds.amazon_bb_share_warn_pct < 1, "amazon_bb_share_warn_pct not a fraction"
+    assert 0 < ds.amazon_bb_share_block_pct < 1, "amazon_bb_share_block_pct not a fraction"
+    assert (
+        ds.amazon_bb_share_warn_pct <= ds.amazon_bb_share_block_pct
+    ), "amazon_bb_share_warn_pct above block_pct"
+
+
 def get_business_rules(config_dir: Path | None = None) -> BusinessRules:
     """Get business constants. Cached."""
     key = str(config_dir.resolve()) if config_dir else None
@@ -225,6 +306,17 @@ def get_thresholds(config_dir: Path | None = None) -> DecisionThresholds:
     """Get decision thresholds. Cached."""
     key = str(config_dir.resolve()) if config_dir else None
     return _load_all(key)[1]
+
+
+def get_data_signals(config_dir: Path | None = None) -> DataSignals:
+    """Get history + competition thresholds. Cached.
+
+    Loaded from ``decision_thresholds.yaml::data_signals``.
+    Returns permissive defaults if the block is absent (added in
+    HANDOFF WS2.4 — older configs without the block keep working).
+    """
+    key = str(config_dir.resolve()) if config_dir else None
+    return _load_all(key)[2]
 
 
 @lru_cache(maxsize=1)
@@ -324,9 +416,11 @@ except (FileNotFoundError, KeyError) as e:
 __all__ = [
     # Typed accessors (preferred)
     "BusinessRules",
+    "DataSignals",
     "DecisionThresholds",
     "GlobalExclusions",
     "get_business_rules",
+    "get_data_signals",
     "get_thresholds",
     "get_global_exclusions",
     "reset_cache",

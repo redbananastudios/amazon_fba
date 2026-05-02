@@ -56,3 +56,21 @@ min_plausible_unit_price: 0.50    # GBP — implied unit price below this -> pri
 
 # === Referral fee fallback ===
 default_referral_fee_pct: 0.15    # 15% — when category-specific rate is unknown
+
+# === Data signals (history + competition) ===
+# Fed by `keepa_client/history.py` helpers. All thresholds drive the
+# candidate-score step in WS3 and the REVIEW flags in
+# `sourcing_engine/utils/flags.py` (LISTING_TOO_NEW,
+# COMPETITION_GROWING, BSR_DECLINING, HIGH_OOS, PRICE_UNSTABLE).
+# Conservative defaults — operators can tune per-niche later.
+data_signals:
+  listing_age_min_days: 365              # under this fires LISTING_TOO_NEW
+  history_days_high_confidence: 90       # for data_confidence = HIGH (PR 5)
+  history_days_medium_confidence: 30     # for data_confidence = MEDIUM (PR 5)
+  competition_joiners_warn: 5            # warn at this (used by score, not flag)
+  competition_joiners_critical: 10       # COMPETITION_GROWING flag fires here
+  bsr_decline_threshold: 0.05            # normalised slope > this → BSR_DECLINING
+  oos_threshold_pct: 0.15                # 15% of window OOS → HIGH_OOS
+  price_volatility_threshold: 0.20       # CV > 0.20 → PRICE_UNSTABLE
+  amazon_bb_share_warn_pct: 0.30         # candidate-score competition dim (PR 5)
+  amazon_bb_share_block_pct: 0.70        # candidate-score competition dim (PR 5)
