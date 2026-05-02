@@ -13,7 +13,9 @@ Output columns appended (per `market_snapshot()` in
   - new_fba_price         (lowest 3rd-party FBA)
   - buy_box_price         (current Buy Box winner)
   - buy_box_avg90         (90-day Buy Box average)
-  - fba_seller_count      (current new offer count, proxy for FBA seller count)
+  - fba_seller_count      (FBA-only count from offers list; falls back
+                           to COUNT_NEW when ``with_offers=False``)
+  - total_offer_count     (FBM + FBA combined from stats.current[11])
   - sales_rank
   - sales_estimate        (Keepa "Bought in past month" — what calculate reads)
 
@@ -55,6 +57,7 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     "buy_box_price",
     "buy_box_avg90",
     "fba_seller_count",
+    "total_offer_count",
     "sales_rank",
     "sales_estimate",
 )

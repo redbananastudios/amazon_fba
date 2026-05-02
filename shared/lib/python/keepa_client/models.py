@@ -139,6 +139,29 @@ def lowest_live_fba_price(offers: list[KeepaOffer]) -> Optional[float]:
     return min(candidates) if candidates else None
 
 
+def count_live_fba_offers(offers: list[KeepaOffer]) -> int:
+    """Count live, NEW-condition, 3rd-party FBA offers.
+
+    Same filter as `lowest_live_fba_price` (condition=NEW, is_fba, not
+    Amazon, lastSeen within 7 days), but returns the count instead of
+    the min price. This is the FBA-only seller count — distinct from
+    Keepa's `stats.current[11]` (COUNT_NEW) which sums FBA + FBM.
+
+    Used by `market_snapshot()` to populate the (correctly-named)
+    `fba_seller_count` field. Decision rules that key on
+    `SINGLE_FBA_SELLER` need real FBA-only count to avoid firing on
+    listings with one FBA + several FBM sellers.
+    """
+    return sum(
+        1
+        for offer in offers
+        if offer.condition == 1
+        and offer.is_fba
+        and not offer.is_amazon
+        and offer.is_live()
+    )
+
+
 def estimate_sales_from_rank_drops(
     rank_csv: list[int] | None, *, window_days: int = 30,
 ) -> Optional[int]:
@@ -279,17 +302,34 @@ class KeepaProduct(BaseModel):
             rank_csv = csv[_CSV_SALES_RANK] if len(csv) > _CSV_SALES_RANK else None
             sales_estimate = estimate_sales_from_rank_drops(rank_csv)
 
+        # FBA seller count: prefer real FBA-only count from the offers
+        # list. Keepa's stats.current[11] (COUNT_NEW) is the total new
+        # offer count (FBM + FBA combined) — using it as
+        # `fba_seller_count` over-counts for listings with FBM sellers
+        # and made every SINGLE_FBA_SELLER / dynamic-seller-ceiling
+        # decision rule wrong by an unknown amount. Fall back to
+        # COUNT_NEW only when offers data wasn't requested
+        # (`with_offers=False`); precision is degraded in that case but
+        # the historical behaviour is preserved for bulk paths that
+        # don't pay the +4-tokens-per-ASIN cost of fetching offers.
+        offers_list = self.offers or []
+        if offers_list:
+            fba_seller_count: Optional[int] = count_live_fba_offers(offers_list)
+        else:
+            fba_seller_count = _stat_int(self.stats, _CSV_COUNT_NEW)
+
         return {
             "asin": self.asin,
             "amazon_price": _stat_money(self.stats, _CSV_AMAZON),
             "new_fba_price": new_fba_price,
             "buy_box_price": _stat_money(self.stats, _CSV_BUY_BOX),
             "buy_box_avg90": _stat_money(self.stats, _CSV_BUY_BOX, avg=True),
-            # Note: Keepa doesn't expose FBA-only count via stats; index 11
-            # (COUNT_NEW) is the total new-offer count (FBM + FBA combined).
-            # We surface it as `fba_seller_count` to match the legacy
-            # CSV-export schema (`load_market_data` → "New Offer Count: Current").
-            "fba_seller_count": _stat_int(self.stats, _CSV_COUNT_NEW),
+            "fba_seller_count": fba_seller_count,
+            # Total new-offer count (FBM + FBA combined) from
+            # stats.current[11]. Some calculators legitimately want the
+            # total — e.g. peak-buying detection looking at competition
+            # density independent of fulfilment channel.
+            "total_offer_count": _stat_int(self.stats, _CSV_COUNT_NEW),
             "sales_rank": _stat_int(self.stats, _CSV_SALES_RANK),
             "sales_estimate": _coerce_positive_int(sales_estimate),
         }

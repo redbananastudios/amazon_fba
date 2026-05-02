@@ -100,7 +100,8 @@ Enrichment columns (added by `keepa_enrich`):
 | `new_fba_price` | Keepa | Lowest 3rd-party FBA |
 | `buy_box_price` | Keepa | Current Buy Box winner |
 | `buy_box_avg90` | Keepa | 90-day Buy Box average |
-| `fba_seller_count` | Keepa | Total new offer count (proxy for FBA seller count) |
+| `fba_seller_count` | Keepa | Live 3rd-party FBA offers (offers list); falls back to total new offer count when `with_offers=False` |
+| `total_offer_count` | Keepa | Total new offer count (FBM + FBA combined) from `stats.current[11]` |
 | `sales_rank` | Keepa | Current sales rank |
 | `sales_estimate` | Keepa | "Bought in past month" |
 

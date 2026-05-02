@@ -312,6 +312,164 @@ class TestKeepaOffersAndBsrDrops:
         assert snap["sales_estimate"] == 250
 
 
+class TestFbaSellerCountFromOffers:
+    """Pin the fba_seller_count fix: when the offers list is populated,
+    count only live 3rd-party FBA offers (excluding Amazon, FBM, used).
+
+    Previously `fba_seller_count` was sourced from `stats.current[11]`
+    (COUNT_NEW), which is the total new-offer count summed across FBM
+    + FBA — over-counting for any listing with FBM sellers and breaking
+    every SINGLE_FBA_SELLER / dynamic-seller-ceiling decision rule by
+    an unknown amount."""
+
+    def test_count_live_fba_offers_basic(self):
+        from keepa_client.models import (
+            KeepaOffer, count_live_fba_offers, _now_keepa_minutes,
+        )
+        now = _now_keepa_minutes()
+        offers = [
+            KeepaOffer(sellerId="A1", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 10, offerCSV=[100, 1500, 0]),
+            KeepaOffer(sellerId="A2", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 60, offerCSV=[100, 1600, 0]),
+            KeepaOffer(sellerId="A3", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 200, offerCSV=[100, 1700, 0]),
+        ]
+        assert count_live_fba_offers(offers) == 3
+
+    def test_count_live_fba_offers_excludes_amazon_fbm_used_stale(self):
+        from keepa_client.models import (
+            KeepaOffer, count_live_fba_offers, _now_keepa_minutes,
+        )
+        now = _now_keepa_minutes()
+        offers = [
+            # Live FBA NEW from 3rd-party — counts.
+            KeepaOffer(sellerId="A1", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 10, offerCSV=[100, 1500, 0]),
+            # Amazon's own FBA — excluded (Buy Box dynamics differ).
+            KeepaOffer(sellerId="AMZ", isFBA=True, isAmazon=True, condition=1,
+                       lastSeen=now - 10, offerCSV=[100, 1499, 0]),
+            # Live FBM — excluded (different fulfilment channel).
+            KeepaOffer(sellerId="A2", isFBA=False, isAmazon=False, condition=1,
+                       lastSeen=now - 10, offerCSV=[100, 1100, 0]),
+            # Used — excluded (we sell new only).
+            KeepaOffer(sellerId="A3", isFBA=True, isAmazon=False, condition=2,
+                       lastSeen=now - 10, offerCSV=[100, 800, 0]),
+            # Stale lastSeen — excluded (old inventory record).
+            KeepaOffer(sellerId="A4", isFBA=True, isAmazon=False, condition=1,
+                       lastSeen=now - 5_000_000, offerCSV=[100, 999, 0]),
+        ]
+        # Only A1 qualifies — one live, NEW, 3rd-party FBA offer.
+        assert count_live_fba_offers(offers) == 1
+
+    def test_count_live_fba_offers_empty_returns_zero(self):
+        from keepa_client.models import count_live_fba_offers
+        assert count_live_fba_offers([]) == 0
+
+    def test_market_snapshot_uses_offers_count_when_offers_populated(self):
+        """3 FBA + 2 FBM live offers + Keepa says COUNT_NEW=10. The
+        snapshot should report fba_seller_count=3 (offer-driven truth),
+        not 10 (the COUNT_NEW combined count)."""
+        from keepa_client.models import _now_keepa_minutes
+        now = _now_keepa_minutes()
+        # COUNT_NEW=10 in stats.current[11] — large enough that drift
+        # is obvious if the fix regresses.
+        current = [-1] * 19
+        current[11] = 10
+        payload = {
+            "asin": "B0HASOFFERS",
+            "stats": {"current": current},
+            "offers": [
+                # 3 live 3rd-party FBA offers
+                {"sellerId": "A1", "isFBA": True, "isAmazon": False,
+                 "condition": 1, "lastSeen": now - 10,
+                 "offerCSV": [100, 1500, 0]},
+                {"sellerId": "A2", "isFBA": True, "isAmazon": False,
+                 "condition": 1, "lastSeen": now - 60,
+                 "offerCSV": [100, 1550, 0]},
+                {"sellerId": "A3", "isFBA": True, "isAmazon": False,
+                 "condition": 1, "lastSeen": now - 200,
+                 "offerCSV": [100, 1600, 0]},
+                # 2 live FBM offers — must NOT count
+                {"sellerId": "B1", "isFBA": False, "isAmazon": False,
+                 "condition": 1, "lastSeen": now - 30,
+                 "offerCSV": [100, 1100, 0]},
+                {"sellerId": "B2", "isFBA": False, "isAmazon": False,
+                 "condition": 1, "lastSeen": now - 30,
+                 "offerCSV": [100, 1200, 0]},
+            ],
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["fba_seller_count"] == 3
+        # total_offer_count surfaces the legacy COUNT_NEW for callers
+        # that legitimately want competition density across channels.
+        assert snap["total_offer_count"] == 10
+
+    def test_market_snapshot_falls_back_to_count_new_without_offers(self):
+        """When the caller didn't request offers (with_offers=False —
+        the default for bulk paths to save tokens), fba_seller_count
+        falls back to stats.current[11]. Precision is degraded (FBM
+        + FBA combined) but historical behaviour is preserved."""
+        current = [-1] * 19
+        current[11] = 7  # COUNT_NEW
+        payload = {
+            "asin": "B0NOOFFERS",
+            "stats": {"current": current},
+            # No "offers" key → empty offers list.
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["fba_seller_count"] == 7
+        assert snap["total_offer_count"] == 7
+
+    def test_market_snapshot_offers_with_zero_live_fba_returns_zero(self):
+        """Offer list populated but no offer passes the live-FBA filter
+        (e.g. Amazon-only listing, all stale). Don't fall back to
+        COUNT_NEW — the offers list is authoritative when present."""
+        from keepa_client.models import _now_keepa_minutes
+        now = _now_keepa_minutes()
+        current = [-1] * 19
+        current[11] = 5  # COUNT_NEW says 5 — but offers say 0 live FBA
+        payload = {
+            "asin": "B0ALLAMZ",
+            "stats": {"current": current},
+            "offers": [
+                # Amazon's own offer (excluded)
+                {"sellerId": "AMZ", "isFBA": True, "isAmazon": True,
+                 "condition": 1, "lastSeen": now - 10,
+                 "offerCSV": [100, 2300, 0]},
+                # Stale 3rd-party FBA (excluded)
+                {"sellerId": "A1", "isFBA": True, "isAmazon": False,
+                 "condition": 1, "lastSeen": now - 5_000_000,
+                 "offerCSV": [100, 1500, 0]},
+            ],
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["fba_seller_count"] == 0
+        assert snap["total_offer_count"] == 5
+
+    def test_market_snapshot_total_offer_count_independent_of_offers(self):
+        """total_offer_count always pulls from stats.current[11], even
+        when the offers list is populated. It is the FBM + FBA combined
+        new-offer count and is independent of the FBA-only
+        fba_seller_count."""
+        from keepa_client.models import _now_keepa_minutes
+        now = _now_keepa_minutes()
+        current = [-1] * 19
+        current[11] = 12
+        payload = {
+            "asin": "B0BOTH",
+            "stats": {"current": current},
+            "offers": [
+                {"sellerId": "A1", "isFBA": True, "isAmazon": False,
+                 "condition": 1, "lastSeen": now - 10,
+                 "offerCSV": [100, 1500, 0]},
+            ],
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["fba_seller_count"] == 1
+        assert snap["total_offer_count"] == 12
+
+
 class TestKeepaSellerModel:
     def test_seller_with_asin_list(self):
         payload = {
