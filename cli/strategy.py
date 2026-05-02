@@ -315,6 +315,19 @@ def _build_context(args: argparse.Namespace) -> dict[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point invoked by run.py when ``--strategy`` is in argv."""
+    # Windows consoles default to cp1252 which can't encode the unicode
+    # characters our verdict / score / reason strings carry (→, ►, £).
+    # Reconfigure stdout/stderr to UTF-8 with replacement fallback so a
+    # rogue character can never crash a verdict print mid-flow. Python
+    # 3.7+ guarantees `reconfigure` on TextIOWrapper; guard anyway in
+    # case stdout was redirected to something exotic.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
     args = _parse_args(argv if argv is not None else sys.argv[1:])
 
     yaml_path = _resolve_strategy_yaml(args.strategy)
@@ -438,8 +451,8 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
         print(f"ASIN:    {asin}")
         print("=" * 72)
         if next_action:
-            print(f"  ► {next_action}")
-        print(f"  Decision (engine):     {decision} — {reason}")
+            print(f"  >> {next_action}")
+        print(f"  Decision (engine):     {decision} - {reason}")
     else:
         print(f"VERDICT: {decision}   ASIN: {asin}")
         print("=" * 72)
