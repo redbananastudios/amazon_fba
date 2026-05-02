@@ -74,3 +74,82 @@ data_signals:
   price_volatility_threshold: 0.20       # CV > 0.20 → PRICE_UNSTABLE
   amazon_bb_share_warn_pct: 0.30         # candidate-score competition dim (PR 5)
   amazon_bb_share_block_pct: 0.70        # candidate-score competition dim (PR 5)
+
+# === Candidate scoring (HANDOFF WS3) ===
+# 4-dimension 0-100 score (Demand/Stability/Competition/Margin, 25 each)
+# + STRONG/OK/WEAK/FAIL bands. Independent of decision (SHORTLIST/REVIEW/
+# REJECT) — surfaces "is this a strong product even if profitable?".
+# Every threshold lives here so tuning never requires code changes.
+candidate_scoring:
+  # Band cutoffs against the composite 0-100 score.
+  bands:
+    strong: 75       # >= 75 → STRONG
+    ok: 50           # 50-74 → OK
+    weak: 25         # 25-49 → WEAK; <25 → FAIL
+  # Demand dimension: 0-25 (10 sales + 10 BSR slope + 5 review velocity)
+  demand:
+    # Sales tiers: monthly units → points (descending). 10 if >=200,
+    # 7 if >=100, 4 if >=50, 2 if >=20, else 0. Length contract:
+    # len(points) == len(thresholds) + 1 — the trailing entry is the
+    # below-all-thresholds default.
+    sales_tier_thresholds: [200, 100, 50, 20]
+    sales_tier_points: [10, 7, 4, 2, 0]
+    # BSR slope sign — improving (negative) wins. Flat band uses absolute
+    # value: |slope| <= flat_threshold counts as flat.
+    bsr_flat_threshold: 0.05
+    bsr_improving_points: 10
+    bsr_flat_points: 7
+    bsr_declining_points: 0
+    # Review velocity over 90d (review_count_now - review_count_90d_ago).
+    review_rising_points: 5
+    review_flat_points: 2
+    review_falling_points: 0
+  # Stability dimension: 0-25 (10 OOS + 10 volatility + 5 listing age)
+  stability:
+    oos_pct_thresholds: [0.05, 0.15, 0.30]   # <5%=10, <15%=6, <30%=2, else 0
+    oos_points: [10, 6, 2, 0]
+    volatility_thresholds: [0.10, 0.20, 0.35] # <0.10=10, <0.20=6, <0.35=2, else 0
+    volatility_points: [10, 6, 2, 0]
+    age_thresholds: [730, 365, 180]  # >=2yr=5, >=1yr=3, >=6mo=1, else 0
+    age_points: [5, 3, 1, 0]
+  # Competition dimension: 0-25 (10 seller ceiling + 10 joiners + 5 BB share)
+  competition:
+    # Dynamic seller-ceiling table: ceiling depends on sales_estimate.
+    # Tuned against the legacy phase3_scoring.js mapping.
+    seller_ceiling_table:
+      - {min_sales: 0,    ceiling: 3}
+      - {min_sales: 50,   ceiling: 5}
+      - {min_sales: 100,  ceiling: 8}
+      - {min_sales: 200,  ceiling: 12}
+      - {min_sales: 500,  ceiling: 20}
+    # Points awarded based on row's fba_seller_count vs the ceiling.
+    seller_ceiling_below_points: 10  # fba_seller_count < ceiling
+    seller_ceiling_at_points: 5      # fba_seller_count == ceiling
+    seller_ceiling_over_points: 0    # fba_seller_count > ceiling
+    joiner_thresholds: [2, 5, 10]   # <=2=10, <=5=6, <=10=2, else 0
+    joiner_points: [10, 6, 2, 0]
+    # Amazon BB share thresholds reuse data_signals.amazon_bb_share_*.
+    bb_share_lt_warn_points: 5      # < warn (default 0.30) → 5
+    bb_share_lt_block_points: 3     # warn..block → 3
+    bb_share_lt_total_points: 1     # block..1.0 → 1
+    bb_share_at_max_points: 0       # exactly 1.0 — Amazon owns the listing
+  # Margin dimension: 0-25 (15 ROI + 10 absolute profit). Reads
+  # roi_conservative + profit_conservative from the row — does NOT
+  # re-derive from buy_cost / fees. Missing → 0 points + reason.
+  margin:
+    roi_thresholds: [0.50, 0.30, 0.20]   # >=50%=15, >=30%=10, >=20%=5, else 0
+    roi_points: [15, 10, 5, 0]
+    profit_thresholds: [8.0, 4.0, 2.50]  # >=£8=10, >=£4=6, >=£2.50=3, else 0
+    profit_points: [10, 6, 3, 0]
+  # Data confidence (HIGH/MEDIUM/LOW) — independent of strength. Read
+  # by the operator to decide how much to trust the score.
+  data_confidence:
+    high_history_days: 90
+    medium_history_days: 30
+    # Required fields present for HIGH; ≥3 of these for MEDIUM.
+    required_fields:
+      - rating
+      - review_count
+      - fba_seller_count
+      - sales_estimate
+      - buy_box_oos_pct_90

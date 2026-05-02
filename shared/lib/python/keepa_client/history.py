@@ -309,6 +309,35 @@ def price_volatility(
 # ────────────────────────────────────────────────────────────────────────
 
 
+def review_count_change(
+    review_count_csv: Any, *, window_days: int = 90,
+) -> Optional[int]:
+    """Net change in review count across the window (last - first).
+
+    Used by `candidate_score` for the review-velocity dimension. A
+    positive value means the listing is gaining reviews — a meaningful
+    leading indicator of demand, especially when sales_estimate is
+    sparse. Zero = flat; negative = listing-archive style cleanup
+    (Amazon sometimes prunes flagged reviews — rare). None means
+    insufficient data points in window.
+
+    Counts the first and last non-sentinel observations inside the
+    window. If only one observation exists in the window, returns 0
+    (no change observable) — *not* None — so the candidate-score's
+    "flat → 2 points" path still scores it.
+    """
+    pairs = _window_pairs_with_sentinels(
+        review_count_csv, window_days=window_days,
+    )
+    valid = [(t, v) for t, v in pairs if v is not None]
+    if not valid:
+        return None
+    valid_sorted = sorted(valid, key=lambda p: p[0])
+    if len(valid_sorted) == 1:
+        return 0
+    return valid_sorted[-1][1] - valid_sorted[0][1]
+
+
 def listing_age_days(
     tracking_since_minutes: Optional[int],
 ) -> Optional[int]:

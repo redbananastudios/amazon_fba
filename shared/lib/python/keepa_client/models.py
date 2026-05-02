@@ -392,6 +392,7 @@ class KeepaProduct(BaseModel):
             offer_count_trend,
             out_of_stock_pct,
             price_volatility,
+            review_count_change,
             yoy_bsr_ratio,
         )
 
@@ -447,6 +448,13 @@ class KeepaProduct(BaseModel):
             "price_volatility_90d": price_volatility(bb_csv, window_days=90),
             "listing_age_days": listing_age_days(self.tracking_since),
             "yoy_bsr_ratio": yoy_bsr_ratio(rank_csv),
+            # Review velocity (PR 5) — net change in review_count over
+            # the 90d window. Drives the candidate_score Demand
+            # dimension's review-velocity sub-score.
+            "review_velocity_90d": review_count_change(
+                csv[_CSV_COUNT_REVIEWS] if len(csv) > _CSV_COUNT_REVIEWS else None,
+                window_days=90,
+            ),
         }
 
 
