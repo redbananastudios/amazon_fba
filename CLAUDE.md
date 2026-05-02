@@ -6,17 +6,55 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-01 late evening — single-ASIN verdict workflow shipped + tuned against real-world product data.
-**Currently working on:** Nothing in flight. Engine now has full coverage of three operator workflows: category sweep (keepa_finder), competitor walk (seller_storefront_csv), single-ASIN verdict (single_asin). All produce CSV + (where applicable) XLSX + auto-uploaded Google Sheet. Single branch (main) holds all work.
-**Status:** main at HEAD of #51. **1021 Python tests pass.** MCP suite untouched (110 unit + 5 integration still green). Working tree clean.
+**Last updated:** 2026-05-02 afternoon — `HANDOFF_candidate_validation.md` shipped end-to-end across PRs #52-#57.
+**Currently working on:** Nothing in flight. The handoff is fully implemented; every supplier_pricelist + keepa_niche XLSX now carries data-driven candidate strength + data confidence visible at a glance. Single branch (main) holds all work.
+**Status:** main at HEAD of #57. **1166 Python tests pass** (was 1021 baseline; +145 net across the 6-PR series). MCP suite untouched (110 unit + 5 integration still green). Working tree clean after CLAUDE.md refresh.
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                          # 110/110 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 1021/1021 in ~43s
+       fba_engine/strategies/tests/ cli/tests/                       # 1166/1166 in ~43s
 ```
+
+### What landed this session (2026-05-02 afternoon — candidate validation handoff)
+
+Implementation of [`docs/HANDOFF_candidate_validation.md`](docs/HANDOFF_candidate_validation.md)
+across 6 reviewable PRs. Each PR reviewed by code-reviewer agent before
+merge; reviewer caught real bugs in PRs #53, #56, #57 (all fixed pre-commit).
+
+| PR | Workstream | Summary | Tests |
+|---|---|---|---|
+| **#52** (bug fix) | WS1.1 | `fba_seller_count` was sourced from `stats.current[11]` (FBM+FBA combined). New `count_live_fba_offers` helper returns FBA-only count from offers list; falls back to COUNT_NEW when `with_offers=False` (degraded precision documented). New `total_offer_count` snapshot key for callers that legitimately want the combined total. | +9 |
+| **#53** (feature) | WS1.2 + 1.3 | Schema unification — API path (`market_snapshot`) now emits the same column set as the CSV-export path (`load_market_data`). 9 new keys (`buy_box_avg30`, `sales_rank_avg90`, `rating`, `review_count`, `parent_asin`, `package_weight_g`, `package_volume_cm3`, `category_root`). KeepaStats gains `avg30` lane. New `_csv_last_value` helper (with odd-length-array fix caught by reviewer). Dead `PRICE_UNSTABLE` constant removed. Schema-parity test pinned. | +19 |
+| **#54** (feature) | WS2.1 | New `keepa_client/history.py` time-series module with 8 helpers: `parse_keepa_csv_series`, `bsr_slope` (LSQ slope, mean-normalised, fraction-per-day units), `offer_count_trend`, `out_of_stock_pct`, `buy_box_winner_flips`, `price_volatility` (population CV), `listing_age_days`, `yoy_bsr_ratio`. **90% line coverage** on the module. `_window_pairs_with_sentinels` explicitly named for OOS-vs-everyone-else asymmetry. | +44 |
+| **#55** (feature) | WS2.2 + 2.3 + 2.4 | Wired history into `market_snapshot()`: 9 new fields (`bsr_slope_30d/90d/365d`, `fba_offer_count_90d_start/joiners`, `buy_box_oos_pct_90`, `price_volatility_90d`, `listing_age_days`, `yoy_bsr_ratio`). 5 new REVIEW flags fire from `calculate.py`: `LISTING_TOO_NEW`, `COMPETITION_GROWING`, `BSR_DECLINING`, `HIGH_OOS`, `PRICE_UNSTABLE` (re-introduced with real computation). New `data_signals:` config block + `DataSignals` dataclass + `get_data_signals()` accessor with permissive defaults for old configs. | +24 |
+| **#56** (feature) | WS3.1-3.5 | New `fba_engine/steps/candidate_score.py` step. **Pure additive** — does NOT alter SHORTLIST/REVIEW/REJECT. Adds `candidate_score` (0-100 int), `candidate_band` (STRONG/OK/WEAK/FAIL), `candidate_reasons`, `data_confidence` (HIGH/MEDIUM/LOW), `data_confidence_reasons`. 4 dimensions × 25 points (Demand/Stability/Competition/Margin). All thresholds in YAML (`candidate_scoring:` block) — zero magic numbers. `_validate_tier_arrays` enforces `len(points) == len(thresholds)+1` at config load. New `review_velocity_90d` field via `history.review_count_change`. Wired into both `supplier_pricelist.yaml` and `keepa_niche.yaml`. | +35 |
+| **#57** (feature) | WS3.6 | XLSX colour-coding + sort by `candidate_score` desc within each decision band + per-row leading line in markdown report (`**STRONG** (HIGH confidence) — score 82/100`). Stable sort (`kind="stable"`) preserves insertion order on ties. NaN-truthy bug in markdown summary caught by reviewer + fixed via `_clean_str` helper. | +14 |
+
+**Operator-facing change:** every SHORTLIST/REVIEW row in the XLSX now
+carries `candidate_band` + `candidate_score` + `data_confidence` columns
+adjacent to `decision`. Colour-coded:
+- STRONG / HIGH → green fill + bold green font (act with confidence)
+- STRONG / LOW or MEDIUM → amber fill + bold dark-amber font (score might be right, trust it less)
+- OK / WEAK → no special highlight (band label visible)
+- FAIL → grey fill + grey font (greyed out)
+
+Sheet sorted SHORTLIST first, then REVIEW; within each band,
+candidate_score desc. Markdown report carries the same data with a
+per-row bullet summary above each band's table.
+
+**Decision logic unchanged.** SHORTLIST/REVIEW/REJECT counts identical
+before and after this work. The handoff was strict on this: candidate
+scoring is purely additive visibility, never gating.
+
+**The four sign-off questions** the operator can now answer in 5
+seconds at a glance:
+1. *Is this product profitable?* → `decision`
+2. *Is the data telling a strong story?* → `candidate_band`
+3. *Do I trust the data?* → `data_confidence`
+4. *Why?* → `candidate_reasons`, `data_confidence_reasons`
 
 ### What landed this session (2026-05-01)
 
