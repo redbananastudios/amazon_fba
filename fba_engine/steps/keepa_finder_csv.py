@@ -141,6 +141,12 @@ KEEPA_FINDER_CANONICAL_COLUMNS: tuple[str, ...] = (
     "review_count",                # ← Reviews: Rating Count
     "delta_buy_box_30d_pct",
     "delta_buy_box_90d_pct",
+    # Days-since-tracking-start, derived from Keepa "Tracking since"
+    # column. Lifts the candidate-score data_confidence above LOW for
+    # mature listings (otherwise every Browser-CSV row defaults to LOW
+    # because history_days is unknown).
+    "listing_age_days",
+    "history_days",
     "amazon_url",
 )
 
@@ -383,7 +389,52 @@ def _row_from_keepa(
     # pricelists with bulk-buy minimums.
     out["buy_cost"] = 0.0
     out["moq"] = 1
+
+    # listing_age_days + history_days from Keepa "Tracking since"
+    # column. Without these, the candidate-score data_confidence calc
+    # defaults to LOW for every Browser-CSV row — pinning the entire
+    # operator output to LOW confidence even on listings with years
+    # of history. Computing days-since-tracking from the column lifts
+    # mature listings out of the artificial LOW-confidence cap.
+    tracking_str = coerce_str(row.get("Tracking since"))
+    out["listing_age_days"] = _parse_keepa_date_to_age_days(tracking_str)
+    # history_days drives candidate_score's data_confidence threshold
+    # (HIGH ≥90, MEDIUM ≥30). Keepa's data window is 90d so we cap
+    # at 90 — anything older than 90d effectively has 90d of usable
+    # history regardless of when tracking started. Listings tracked
+    # less than 90d carry the partial number for honest confidence
+    # downgrade.
+    if out["listing_age_days"] is not None:
+        out["history_days"] = min(out["listing_age_days"], 90)
+    else:
+        # No tracking-since column / unparseable → leave None so
+        # candidate-score sees "history_days unknown" rather than a
+        # spurious 90 that fakes high confidence.
+        out["history_days"] = None
     return out
+
+
+def _parse_keepa_date_to_age_days(raw: str | None) -> int | None:
+    """Parse Keepa's "Tracking since" / "Listed since" date format
+    (YYYY/MM/DD or YYYY-MM-DD) and return days from today.
+
+    Returns None for empty / unparseable input. Negative deltas
+    (clock skew) clamp to 0.
+    """
+    if not raw or raw.strip() in ("", "-"):
+        return None
+    s = raw.strip()
+    # Keepa exports both 2022/07/15 and 2022-07-15 in different
+    # contexts; accept both.
+    from datetime import date, datetime as dt
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d"):
+        try:
+            parsed = dt.strptime(s, fmt).date()
+        except ValueError:
+            continue
+        delta = (date.today() - parsed).days
+        return max(0, delta)
+    return None
 
 
 def _leaf_category(row: pd.Series) -> str:

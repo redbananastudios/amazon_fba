@@ -940,9 +940,13 @@ class TestOaCsvStrategy:
         strat = load_strategy(yaml_path)
         assert strat.name == "oa_csv"
         assert strat.input_discover is True
-        # Full chain: discover -> keepa_enrich -> calculate -> decide.
+        # Full chain: discover -> keepa_enrich -> calculate -> decide
+        # -> candidate_score -> validate_opportunity (the last two
+        # wired post-#71 so OA runs emit the BUY/SOURCE_ONLY/...
+        # verdict alongside the SHORTLIST/REVIEW/REJECT decision).
         assert [s.name for s in strat.steps] == [
             "discover", "keepa_enrich", "calculate", "decide",
+            "candidate_score", "validate_opportunity",
         ]
         for step in strat.steps:
             __import__(step.module)
@@ -1080,9 +1084,14 @@ class TestKeepaFinderStrategy:
         strat = load_strategy(yaml_path)
         assert strat.name == "keepa_finder"
         assert strat.input_discover is True
-        # Five steps: discover → enrich (leads) → calculate → decide → supplier_leads.
+        # discover → enrich (leads) → calculate → decide →
+        # candidate_score → validate_opportunity → supplier_leads.
+        # candidate_score + validate_opportunity wired in PR (post-#71)
+        # so bulk Browser-CSV runs also produce the operator-facing
+        # BUY/SOURCE_ONLY/NEGOTIATE/WATCH/KILL verdict.
         assert [s.name for s in strat.steps] == [
-            "discover", "enrich", "calculate", "decide", "supplier_leads",
+            "discover", "enrich", "calculate", "decide",
+            "candidate_score", "validate_opportunity", "supplier_leads",
         ]
         # All step modules import.
         for step in strat.steps:
@@ -1180,10 +1189,14 @@ class TestSellerStorefrontCsvStrategy:
         strat = load_strategy(yaml_path)
         assert strat.name == "seller_storefront_csv"
         assert strat.input_discover is True
-        # Five steps mirror keepa_finder.yaml — discover swaps in the
-        # storefront-specific module, the rest are shared.
+        # Mirrors keepa_finder.yaml — discover swaps in the
+        # storefront-specific module, the rest are shared (including
+        # the candidate_score + validate_opportunity steps wired
+        # post-#71 so storefront walks also emit the operator-facing
+        # BUY/SOURCE_ONLY/NEGOTIATE/WATCH/KILL verdict).
         assert [s.name for s in strat.steps] == [
-            "discover", "enrich", "calculate", "decide", "supplier_leads",
+            "discover", "enrich", "calculate", "decide",
+            "candidate_score", "validate_opportunity", "supplier_leads",
         ]
         for step in strat.steps:
             __import__(step.module)
