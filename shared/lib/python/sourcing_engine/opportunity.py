@@ -555,7 +555,51 @@ def predict_seller_velocity(row: dict) -> Optional[dict[str, int]]:
 
     bb_share = _num(row.get("amazon_bb_pct_90"))
     non_amazon_share = sales * (1.0 - (bb_share if bb_share is not None else 0.0))
-    equal_share = non_amazon_share / fba
+
+    # PR G — share-aware path. When Keepa's per-seller buyBoxStats is
+    # populated, the new entrant's expected share is the median of the
+    # existing FBA sellers' percentageWon (a defensible "you'll perform
+    # like a typical competitor here" assumption). Without it, fall
+    # back to equal-split (1 / fba_seller_count).
+    seller_stats = row.get("buy_box_seller_stats")
+    entrant_share = None
+    share_source = "equal-split"
+    if isinstance(seller_stats, dict) and seller_stats:
+        # Filter to non-Amazon FBA sellers' percentageWon — those are
+        # the entrant's competitors. Amazon's percentageWon is
+        # captured separately by amazon_bb_pct_90.
+        fba_sellers_pct: list[float] = []
+        for sid, stats in seller_stats.items():
+            if not isinstance(stats, dict):
+                continue
+            if not stats.get("isFBA"):
+                continue
+            if str(sid).upper().startswith("AMAZON") or sid in ("AMZN",):
+                continue
+            pct = stats.get("percentageWon")
+            try:
+                pct_f = float(pct) / 100.0 if pct is not None else None
+            except (TypeError, ValueError):
+                continue
+            if pct_f is not None and pct_f > 0:
+                fba_sellers_pct.append(pct_f)
+        if fba_sellers_pct:
+            # Median of the existing competitors' shares is the
+            # entrant's "expected" performance. Smaller than the max
+            # (top performer is hard to dethrone), larger than the
+            # tail (operator typically prices to compete, not to lose).
+            sorted_pct = sorted(fba_sellers_pct)
+            n = len(sorted_pct)
+            entrant_share = (
+                sorted_pct[n // 2] if n % 2 == 1
+                else (sorted_pct[n // 2 - 1] + sorted_pct[n // 2]) / 2
+            )
+            share_source = f"median-of-{n}-sellers"
+
+    if entrant_share is not None:
+        equal_share = sales * entrant_share
+    else:
+        equal_share = non_amazon_share / fba
 
     multiplier = 1.0
     joiners = _num(row.get("fba_offer_count_90d_joiners"))
@@ -583,6 +627,7 @@ def predict_seller_velocity(row: dict) -> Optional[dict[str, int]]:
         "low": max(0, int(round(low))),
         "mid": max(0, int(round(mid))),
         "high": max(0, int(round(high))),
+        "share_source": share_source,
     }
 
 
@@ -633,11 +678,19 @@ def validate_opportunity(
     velocity_low = velocity["low"] if velocity else None
     velocity_mid = velocity["mid"] if velocity else None
     velocity_high = velocity["high"] if velocity else None
+    velocity_share_source = (
+        velocity.get("share_source") if velocity else None
+    )
 
     velocity_fields = {
         "predicted_velocity_low": velocity_low,
         "predicted_velocity_mid": velocity_mid,
         "predicted_velocity_high": velocity_high,
+        # PR G — "equal-split" or "median-of-N-sellers". Surfaces
+        # whether the prediction used real per-seller BB share data
+        # (from Keepa stats.buyBoxStats) or fell back to the equal
+        # split. Operator can spot which assumption was used.
+        "predicted_velocity_share_source": velocity_share_source,
     }
 
     # 1. KILL — always wins.

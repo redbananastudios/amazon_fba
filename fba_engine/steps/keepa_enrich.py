@@ -116,6 +116,11 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     # carries the chart-readable count so the validator can fall
     # back to the lower number when they disagree by >50%.
     "bsr_drops_30d",
+    # Per-seller BB stats dict from Keepa stats.buyBoxStats (PR G).
+    # Mirrors Browser CSV's BB Statistics tab. Used by the share-aware
+    # velocity predictor to replace equal-split with real distribution.
+    # None when listing has no BB history.
+    "buy_box_seller_stats",
 )
 
 DEFAULT_KEEPA_CONFIG_PATH: Path = (
