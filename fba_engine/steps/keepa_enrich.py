@@ -106,6 +106,10 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     # steady sellers from spiky ones at the same average rank.
     "buy_box_min_365d",
     "sales_rank_cv_90d",
+    # Variation cluster size (PR C). 1 = standalone; >1 = parent or
+    # member of a variant cluster. Surfaces niche-looking parents
+    # whose aggregated demand across children may be much higher.
+    "variation_count",
 )
 
 DEFAULT_KEEPA_CONFIG_PATH: Path = (

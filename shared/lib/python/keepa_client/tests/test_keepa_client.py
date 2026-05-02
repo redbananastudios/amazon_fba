@@ -636,6 +636,25 @@ class TestSchemaUnification:
         snap = KeepaProduct.model_validate(payload).market_snapshot()
         assert snap["category_root"] is None
 
+    def test_variation_count_one_for_standalone(self):
+        # No variations field → standalone product.
+        snap = KeepaProduct.model_validate({"asin": "B0SOLO"}).market_snapshot()
+        assert snap["variation_count"] == 1
+
+    def test_variation_count_reflects_keepa_variations_list(self):
+        # Parent ASIN with 4 children — variation_count = 4.
+        payload = {
+            "asin": "B0PARENT",
+            "variations": [
+                {"asin": "B0CHILD1", "attributes": [{"name": "Color", "value": "Red"}]},
+                {"asin": "B0CHILD2", "attributes": [{"name": "Color", "value": "Blue"}]},
+                {"asin": "B0CHILD3", "attributes": [{"name": "Color", "value": "Green"}]},
+                {"asin": "B0CHILD4", "attributes": [{"name": "Color", "value": "Black"}]},
+            ],
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["variation_count"] == 4
+
     def test_snapshot_keys_match_keepa_enrich_columns(self):
         """Schema parity: the set of keys emitted by `market_snapshot`
         must equal `set(KEEPA_ENRICH_COLUMNS) | {"asin"}`. Drift here
