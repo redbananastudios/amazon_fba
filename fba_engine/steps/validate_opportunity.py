@@ -46,6 +46,10 @@ OPPORTUNITY_COLUMNS: tuple[str, ...] = (
     "predicted_velocity_low",
     "predicted_velocity_mid",
     "predicted_velocity_high",
+    # PR G — share-source label so operator can see whether the
+    # prediction used real per-seller BB share data or fell back to
+    # equal-split. Values: "equal-split" | "median-of-N-sellers".
+    "predicted_velocity_share_source",
 )
 
 
@@ -86,6 +90,7 @@ def add_opportunity_verdict(df: pd.DataFrame) -> pd.DataFrame:
                 "predicted_velocity_low": None,
                 "predicted_velocity_mid": None,
                 "predicted_velocity_high": None,
+                "predicted_velocity_share_source": None,
             })
         rows.append(d)
     return pd.DataFrame(rows)

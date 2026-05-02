@@ -525,11 +525,20 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
     v_mid = row.get("predicted_velocity_mid")
     v_high = row.get("predicted_velocity_high")
     p_unit = row.get("profit_conservative") or row.get("profit_current") or 0
+    share_src = row.get("predicted_velocity_share_source")
     if (
         any(not _is_missing(v) for v in (v_low, v_mid, v_high))
         and float(p_unit) > 0
     ):
-        print("Velocity (predicted units/mo at your share):")
+        # Show the share source label so the operator knows which
+        # assumption fed the prediction (equal-split fallback or
+        # median-of-real-sellers from Keepa's buyBoxStats).
+        src_suffix = (
+            f"  [share: {share_src}]"
+            if share_src and not _is_missing(share_src)
+            else ""
+        )
+        print(f"Velocity (predicted units/mo at your share){src_suffix}:")
         if not _is_missing(v_low):
             print(f"  Low (worst case):      {int(v_low)}/mo  "
                   f"(~{_fmt(int(v_low) * float(p_unit))})")

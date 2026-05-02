@@ -232,6 +232,7 @@ class TestColumnsConstant:
             "sales_rank_cv_90d",
             "variation_count",
             "bsr_drops_30d",
+            "buy_box_seller_stats",
         )
 
 

@@ -212,6 +212,12 @@ class KeepaStats(BaseModel):
     (populated when the request includes ``stats=30`` / ``stats=90``).
     The `avg30` lane is useful as a 30d-vs-90d compare for momentum
     signals — e.g. "Buy Box trending up vs 90d baseline".
+
+    `buy_box_stats` (PR G) is a per-seller dict that Keepa returns
+    alongside the lists when stats=N is requested. Mirrors the
+    Browser CSV's "Buy Box Statistics" tab — per-seller %BB-won,
+    average price, average offer count, FBA flag. Powers the
+    velocity-from-real-share predictor; nothing else extracts it.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
@@ -219,6 +225,13 @@ class KeepaStats(BaseModel):
     current: list[int] = Field(default_factory=list)
     avg30: list[int] = Field(default_factory=list)
     avg90: list[int] = Field(default_factory=list)
+    # Per-seller buy-box stats. Keepa returns this as a dict keyed by
+    # seller_id, each value carrying percentageWon / avgPrice /
+    # avgNewOfferCount / isFBA / lastSeen. Empty when stats=N wasn't
+    # requested or the listing has no BB history.
+    buy_box_stats: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, alias="buyBoxStats",
+    )
 
 
 class KeepaProduct(BaseModel):
@@ -510,6 +523,17 @@ class KeepaProduct(BaseModel):
             # can spot the discrepancy. None when csv[3] is empty.
             "bsr_drops_30d": estimate_sales_from_rank_drops(
                 rank_csv, window_days=30,
+            ),
+            # PR G — per-seller Buy-Box-share dict. Keepa returns this
+            # under stats.buyBoxStats whenever stats=N is requested.
+            # Mirrors the Browser CSV's BB Statistics tab. Empty when
+            # the listing has no BB history. Operator predictor uses
+            # this to replace the equal-split assumption with real
+            # competitive distribution.
+            "buy_box_seller_stats": (
+                dict(self.stats.buy_box_stats)
+                if self.stats and self.stats.buy_box_stats
+                else None
             ),
         }
 
