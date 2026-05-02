@@ -59,6 +59,13 @@ PREFLIGHT_COLUMNS = [
     "catalog_brand",
     "keepa_brand",
     "catalog_hazmat",
+    # Listing-quality signals (PR D — operator-validator-fidelity sweep).
+    # All optional — populated when SP-API returns them on the catalog
+    # response. Fed into the validator's operational-safety dimension
+    # in PR E.
+    "catalog_image_count",
+    "catalog_has_aplus_content",
+    "catalog_release_date",
     "preflight_errors",
 ]
 
@@ -361,6 +368,14 @@ def _coerce_result(result: dict, original_row: dict) -> dict:
     if catalog:
         out["catalog_brand"] = catalog.get("brand")
         out["catalog_hazmat"] = catalog.get("hazmat")
+        # Listing-quality signals (PR D). image_count is derived
+        # MCP-side from the images array length so it's always
+        # populatable on summary-light responses; A+ content + release
+        # date come straight from SP-API and may legitimately be None
+        # for many listings.
+        out["catalog_image_count"] = catalog.get("image_count")
+        out["catalog_has_aplus_content"] = catalog.get("has_aplus_content")
+        out["catalog_release_date"] = catalog.get("release_date")
 
     errors = result.get("errors") or []
     if errors:

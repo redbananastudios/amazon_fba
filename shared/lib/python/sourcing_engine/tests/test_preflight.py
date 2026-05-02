@@ -419,6 +419,48 @@ def test_seed_row_defaults_gated_unknown():
     assert row["gated"] == "UNKNOWN"
 
 
+def test_coerce_result_extracts_listing_quality_signals():
+    """PR D — image_count, has_aplus_content, release_date populate from
+    the catalog block when SP-API returned them. Pure read-through;
+    None values stay None."""
+    response = {
+        "catalog": {
+            "brand": "Acme",
+            "image_count": 5,
+            "has_aplus_content": True,
+            "release_date": "2022-06-15T00:00:00Z",
+        },
+    }
+    out = pf._coerce_result(response, original_row={"asin": "B0AAA00001"})
+    assert out["catalog_image_count"] == 5
+    assert out["catalog_has_aplus_content"] is True
+    assert out["catalog_release_date"] == "2022-06-15T00:00:00Z"
+
+
+def test_coerce_result_listing_quality_none_when_catalog_silent():
+    """SP-API summary-light responses don't populate the new fields.
+    They flow through as None — the validator treats absence as
+    "signal missing", not "bad listing"."""
+    response = {
+        "catalog": {"brand": "Acme"},   # no image_count, aplus, release_date
+    }
+    out = pf._coerce_result(response, original_row={"asin": "B0AAA00001"})
+    assert out["catalog_image_count"] is None
+    assert out["catalog_has_aplus_content"] is None
+    assert out["catalog_release_date"] is None
+
+
+def test_seed_row_includes_listing_quality_columns():
+    """Rows that don't get preflighted still need the listing-quality
+    column slots so output schema stays consistent."""
+    row = {"asin": "B0AAA00001"}
+    pf._seed_row(row)
+    assert "catalog_image_count" in row
+    assert "catalog_has_aplus_content" in row
+    assert "catalog_release_date" in row
+    assert row["catalog_image_count"] is None
+
+
 def test_seed_row_preserves_existing_gated_value():
     """If an upstream step already set gated (e.g. supplier flow with
     SellerAmp data), seeding must not clobber it."""

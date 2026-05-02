@@ -122,6 +122,13 @@ export interface CatalogItemResult {
   hazmat?: boolean;
   classifications?: CatalogItemClassification[];
   images?: CatalogItemImage[];
+  // Listing-quality signals (added for the operator-validator-fidelity
+  // sweep). All optional — populated when the SP-API summary block
+  // carries them. image_count derived from `images` length so it's
+  // always populatable even on summary-light responses.
+  image_count?: number;
+  has_aplus_content?: boolean;
+  release_date?: string; // ISO 8601 if present
   marketplace_id: string;
   raw?: unknown;
 }
