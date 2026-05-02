@@ -81,9 +81,11 @@ class TestExcelColumns:
         # candidate-score block (the verdict is the operator's
         # primary action signal so it leads the columnar layout).
         assert verdict_idx == decision_idx + 1
-        # candidate_band still sits immediately after the 6 opportunity
-        # columns. Pin both positions so the layout is contractual.
-        assert band_idx == verdict_idx + 6
+        # candidate_band sits after the 6 opportunity columns + the 4
+        # velocity columns (predicted_velocity_low / mid / high /
+        # share_source — added in PR I). Pin both positions so the
+        # layout is contractual.
+        assert band_idx == verdict_idx + 10
 
 
 class TestExcelSort:

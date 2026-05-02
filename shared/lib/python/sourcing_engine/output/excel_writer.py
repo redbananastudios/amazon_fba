@@ -21,6 +21,14 @@ COLUMNS = [
     ("opportunity_confidence",  "Opp. Confidence",      16, "text"),
     ("opportunity_reasons",     "Opp. Notes",           50, "text"),
     ("opportunity_blockers",    "Opp. Blockers",        50, "text"),
+    # Predicted-velocity columns (PRs F/G) — operator-facing answer
+    # to "how many units would I sell?". share_source is
+    # "median-of-N-sellers" or "equal-split" so the operator can see
+    # whether the prediction used real per-seller BB share data.
+    ("predicted_velocity_low",  "Velocity Low",         12, "int"),
+    ("predicted_velocity_mid",  "Velocity Mid",         12, "int"),
+    ("predicted_velocity_high", "Velocity High",        12, "int"),
+    ("predicted_velocity_share_source", "Share Source", 22, "text"),
     # Candidate score (HANDOFF WS3.6) — informational columns,
     # do NOT alter the decision column.
     ("candidate_band",          "Strength",             12, "text"),
@@ -46,6 +54,12 @@ COLUMNS = [
     ("raw_conservative_price",  "Conservative Price",   16, "gbp"),
     ("max_buy_price",           "Max Buy Price (20% ROI)", 20, "gbp"),
     ("buy_box_avg90",           "Buy Box 90d Avg",      14, "gbp"),
+    # PR B/F additions — chart-readable signals + conservative
+    # sales-velocity proxy. Empty on rows that didn't go through
+    # the Browser-CSV / API enrichment paths.
+    ("buy_box_avg30",           "Buy Box 30d Avg",      14, "gbp"),
+    ("buy_box_min_365d",        "Buy Box 365d Low",     14, "gbp"),
+    ("bsr_drops_30d",           "BSR Drops (30d)",      14, "int"),
     ("buy_box_drop_pct_90",     "Price Drop % (90d)",   16, "text"),
     ("rating",                  "Rating",               10, "text"),
     ("review_count",            "Reviews",              12, "int"),
