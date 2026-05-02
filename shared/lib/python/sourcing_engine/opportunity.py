@@ -10,8 +10,10 @@ REJECT decision. Adds an answer to the question:
 Verdicts (first match wins, KILL → SOURCE_ONLY → BUY → NEGOTIATE → WATCH):
 
     KILL          Do not pursue. Hard rejects (REJECT, profit < 0,
-                  RESTRICTED, FBA-ineligible, Amazon dominates BB,
-                  severe instability or BSR decline).
+                  FBA-ineligible, Amazon dominates BB, severe
+                  instability or BSR decline). Gating alone is NOT
+                  a KILL — gated rows route to WATCH / SOURCE_ONLY
+                  with the ungate link surfaced.
 
     SOURCE_ONLY   Product looks worth selling but the cost is unknown
                   (Keepa-discovery rows without buy_cost). Find a
@@ -258,16 +260,22 @@ def _score_operational_safety(row: dict) -> tuple[int, str]:
     }
     has_major = bool(flags & major_flags)
 
-    if restriction == "RESTRICTED" or fba_eligible is False:
-        return 0, "RESTRICTED or FBA-ineligible→0"
+    if fba_eligible is False:
+        return 0, "FBA-ineligible→0"
     if (
         restriction in ("UNRESTRICTED", "")
         and (fba_eligible is None or fba_eligible is True)
         and not has_major
     ):
         return 15, "ungated+fba→15"
-    if gated in ("Y", "BRAND_GATED") or restriction == "BRAND_GATED":
-        return 7, f"gated→{7}"
+    # Gating (BRAND_GATED, RESTRICTED) reduces the operational score
+    # but doesn't zero it out — operator may hold a brand letter or
+    # be willing to apply for ungating.
+    if (
+        gated in ("Y", "BRAND_GATED")
+        or restriction in ("BRAND_GATED", "RESTRICTED")
+    ):
+        return 7, "gated→7"
     return 5, "minor concerns→5"
 
 
@@ -346,12 +354,13 @@ def _check_kill(
             f"amazon_bb_share={bb_share:.0%} ≥ kill={cfg.kill_amazon_bb_share:.0%}"
         )
 
-    restriction = str(row.get("restriction_status") or "").upper().strip()
-    if restriction == "RESTRICTED" and not cfg.allow_restricted_buy:
-        reasons.append("restriction_status=RESTRICTED")
-
+    # Gating (BRAND_GATED, RESTRICTED) is NOT a KILL — operator may
+    # already hold a brand letter, may apply for ungating, or may
+    # consider FBM. Gated rows route to WATCH / SOURCE_ONLY (still
+    # surfaced) and BUY remains blocked unless allow_*_buy is set.
     fba_elig = _bool(row.get("fba_eligible"))
     if fba_elig is False:
+        # Hard exclusion: can't fulfil via FBA at all. Kill.
         reasons.append("fba_eligible=False")
 
     return bool(reasons), reasons
