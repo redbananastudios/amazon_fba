@@ -387,6 +387,7 @@ class KeepaProduct(BaseModel):
         # candidate-score step in WS3 reads None as "signal missing"
         # and adjusts data confidence accordingly.
         from .history import (
+            amazon_bb_share_pct,
             bsr_slope,
             listing_age_days,
             offer_count_trend,
@@ -453,6 +454,18 @@ class KeepaProduct(BaseModel):
             # dimension's review-velocity sub-score.
             "review_velocity_90d": review_count_change(
                 csv[_CSV_COUNT_REVIEWS] if len(csv) > _CSV_COUNT_REVIEWS else None,
+                window_days=90,
+            ),
+            # Amazon Buy-Box share % over 90d. Derived from csv[18]
+            # (BB price) vs csv[0] (Amazon price) — closes the gap
+            # against the Browser CSV path which carries this as the
+            # precomputed "Buy Box: % Amazon 90 days" column. Without
+            # this, single_asin runs against niche listings landed at
+            # LOW data_confidence even when every other signal was
+            # healthy.
+            "amazon_bb_pct_90": amazon_bb_share_pct(
+                bb_csv,
+                csv[_CSV_AMAZON] if len(csv) > _CSV_AMAZON else None,
                 window_days=90,
             ),
         }
