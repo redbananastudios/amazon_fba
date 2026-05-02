@@ -6,17 +6,73 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-02 evening — `07_validate_opportunity` step shipped (PR #58) on top of the candidate-validation handoff series.
-**Currently working on:** Nothing in flight. Every output row now carries both `decision` (SHORTLIST/REVIEW/REJECT) AND `opportunity_verdict` (BUY/SOURCE_ONLY/NEGOTIATE/WATCH/KILL) plus `next_action`. Single branch (main) holds all work.
-**Status:** main at HEAD of #58. **1204 Python tests pass** (was 1021 baseline; +183 net across PRs #52-#58). MCP suite untouched (110 unit + 5 integration still green). Working tree clean after CLAUDE.md refresh.
+**Last updated:** 2026-05-02 late evening — operator-validator-fidelity sweep shipped (PRs #61–#65) on top of the validate_opportunity step.
+**Currently working on:** Nothing in flight. Single-ASIN verdicts on niche listings now read the same chart-level signals a human reads (Amazon BB share, 12mo price floor, rank consistency, variation cluster size, listing quality from SP-API). Single branch (main) holds all work.
+**Status:** main at HEAD of #65. **1237 Python tests pass** (was 1021 baseline; +216 net across PRs #52-#65). MCP suite at 114 (was 110 baseline; +4 net) + 5 live SP-API still green. Working tree clean after CLAUDE.md refresh.
 
 **Latest tests baseline:**
 ```bash
-cd services/amazon-fba-fees-mcp && npm test                          # 110/110 unit
+cd services/amazon-fba-fees-mcp && npm test                          # 114/114 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 1204/1204 in ~43s
+       fba_engine/strategies/tests/ cli/tests/                       # 1237/1237 in ~43s
 ```
+
+### What landed this session (2026-05-02 late evening — fidelity sweep)
+
+Five PRs (#61-#65) closing the gap between "what a human reads off the
+Keepa chart + Amazon listing" and "what the validator sees". Triggered
+by Peter running `single_asin` on B0B636ZKZQ and getting WATCH/LOW
+because `amazon_bb_pct_90` was missing from the API path.
+
+| PR | Summary | New snapshot fields / flags |
+|---|---|---|
+| **#61** (A) | `amazon_bb_pct_90` derived from csv arrays — closes the API-path gap vs Browser CSV. Step-function alignment of csv[18] (BB) vs csv[0] (Amazon), ±1p tolerance | `amazon_bb_pct_90` |
+| **#62** (B) | 12mo BB floor + 90d sales-rank CV — chart-readable "have we ever seen this cheaper?" + "is this a steady or spiky seller?" | `buy_box_min_365d`, `sales_rank_cv_90d` |
+| **#63** (C) | Variation cluster size — `KeepaProduct.variations` was being ignored; now exposes count so niche-looking parents get visible context | `variation_count` |
+| **#64** (D) | SP-API listing quality — extends existing catalog-item call; zero new SP-API quota | `catalog_image_count`, `catalog_has_aplus_content`, `catalog_release_date` |
+| **#65** (E) | Validator wiring — 2 new flags fire from calculate.py; rank-CV feeds candidate_score Demand penalty | `BUY_BOX_ABOVE_FLOOR_365D`, `LOW_LISTING_QUALITY` |
+
+**Before the sweep**, B0B636ZKZQ at £4.00 buy cost:
+```
+VERDICT: WATCH (LOW confidence) score 60/100
+Why: sales=70/mo→10; ROI=111%+£4.46→20; amazon_bb_pct_90 missing→0; stable→15; ungated+fba→15
+Blockers: candidate_score=74 < 75; data_confidence=LOW; sales=70 < 100
+```
+
+**After the sweep**, same ASIN + buy cost:
+```
+VERDICT: WATCH (LOW confidence) score 80/100
+Why: sales=70/mo→10; ROI=111%+£4.46→20; AMZ BB=2%+sellers ok→20; stable→15; ungated+fba→15
+Risk flags: INSUFFICIENT_HISTORY, SIZE_TIER_UNKNOWN, BUY_BOX_ABOVE_FLOOR_365D
+Blockers: data_confidence=LOW; sales=70 < 100
+```
+
+Score lifted 60 → 80 (the strong_score threshold). Three blockers
+became two (candidate_score gate now passes). Risk flags now include
+the chart-readable peak-buying signal (`BUY_BOX_ABOVE_FLOOR_365D` —
+current £16.90 vs ~£9 12mo floor).
+
+**Browser CSV vs API question** (Peter asked):
+The Keepa Browser CSV export carries **everything you'd see on the
+chart** as precomputed columns and is sufficient for ~95% of the
+work (bulk discovery, store stalking, niche sweeps). The 1-token/min
+API tier is only needed for occasional single-ASIN deep dives — and
+the 60-token bucket covers ~8 single-ASIN runs before refilling.
+4 of the 5 enhancements above derive from csv[] arrays we already
+pull (no new spend); 1 is on SP-API which is free under our quota.
+
+**Operational rule for niche / low-history listings:** the validator
+will route them to WATCH (not BUY) even with great economics
+because:
+- INSUFFICIENT_HISTORY drops data_confidence to LOW
+- Sales velocity below the 100/mo BUY target
+- BUY_BOX_ABOVE_FLOOR_365D fires when current is well above 12mo low
+
+This is by design — the validator refuses to call BUY on a single
+healthy data point. Operator's judgement call from there: a small
+test order at 111% ROI is the right move, but locking in 100 units of
+supplier inventory based on one chart point is not.
 
 ### What landed this session (2026-05-02 evening — final opportunity validation)
 
