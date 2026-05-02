@@ -18,6 +18,7 @@ import pytest
 from keepa_client.history import (
     amazon_bb_share_pct,
     bsr_slope,
+    buy_box_min_in_window,
     buy_box_winner_flips,
     listing_age_days,
     offer_count_trend,
@@ -25,6 +26,7 @@ from keepa_client.history import (
     parse_keepa_csv_series,
     price_volatility,
     review_count_change,
+    sales_rank_consistency,
     yoy_bsr_ratio,
 )
 from keepa_client.models import _now_keepa_minutes
@@ -431,6 +433,98 @@ class TestListingAgeDays:
 # ────────────────────────────────────────────────────────────────────────
 # yoy_bsr_ratio
 # ────────────────────────────────────────────────────────────────────────
+
+
+class TestBuyBoxMinInWindow:
+    """Pin the 12-month BB-floor lookup. The chart-readable
+    "have we ever seen this cheaper than today?" signal."""
+
+    def test_returns_lowest_in_window(self):
+        now = _now_keepa_minutes()
+        bb = [
+            now - 300 * DAY, 1500,
+            now - 200 * DAY, 1100,    # the floor
+            now - 100 * DAY, 1300,
+            now - 30 * DAY, 1400,
+        ]
+        assert buy_box_min_in_window(bb, window_days=365) == 1100.0
+
+    def test_excludes_outside_window(self):
+        now = _now_keepa_minutes()
+        bb = [
+            now - 500 * DAY, 800,     # outside 365 — must NOT count
+            now - 100 * DAY, 1200,    # in-window minimum
+            now - 30 * DAY, 1500,
+        ]
+        assert buy_box_min_in_window(bb, window_days=365) == 1200.0
+
+    def test_skips_minus_one_sentinels(self):
+        now = _now_keepa_minutes()
+        bb = [
+            now - 100 * DAY, -1,
+            now - 50 * DAY, 1500,
+            now - 10 * DAY, -1,
+        ]
+        assert buy_box_min_in_window(bb, window_days=365) == 1500.0
+
+    def test_single_observation_returns_that_value(self):
+        now = _now_keepa_minutes()
+        bb = [now - 60 * DAY, 1500]
+        assert buy_box_min_in_window(bb, window_days=365) == 1500.0
+
+    def test_empty_or_all_sentinels_returns_none(self):
+        assert buy_box_min_in_window([], window_days=365) is None
+        assert buy_box_min_in_window(None, window_days=365) is None
+        now = _now_keepa_minutes()
+        assert buy_box_min_in_window(
+            [now - 60 * DAY, -1, now - 30 * DAY, -1],
+            window_days=365,
+        ) is None
+
+
+class TestSalesRankConsistency:
+    """Pin the sales-rank CV. Lower = steady; higher = spiky."""
+
+    def test_steady_rank_low_cv(self):
+        now = _now_keepa_minutes()
+        # All ranks ~50,000; tiny variation.
+        rank_csv = []
+        for i, r in enumerate([50000, 50100, 49950, 50050, 50000, 49980]):
+            rank_csv.extend([now - (60 - i * 10) * DAY, r])
+        cv = sales_rank_consistency(rank_csv, window_days=90)
+        assert cv is not None
+        assert cv < 0.01
+
+    def test_spiky_rank_high_cv(self):
+        now = _now_keepa_minutes()
+        # Rank bouncing 10K → 200K wildly.
+        rank_csv = []
+        for i, r in enumerate([10000, 200000, 15000, 180000, 8000, 250000]):
+            rank_csv.extend([now - (60 - i * 10) * DAY, r])
+        cv = sales_rank_consistency(rank_csv, window_days=90)
+        assert cv is not None
+        assert cv > 0.5
+
+    def test_returns_none_for_too_few_points(self):
+        now = _now_keepa_minutes()
+        rank_csv = [now - 30 * DAY, 50000, now - 10 * DAY, 60000]
+        assert sales_rank_consistency(rank_csv, window_days=90) is None
+
+    def test_skips_sentinels(self):
+        now = _now_keepa_minutes()
+        # Mixture of real + sentinel; only real values counted.
+        rank_csv = []
+        for i in range(6):
+            rank_csv.extend([now - (60 - i * 10) * DAY, 50000])
+        rank_csv.extend([now - 5 * DAY, -1])
+        cv = sales_rank_consistency(rank_csv, window_days=90)
+        assert cv is not None
+        # All real values are 50000 → CV = 0.
+        assert cv == 0.0
+
+    def test_returns_none_for_empty(self):
+        assert sales_rank_consistency([], window_days=90) is None
+        assert sales_rank_consistency(None, window_days=90) is None
 
 
 class TestAmazonBbSharePct:

@@ -99,6 +99,13 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     # column on Browser CSV path. Drives competition-safety scoring
     # and candidate_score data-confidence calculation.
     "amazon_bb_pct_90",
+    # Long-term BB floor + rank consistency (PR B).
+    # buy_box_min_365d: 12-month BB minimum in pounds — peak-buying
+    # detection beyond the 90d-avg signal.
+    # sales_rank_cv_90d: rank consistency CV over 90d — distinguishes
+    # steady sellers from spiky ones at the same average rank.
+    "buy_box_min_365d",
+    "sales_rank_cv_90d",
 )
 
 DEFAULT_KEEPA_CONFIG_PATH: Path = (

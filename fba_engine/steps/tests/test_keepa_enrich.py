@@ -228,6 +228,8 @@ class TestColumnsConstant:
             "yoy_bsr_ratio",
             "review_velocity_90d",
             "amazon_bb_pct_90",
+            "buy_box_min_365d",
+            "sales_rank_cv_90d",
         )
 
 
