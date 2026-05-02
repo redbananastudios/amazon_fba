@@ -411,6 +411,15 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
     reason = row.get("decision_reason") or "-"
     asin = row.get("asin") or "-"
 
+    # Final operator-facing verdict (07_validate_opportunity, PR #58).
+    # When present, this is the "is this worth acting on NOW?" answer
+    # — leads the printout. Falls back to the decide-step verdict for
+    # legacy callers / strategies that haven't wired the new step.
+    opp_verdict = row.get("opportunity_verdict")
+    opp_score = row.get("opportunity_score")
+    opp_conf = row.get("opportunity_confidence")
+    next_action = row.get("next_action")
+
     bb_current = row.get("buy_box_price")
     bb_avg90 = row.get("buy_box_avg90")
     delta_pct = None
@@ -419,9 +428,22 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
 
     print()
     print("=" * 72)
-    print(f"VERDICT: {decision}   ASIN: {asin}")
-    print("=" * 72)
-    print(f"  {reason}")
+    if opp_verdict and not _is_missing(opp_verdict):
+        score_part = (
+            f"   score {int(opp_score)}/100"
+            if opp_score is not None and not _is_missing(opp_score) else ""
+        )
+        conf_part = f"   ({opp_conf} confidence)" if opp_conf else ""
+        print(f"VERDICT: {opp_verdict}{conf_part}{score_part}")
+        print(f"ASIN:    {asin}")
+        print("=" * 72)
+        if next_action:
+            print(f"  ► {next_action}")
+        print(f"  Decision (engine):     {decision} — {reason}")
+    else:
+        print(f"VERDICT: {decision}   ASIN: {asin}")
+        print("=" * 72)
+        print(f"  {reason}")
     print()
 
     print("Market:")
@@ -490,6 +512,20 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
         print(f"Risk flags:  {', '.join(risk)}")
     elif isinstance(risk, str) and risk and risk != "[]":
         print(f"Risk flags:  {risk}")
+
+    # Opportunity-validator notes — surface the blockers (why isn't
+    # this a BUY?) and a short reasons line. Same list-or-string
+    # normalisation as risk_flags.
+    blockers = row.get("opportunity_blockers")
+    if isinstance(blockers, list) and blockers:
+        print(f"Blockers:    {'; '.join(blockers)}")
+    elif isinstance(blockers, str) and blockers and blockers not in ("[]", ""):
+        print(f"Blockers:    {blockers}")
+    reasons = row.get("opportunity_reasons")
+    if isinstance(reasons, list) and reasons:
+        print(f"Why:         {'; '.join(reasons)}")
+    elif isinstance(reasons, str) and reasons and reasons not in ("[]", ""):
+        print(f"Why:         {reasons}")
     print()
 
     # Action-oriented next step — operator-facing summary of what to
