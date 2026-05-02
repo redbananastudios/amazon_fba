@@ -41,12 +41,14 @@ from sourcing_engine.utils.flags import (
     AMAZON_STATUS_UNKNOWN,
     BSR_DECLINING,
     BUY_BOX_ABOVE_AVG90,
+    BUY_BOX_ABOVE_FLOOR_365D,
     COMPETITION_GROWING,
     FBM_ONLY,
     HIGH_MOQ,
     HIGH_OOS,
     INSUFFICIENT_HISTORY,
     LISTING_TOO_NEW,
+    LOW_LISTING_QUALITY,
     PRICE_MISMATCH_RRP,
     PRICE_UNSTABLE,
     SINGLE_FBA_SELLER,
@@ -235,6 +237,42 @@ def _calculate_match(match: dict) -> dict:
     volatility = match.get("price_volatility_90d")
     if volatility is not None and volatility > ds.price_volatility_threshold:
         risk_flags.append(PRICE_UNSTABLE)
+
+    # 12-month Buy Box floor (PR E) — current price more than N% above
+    # the 12mo low is a peak-buying tell beyond what BUY_BOX_ABOVE_AVG90
+    # (90d avg) catches. Operator's "have we ever seen this cheaper?"
+    # check rendered as a flag.
+    bb_min_365 = match.get("buy_box_min_365d")
+    bb_now_for_floor = match.get("buy_box_price")
+    if (
+        bb_min_365 is not None
+        and bb_min_365 > 0
+        and bb_now_for_floor is not None
+        and bb_now_for_floor > 0
+    ):
+        floor_pct = (bb_now_for_floor - bb_min_365) / bb_min_365 * 100
+        if floor_pct >= ds.buy_box_floor_threshold_pct:
+            risk_flags.append(BUY_BOX_ABOVE_FLOOR_365D)
+
+    # Listing-quality signal (PR E) — fires only when ALL three
+    # negative conditions co-occur on a mature listing:
+    #   - few images (image_count < min_image_count)
+    #   - no A+ content (catalog_has_aplus_content is False)
+    #   - listing > mature_listing_age_days (so this isn't penalising
+    #     genuinely new listings — they're already caught by
+    #     LISTING_TOO_NEW)
+    # Any field None → don't fire (signal missing, not bad).
+    image_count = match.get("catalog_image_count")
+    has_aplus = match.get("catalog_has_aplus_content")
+    listing_age_for_quality = match.get("listing_age_days")
+    if (
+        image_count is not None
+        and image_count < ds.min_image_count
+        and has_aplus is False
+        and listing_age_for_quality is not None
+        and listing_age_for_quality > ds.mature_listing_age_days
+    ):
+        risk_flags.append(LOW_LISTING_QUALITY)
 
     risk_flags = list(dict.fromkeys(risk_flags))
 

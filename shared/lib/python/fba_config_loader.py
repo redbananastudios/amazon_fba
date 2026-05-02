@@ -221,6 +221,10 @@ class DataSignals:
     price_volatility_threshold: float
     amazon_bb_share_warn_pct: float
     amazon_bb_share_block_pct: float
+    # PR E — 12mo BB floor + listing-quality thresholds
+    buy_box_floor_threshold_pct: float
+    min_image_count: int
+    mature_listing_age_days: int
 
 
 @lru_cache(maxsize=1)
@@ -292,6 +296,12 @@ def _load_all(
         amazon_bb_share_block_pct=float(
             ds_data.get("amazon_bb_share_block_pct", 0.70)
         ),
+        # PR E — defaults documented in decision_thresholds.yaml.
+        buy_box_floor_threshold_pct=float(
+            ds_data.get("buy_box_floor_threshold_pct", 50.0)
+        ),
+        min_image_count=int(ds_data.get("min_image_count", 3)),
+        mature_listing_age_days=int(ds_data.get("mature_listing_age_days", 730)),
     )
 
     # opportunity_validation block (HANDOFF: Final Opportunity Validation).

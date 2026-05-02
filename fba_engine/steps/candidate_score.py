@@ -82,6 +82,9 @@ class CandidateScoringConfig:
     review_rising_points: int
     review_flat_points: int
     review_falling_points: int
+    # PR E — rank consistency penalty on the Demand sub-score.
+    rank_consistency_spiky_threshold: float
+    rank_consistency_spiky_penalty: int
 
     oos_pct_thresholds: tuple[float, ...]
     oos_points: tuple[int, ...]
@@ -171,6 +174,12 @@ def load_candidate_scoring_config(
         review_rising_points=int(demand.get("review_rising_points", 5)),
         review_flat_points=int(demand.get("review_flat_points", 2)),
         review_falling_points=int(demand.get("review_falling_points", 0)),
+        rank_consistency_spiky_threshold=float(
+            demand.get("rank_consistency_spiky_threshold", 0.5)
+        ),
+        rank_consistency_spiky_penalty=int(
+            demand.get("rank_consistency_spiky_penalty", 4)
+        ),
 
         oos_pct_thresholds=tuple(
             float(x) for x in (stability.get("oos_pct_thresholds") or [0.05, 0.15, 0.30])
@@ -339,7 +348,23 @@ def _score_demand(
             sales, cfg.sales_tier_thresholds, cfg.sales_tier_points,
             descending=True,
         )
-        contrib.append(f"sales={int(sales)}/mo→{s}")
+        # PR E — penalise the sales sub-score when sales rank is
+        # spiky (CV high). Same average rank but bursty patterns
+        # mean the sales estimate is less reliable. Capped at 0
+        # so a small sales-tier score never goes negative.
+        cv = row.get("sales_rank_cv_90d")
+        if (
+            cv is not None
+            and cv > cfg.rank_consistency_spiky_threshold
+            and s > 0
+        ):
+            penalty = min(s, cfg.rank_consistency_spiky_penalty)
+            s -= penalty
+            contrib.append(
+                f"sales={int(sales)}/mo (spiky rank cv={cv:.2f}, -{penalty})→{s}"
+            )
+        else:
+            contrib.append(f"sales={int(sales)}/mo→{s}")
         points += s
 
     bsr = row.get("bsr_slope_90d")

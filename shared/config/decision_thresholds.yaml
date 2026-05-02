@@ -74,6 +74,10 @@ data_signals:
   price_volatility_threshold: 0.20       # CV > 0.20 → PRICE_UNSTABLE
   amazon_bb_share_warn_pct: 0.30         # candidate-score competition dim (PR 5)
   amazon_bb_share_block_pct: 0.70        # candidate-score competition dim (PR 5)
+  # PR E — listing-quality + 12mo BB floor signals
+  buy_box_floor_threshold_pct: 50.0      # current BB > floor by N% → BUY_BOX_ABOVE_FLOOR_365D
+  min_image_count: 3                     # listings with <N images → LOW_LISTING_QUALITY (when also no A+ + mature)
+  mature_listing_age_days: 730           # only fire LOW_LISTING_QUALITY on listings older than 2 years
 
 # === Candidate scoring (HANDOFF WS3) ===
 # 4-dimension 0-100 score (Demand/Stability/Competition/Margin, 25 each)
@@ -94,6 +98,13 @@ candidate_scoring:
     # below-all-thresholds default.
     sales_tier_thresholds: [200, 100, 50, 20]
     sales_tier_points: [10, 7, 4, 2, 0]
+    # PR E — rank consistency penalty applied to the sales-tier
+    # sub-score. A spiky rank (high CV) means the sales estimate is
+    # less reliable: same average rank but burst-then-flat patterns.
+    # Penalty subtracts from sales_pts (capped at 0). None CV → no
+    # penalty. Threshold 0.5 = stdev is half the mean.
+    rank_consistency_spiky_threshold: 0.5
+    rank_consistency_spiky_penalty: 4
     # BSR slope sign — improving (negative) wins. Flat band uses absolute
     # value: |slope| <= flat_threshold counts as flat.
     bsr_flat_threshold: 0.05
