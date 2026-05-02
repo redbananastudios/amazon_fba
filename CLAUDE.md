@@ -6,17 +6,99 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-02 late evening — operator-validator-fidelity sweep shipped (PRs #61–#65) on top of the validate_opportunity step.
-**Currently working on:** Nothing in flight. Single-ASIN verdicts on niche listings now read the same chart-level signals a human reads (Amazon BB share, 12mo price floor, rank consistency, variation cluster size, listing quality from SP-API). Single branch (main) holds all work.
-**Status:** main at HEAD of #65. **1237 Python tests pass** (was 1021 baseline; +216 net across PRs #52-#65). MCP suite at 114 (was 110 baseline; +4 net) + 5 live SP-API still green. Working tree clean after CLAUDE.md refresh.
+**Last updated:** 2026-05-02 night — velocity prediction + Browser-CSV validator parity (PRs #67–#69) closed the chart-vs-engine fidelity gap.
+**Currently working on:** Nothing in flight. Browser-CSV-first workflow is now the default and emits every validator signal that fits in pre-computed CSV columns. Single branch (main) holds all work.
+**Status:** main at HEAD of #69. **1250 Python tests pass** (was 1021 baseline; +229 net across PRs #52-#69). MCP suite at 114 (was 110; +4 net) + 5 live SP-API still green. Working tree clean after CLAUDE.md refresh.
 
 **Latest tests baseline:**
 ```bash
 cd services/amazon-fba-fees-mcp && npm test                          # 114/114 unit
 cd services/amazon-fba-fees-mcp && npm run test:integration          # 5/5 live SP-API
 pytest shared/lib/python/ fba_engine/steps/tests/ \
-       fba_engine/strategies/tests/ cli/tests/                       # 1237/1237 in ~43s
+       fba_engine/strategies/tests/ cli/tests/                       # 1250/1250 in ~43s
 ```
+
+### What landed this session (2026-05-02 night — velocity + Browser-CSV parity)
+
+Three more PRs (#67-#69) on top of the operator-validator-fidelity
+sweep, answering "how many units would I sell?" and closing a real
+parity bug on the Browser-CSV path.
+
+| PR | Summary |
+|---|---|
+| **#67** (F) | `bsr_drops_30d` snapshot field + `predict_seller_velocity()` helper. Returns {low, mid, high} units/mo for a new entrant. Uses `min(monthlySold, bsr_drops × 1.5)` so Keepa's over-estimating monthlySold model on niche listings doesn't inflate the prediction. Multipliers for joiners / OOS / BSR-slope. Wired into validator output + single_asin printer (Velocity section + test-order recommendation). |
+| **#68** (G) | Share-aware velocity from `stats.buyBoxStats`. Keepa already returned per-seller `percentageWon` in the response — we just weren't modelling it. New entrant's expected share = median of existing FBA sellers' shares. Falls back to equal-split when buyBoxStats empty. Output carries `predicted_velocity_share_source` so operator sees which assumption fed the prediction. **Zero new API tokens** — already in our `/product?stats=90` response. |
+| **#69** (H) | **Real bug**: `keepa_finder_csv.py` field names mismatched the validator's expected names (e.g. `buy_box_pct_amazon_90d` vs `amazon_bb_pct_90`). Every keepa_finder run since PR #55 was silently emitting None for those fields → validator gates / flags didn't fire. Renamed + added new mappings (`buy_box_min_365d`, `bsr_drops_30d`, `buy_box_avg30`, `rating`, `review_count`). Same updates in market_data.py. SPEC.md §9 now carries a "Signal availability by enrichment path" table. |
+
+### Browser-first workflow (current default per Peter)
+
+```
+1. Operator opens Keepa Pro → Product Finder → applies filters → exports CSV
+2. python run.py --strategy keepa_finder \
+     --csv ./output/<run_id>/keepa_<recipe>.csv \
+     --recipe amazon_oos_wholesale --output-dir ./output/<run_id>/
+3. Open the auto-uploaded XLSX. Sorted BUY → SOURCE_ONLY → NEGOTIATE
+   → WATCH → KILL with all validator flags + candidate-score +
+   data-confidence visible.
+```
+
+For single-ASIN deep dives (occasional, when you want every signal):
+```
+python run.py --strategy single_asin --asin B0XXX --buy-cost X
+```
+Costs ~7 Keepa tokens (60-bucket holds 8). Adds slope / CV /
+per-seller-share signals not in the Browser CSV.
+
+### B0B636ZKZQ live verdict (final form across all PRs)
+
+```
+VERDICT: WATCH (LOW confidence) score 80/100
+  >> Monitor price, seller count, and Buy Box movement
+  Decision (engine): SHORTLIST - Passes all thresholds at conservative price
+
+Velocity (predicted units/mo at your share)  [share: median-of-4-sellers]:
+  Low (worst case):      2/mo  (~£8.92)
+  Mid (equal share):     5/mo  (~£22.29)
+  High (best case):      8/mo  (~£35.66)
+  Test-order rec:        5 units (~3 weeks of mid)
+
+Risk flags: INSUFFICIENT_HISTORY, SIZE_TIER_UNKNOWN, BUY_BOX_ABOVE_FLOOR_365D
+Blockers:   data_confidence=LOW (need HIGH); sales_estimate=70.0 < 100
+```
+
+Cross-check vs the Browser BB Statistics tab (Just This Retail 46%,
+MRPM 29%, Trego 10%, ebebekeu ~5%): median 19.5% × 25 monthly =
+~5/mo. **Engine output matches manual chart-reading.**
+
+### Signal availability by enrichment path
+
+Documented in SPEC.md §9 as a table. Summary:
+
+- **Both paths (API + Browser CSV):** amazon_bb_pct_90, buy_box_min_365d, buy_box_avg30/90, bsr_drops_30d, rating, review_count, buy_box_oos_pct_90, sales_rank, sales_rank_avg90
+- **API-only (need raw csv arrays):** bsr_slope_30d/90d/365d, price_volatility_90d, sales_rank_cv_90d, listing_age_days, yoy_bsr_ratio, variation_count, buy_box_seller_stats
+
+Validator gracefully degrades — missing signals drop to None and
+treat as "signal missing" (lowers confidence) rather than "bad
+signal" (false flags).
+
+### Operational notes
+
+**Conservative-by-design verdict on niche listings.** B0B636ZKZQ
+at £4.00 buy cost has 111% ROI but routes to WATCH because:
+- INSUFFICIENT_HISTORY drops data_confidence to LOW
+- sales_estimate 70 < 100/mo BUY target
+- BUY_BOX_ABOVE_FLOOR_365D fires (current £16.90 vs 12mo low £8)
+
+This is the design — refuse to call BUY on a single healthy data
+point. The 5-unit test-order recommendation is the right entry
+size: validates sell-through at low capital exposure (~£20).
+
+**Velocity prediction confidence.** When `share_source =
+median-of-N-sellers` appears in the printer output, the prediction
+used real per-seller BB share data from Keepa's stats.buyBoxStats.
+When `share_source = equal-split` appears, fell back to the
+1/fba_seller_count assumption. Operator should treat the latter
+with more skepticism.
 
 ### What landed this session (2026-05-02 late evening — fidelity sweep)
 
