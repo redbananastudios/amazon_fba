@@ -112,6 +112,8 @@ def run_pipeline(
     from fba_engine.steps.candidate_score import add_candidate_score
     from fba_engine.steps.decide import decide_rows
     from fba_engine.steps.enrich import enrich_with_preflight
+    from fba_engine.steps.flag_browser_scrape_needed import flag_browser_scrape_needed
+    from fba_engine.steps.keepa_browser_enrich import add_browser_enrich
     from fba_engine.steps.keepa_enrich_survivors import refresh_survivors
     from fba_engine.steps.resolve import resolve_matches
     from fba_engine.steps.supplier_pricelist_discover import (
@@ -205,11 +207,25 @@ def run_pipeline(
     # data_confidence columns from the first pass.
     rescored_df = add_candidate_score(redecided_df)
 
+    # Stage 05.85 — keepa_browser_enrich. Silent no-op when the
+    # per-ASIN cache `.cache/keepa_browser/<asin>.json` is absent.
+    # When present, merges chart-quality data (per-seller BB share,
+    # precomputed 365d signals).
+    browser_enriched_df = add_browser_enrich(rescored_df)
+
+    # Stage 05.9 — flag_browser_scrape_needed. Survivors lacking the
+    # historical Browser-only signals get BROWSER_SCRAPE_NEEDED added
+    # to risk_flags + data_confidence dropped to LOW. Manifest written
+    # to <run_dir>/keepa_browser_scrape_needed.json so the operator
+    # knows which ASINs to scrape via the Claude+MCP workflow before
+    # making a confident buy decision.
+    gated_df = flag_browser_scrape_needed(browser_enriched_df, run_dir=run_dir)
+
     # Stage 07 — validate_opportunity (BUY / SOURCE_ONLY / NEGOTIATE /
     # WATCH / KILL). Pure additive — never changes the SHORTLIST/REVIEW/
     # REJECT verdict. Needed before buy_plan because buy_plan reads
     # opportunity_verdict / opportunity_confidence / predicted_velocity_*.
-    validated_df = add_opportunity_verdict(rescored_df)
+    validated_df = add_opportunity_verdict(gated_df)
 
     # Stage 08 — buy_plan (order qty / capital / payback / target buy
     # cost / negotiation gap). Pure additive — appends 11 columns.

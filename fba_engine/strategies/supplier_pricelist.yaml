@@ -116,6 +116,27 @@ steps:
   - name: candidate_score
     module: fba_engine.steps.candidate_score
 
+  # Stage 05.85 — keepa_browser_enrich. Silent no-op when the per-ASIN
+  # cache `.cache/keepa_browser/<asin>.json` is absent. When present,
+  # merges chart-quality data (per-seller BB share, precomputed 365d
+  # signals) — fills the gap Keepa-API cannot for niche listings.
+  - name: keepa_browser_enrich
+    module: fba_engine.steps.keepa_browser_enrich
+
+  # Stage 05.9 — flag_browser_scrape_needed. For survivors that still
+  # lack the historical Browser-only signals (per-seller share,
+  # 90d BB drop, 365d floor, OOS pattern) AND have no cache file,
+  # this step:
+  #   1. Adds BROWSER_SCRAPE_NEEDED to risk_flags
+  #   2. Lowers data_confidence to LOW (validator routes away from BUY)
+  #   3. Writes <run_dir>/keepa_browser_scrape_needed.json — the
+  #      manifest the operator scrapes via Claude+MCP, then re-runs.
+  # No row should reach BUY without confirmed historical data.
+  - name: flag_browser_scrape_needed
+    module: fba_engine.steps.flag_browser_scrape_needed
+    config:
+      run_dir: "{run_dir}"
+
   # Stage 07 — validate_opportunity (BUY / SOURCE_ONLY / NEGOTIATE /
   # WATCH / KILL). Final operator-facing verdict on top of the
   # SHORTLIST/REVIEW/REJECT decision. Runs after enrich so it sees
