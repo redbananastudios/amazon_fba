@@ -430,7 +430,7 @@ def test_buy_plan_loads_from_canonical_yaml():
     assert bp.first_order_days == 21
     assert bp.reorder_days == 45
     assert bp.min_test_qty == 5
-    assert bp.max_first_order_capital == 200.0
+    assert bp.max_first_order_units == 50
     assert bp.risk_low_confidence == 0.70
     assert bp.risk_medium_confidence == 0.85
     assert bp.risk_floor == 0.50
@@ -454,7 +454,7 @@ def test_buy_plan_uses_defaults_when_block_missing(tmp_path):
     assert bp.first_order_days == 21
     assert bp.reorder_days == 45
     assert bp.min_test_qty == 5
-    assert bp.max_first_order_capital == 200.0
+    assert bp.max_first_order_units == 50
     assert bp.risk_floor == 0.50
     cfg.reset_cache()
 
@@ -470,13 +470,30 @@ def test_buy_plan_custom_values_override_defaults(tmp_path):
     custom = raw.replace(
         "first_order_days: 21", "first_order_days: 28"
     ).replace(
-        "max_first_order_capital: 200", "max_first_order_capital: 350"
+        "max_first_order_units: 50", "max_first_order_units: 100"
     )
     (config_dir / "decision_thresholds.yaml").write_text(custom)
     cfg.reset_cache()
     bp = cfg.get_buy_plan(config_dir=config_dir)
     assert bp.first_order_days == 28
-    assert bp.max_first_order_capital == 350.0
+    assert bp.max_first_order_units == 100
+    cfg.reset_cache()
+
+
+def test_buy_plan_validates_unit_cap_at_least_min_test_qty(tmp_path):
+    """max_first_order_units below min_test_qty would make the cap
+    tighter than the floor — invariant rejects this."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    bad = raw.replace("max_first_order_units: 50", "max_first_order_units: 3")
+    (config_dir / "decision_thresholds.yaml").write_text(bad)
+    cfg.reset_cache()
+    with pytest.raises(AssertionError, match="max_first_order_units"):
+        cfg.get_buy_plan(config_dir=config_dir)
     cfg.reset_cache()
 
 

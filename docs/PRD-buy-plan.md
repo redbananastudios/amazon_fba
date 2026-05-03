@@ -114,14 +114,20 @@ days_of_cover = cfg.first_order_days if order_mode == "first" else cfg.reorder_d
                                        # 21                           # 45
 
 order_qty_raw = ceil(projected_30d_units * days_of_cover / 30)
+order_qty = order_qty_raw
 
-# Floors and ceilings
-order_qty = max(order_qty_raw, cfg.min_test_qty)   # never less than 5
+# First-order cap — UNIT-based (operator preference: cap by number
+# of units, not £ exposure, so the safety net doesn't drift with
+# cost-of-goods). Reorders aren't capped — sell-through is validated.
+if order_mode == "first":
+    order_qty = min(order_qty, cfg.max_first_order_units)   # default 50
 
-capital_cap_units = floor(cfg.max_first_order_capital / buy_cost) if order_mode == "first" else inf
-order_qty = min(order_qty, capital_cap_units)
+# min_test_qty floor wins even when the cap brings us below it.
+# Loader invariant pins max_first_order_units >= min_test_qty.
+order_qty = max(order_qty, cfg.min_test_qty)   # never less than 5
 
-# MOQ — supplier-imposed lower bound
+# MOQ — supplier-imposed lower bound. MOQ wins even over the cap
+# (operator sees `capital_required` reflect the over-cap exposure).
 if moq is not None and moq > 0:
     order_qty = max(order_qty, moq)
 
@@ -206,7 +212,9 @@ buy_plan:
   first_order_days: 21                    # default first-order cover
   reorder_days: 45                        # default reorder cover
   min_test_qty: 5                         # never order less than this if BUY
-  max_first_order_capital: 200            # GBP cap for first orders
+  max_first_order_units: 50               # unit cap for first orders
+                                          # (operator-preferred cap mechanism:
+                                          #  units don't drift with cost-of-goods)
 
   # --- Risk dampener (multiplied with predicted_velocity_mid) ---
   risk_low_confidence: 0.70               # opportunity_confidence == LOW
@@ -241,10 +249,10 @@ The step must never crash the pipeline. All of the following degrade to `buy_pla
 2. **`predicted_velocity_mid` is None** — sizing + projection fields blank, `INSUFFICIENT_VELOCITY`.
 3. **`predicted_velocity_mid` is 0 after dampening** — sizing fields blank, `INSUFFICIENT_VELOCITY`. Target buy cost still computed.
 4. **`raw_conservative_price - fees_conservative <= min_profit_absolute_buy`** — `target_buy_cost_*` blank, `UNECONOMIC_AT_ANY_PRICE`.
-5. **`moq × buy_cost > max_first_order_capital`** — `order_qty = moq` (MOQ wins), `capital_required` exceeds the cap. Existing `HIGH_MOQ` flag from §3.3 already surfaces this; buy_plan does not duplicate the flag, just respects MOQ.
+5. **`moq > max_first_order_units`** — `order_qty = moq` (MOQ wins). `capital_required` reflects the over-cap exposure so the operator sees what they're committing to. Existing `HIGH_MOQ` flag from §3.3 already surfaces this; buy_plan does not duplicate the flag, just respects MOQ.
 6. **Verdict is `WATCH` or `KILL`** — sizing + gap fields blank by design, `BLOCKED_BY_VERDICT`. Target costs and projections still populated where data allows (so WATCH rows remain re-evaluable).
 7. **Row is `REJECT` (always KILL)** — same as KILL above.
-8. **`order_qty_raw` after capital cap is < `min_test_qty`** — bump to `min_test_qty`. If even `min_test_qty × buy_cost > max_first_order_capital` (cheap product but very tight cap, edge case), keep `min_test_qty` and let `capital_required` exceed the cap. Operator sees both numbers and decides.
+8. **`order_qty_raw` after the unit cap is < `min_test_qty`** — bump to `min_test_qty`. The loader invariant pins `max_first_order_units >= min_test_qty` so the cap can't be tighter than the floor; this case only fires when the velocity-driven raw qty was already small.
 9. **Empty DataFrame** — return frame with all 11 columns added (matches `validate_opportunity`'s empty-frame handling).
 10. **Per-row exception in the core function** — log via `logger.exception`, populate `buy_plan_status = INSUFFICIENT_DATA`, blank all numeric fields, continue. Never abort the run.
 

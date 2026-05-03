@@ -211,7 +211,7 @@ class BuyPlan:
     first_order_days: int
     reorder_days: int
     min_test_qty: int
-    max_first_order_capital: float
+    max_first_order_units: int
     risk_low_confidence: float
     risk_medium_confidence: float
     risk_insufficient_history: float
@@ -387,8 +387,8 @@ def _load_all(
         first_order_days=int(bp_data.get("first_order_days", 21)),
         reorder_days=int(bp_data.get("reorder_days", 45)),
         min_test_qty=int(bp_data.get("min_test_qty", 5)),
-        max_first_order_capital=float(
-            bp_data.get("max_first_order_capital", 200.0)
+        max_first_order_units=int(
+            bp_data.get("max_first_order_units", 50)
         ),
         risk_low_confidence=float(bp_data.get("risk_low_confidence", 0.70)),
         risk_medium_confidence=float(bp_data.get("risk_medium_confidence", 0.85)),
@@ -535,8 +535,13 @@ def _validate_buy_plan(bp: BuyPlan) -> None:
         bp.first_order_days <= bp.reorder_days
     ), "first_order_days above reorder_days (untested ASIN should hold less stock)"
     assert bp.min_test_qty > 0, "min_test_qty must be positive"
-    assert bp.max_first_order_capital > 0, (
-        "max_first_order_capital must be positive"
+    assert bp.max_first_order_units > 0, (
+        "max_first_order_units must be positive"
+    )
+    assert bp.max_first_order_units >= bp.min_test_qty, (
+        f"max_first_order_units={bp.max_first_order_units} below "
+        f"min_test_qty={bp.min_test_qty} — the cap can't be tighter than "
+        "the floor or sizing collapses to ill-defined"
     )
     for name, value in (
         ("risk_low_confidence", bp.risk_low_confidence),

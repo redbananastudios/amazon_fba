@@ -209,56 +209,60 @@ class TestBuy:
         # projected_30d_units = 2 (mid × 1.0); order_qty floored to 5.
         assert out["order_qty_recommended"] == 5
 
-    def test_buy_capital_cap_binds(self):
-        # Expensive row: buy_cost=£40 → cap 200/40 = 5 units.
-        # Velocity demands more (e.g. 18 × 21/30 = 13) but cap shrinks
-        # to 5; min_test_qty also 5 so they collide at 5.
-        row = _buy_row(buy_cost=40.0, raw_conservative_price=80.0,
-                       fees_conservative=15.0, profit_conservative=25.0)
+    def test_buy_unit_cap_binds_on_high_velocity(self):
+        # mid=200/mo, 21d cover → ceil(200 × 21/30) = 140. Unit cap
+        # of 50 binds — operator's first order is 50 units regardless
+        # of buy_cost.
+        row = _buy_row(predicted_velocity_mid=200)
         out = compute_buy_plan(row)
-        assert out["order_qty_recommended"] == 5
-        assert out["capital_required"] == 200.0       # 5 × 40
+        assert out["order_qty_recommended"] == 50
+        assert out["capital_required"] == 200.0       # 50 × 4.00
 
-    def test_buy_capital_cap_does_not_override_min_test_qty(self):
-        # Cheap product but tight cap edge case (PRD §7.8).
-        # Set max cap such that floor(cap / buy_cost) < min_test_qty.
-        # With buy_cost=£0.50 and mid=10 → 10 × 21 / 30 = 7. cap_units
-        # = floor(200/0.50) = 400; not the binding case. Use a tiny cap
-        # via explicit BuyPlan.
-        cfg = BuyPlan(
-            first_order_days=21, reorder_days=45, min_test_qty=5,
-            max_first_order_capital=5.0,    # extreme cap
-            risk_low_confidence=0.7, risk_medium_confidence=0.85,
-            risk_insufficient_history=0.85, risk_listing_too_new=0.85,
-            risk_competition_growing=0.75, risk_bsr_declining=0.85,
-            risk_price_unstable=0.85, risk_floor=0.5,
-            stretch_roi_multiplier=1.5,
+    def test_buy_unit_cap_independent_of_buy_cost(self):
+        # Same velocity, expensive item: cap still binds at 50 units
+        # — the unit cap doesn't change with cost-of-goods drift.
+        # Capital exposure DOES grow (operator sees this in
+        # capital_required + decides if it's tolerable).
+        row = _buy_row(
+            predicted_velocity_mid=200,
+            buy_cost=40.0,
+            raw_conservative_price=80.0,
+            fees_conservative=15.0,
+            profit_conservative=25.0,
         )
-        row = _buy_row(buy_cost=2.0)
-        # cap_units = floor(5.0 / 2.0) = 2, below min_test_qty=5.
-        # min_test_qty wins; capital_required exceeds the cap.
-        out = compute_buy_plan(row, config=cfg)
-        assert out["order_qty_recommended"] == 5
-        assert out["capital_required"] == 10.0        # 5 × 2.0 > cap
+        out = compute_buy_plan(row)
+        assert out["order_qty_recommended"] == 50    # same cap
+        assert out["capital_required"] == 2000.0     # 50 × 40 — operator visible
 
     def test_buy_moq_wins_over_computed_qty(self):
         # mid=18, ceil(18 × 21 / 30) = 13. MOQ=20 wins.
         out = compute_buy_plan(_buy_row(moq=20))
         assert out["order_qty_recommended"] == 20
 
-    def test_buy_moq_busts_capital_cap_intentionally(self):
-        # MOQ × buy_cost beyond capital cap — MOQ still wins (PRD §7.5).
+    def test_buy_moq_busts_unit_cap_intentionally(self):
+        # MOQ above the unit cap — MOQ still wins. capital_required
+        # surfaces the over-cap exposure to the operator.
         row = _buy_row(moq=80, buy_cost=4.0)
         out = compute_buy_plan(row)
         assert out["order_qty_recommended"] == 80
-        assert out["capital_required"] == 320.0       # > 200 cap
+        assert out["capital_required"] == 320.0      # 80 × 4.00
 
-    def test_buy_reorder_mode_uses_longer_cover(self):
-        # mid=18, 45d cover → ceil(18 * 45 / 30) = 27.
-        # Reorder mode: no capital cap.
+    def test_buy_reorder_mode_skips_unit_cap(self):
+        # mid=200/mo, 45d cover → ceil(200 × 45/30) = 300.
+        # Reorder mode: no cap (operator has already validated
+        # sell-through). Order qty matches the velocity-driven raw.
+        out = compute_buy_plan(
+            _buy_row(predicted_velocity_mid=200),
+            order_mode="reorder",
+        )
+        assert out["order_qty_recommended"] == 300
+        assert out["capital_required"] == 1200.0     # 300 × 4.00
+
+    def test_buy_reorder_mode_default_velocity_uses_longer_cover(self):
+        # mid=18, 45d cover → ceil(18 × 45 / 30) = 27 (under cap).
         out = compute_buy_plan(_buy_row(), order_mode="reorder")
         assert out["order_qty_recommended"] == 27
-        assert out["capital_required"] == 108.0       # 27 × 4.00
+        assert out["capital_required"] == 108.0      # 27 × 4.00
 
     def test_buy_no_velocity_returns_insufficient_velocity(self):
         # No mid → can't size. INSUFFICIENT_VELOCITY.

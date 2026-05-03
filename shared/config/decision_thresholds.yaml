@@ -227,7 +227,9 @@ buy_plan:
   first_order_days: 21                  # cover for a first / untested ASIN
   reorder_days: 45                      # cover for a known-selling ASIN reorder
   min_test_qty: 5                       # never order less than this on a BUY
-  max_first_order_capital: 200          # GBP — cap on per-ASIN first-order spend
+  max_first_order_units: 50             # unit cap on per-ASIN first-order
+                                        # (test-before-scale; cap doesn't
+                                        # apply on reorder mode)
 
   # --- Risk dampener (multiplied with predicted_velocity_mid) ---
   risk_low_confidence: 0.70             # opportunity_confidence == LOW

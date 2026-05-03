@@ -255,15 +255,18 @@ def _compute_sizing(
     order_qty_raw = math.ceil(projected_units * days_of_cover / 30)
     order_qty = order_qty_raw
 
-    # Capital cap — first-order only. Reorders aren't capped.
+    # First-order cap — unit-based (was £-based pre-PR-78 review).
+    # Caps the test order regardless of buy_cost so the operator's
+    # safety net is "how many units am I committing to" rather than
+    # "how much cash" (which moved with cost-of-goods drift). Reorders
+    # aren't capped — at that point the operator has already validated
+    # sell-through.
     if order_mode == "first":
-        capital_cap_units = math.floor(config.max_first_order_capital / buy_cost)
-        order_qty = min(order_qty, capital_cap_units)
+        order_qty = min(order_qty, config.max_first_order_units)
 
-    # PRD §7.8 — min_test_qty floor wins even when capital cap would
-    # bring us below it. Operator sees both numbers and decides; the
-    # HIGH_MOQ-style flag isn't needed here because capital_required
-    # is also output (the cap excess is visible).
+    # min_test_qty floor wins even when the cap would bring us below
+    # it. Loader invariant pins max_first_order_units >= min_test_qty
+    # so this only fires when raw velocity-driven qty was even smaller.
     order_qty = max(order_qty, config.min_test_qty)
 
     # MOQ — supplier-imposed lower bound. PRD §7.5 — MOQ wins even
