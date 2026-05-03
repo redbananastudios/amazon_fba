@@ -221,6 +221,75 @@ class TestCsvBuyPlanColumns:
         assert df_back["buy_plan_status"].iloc[0] == "OK"
 
 
+class TestCsvExposesEngineFields:
+    """The 2026-05-03 decision-data audit revealed the CSV writer was
+    silently dropping ~30 populated columns. Operators saw blanks for
+    fields the engine had computed and the buyer report was reading.
+    Pin the fix: every signal the analyst depends on must be in the
+    schema."""
+
+    def test_decision_pipeline_outputs_in_schema(self):
+        for col in (
+            "candidate_score", "candidate_band", "data_confidence",
+            "opportunity_verdict", "opportunity_score", "opportunity_confidence",
+            "next_action", "opportunity_reasons", "opportunity_blockers",
+        ):
+            assert col in OUTPUT_COLUMNS, f"{col} missing from csv schema"
+
+    def test_trend_signals_in_schema(self):
+        for col in (
+            "bsr_slope_30d", "bsr_slope_90d", "bsr_slope_365d",
+            "bsr_drops_30d",
+            "buy_box_oos_pct_90", "price_volatility_90d", "buy_box_drop_pct_90",
+            "buy_box_min_365d", "buy_box_avg30", "buy_box_avg90",
+            "fba_offer_count_90d_start", "fba_offer_count_90d_joiners",
+            "listing_age_days", "amazon_bb_pct_90",
+        ):
+            assert col in OUTPUT_COLUMNS, f"{col} missing from csv schema"
+
+    def test_economics_breakdown_in_schema(self):
+        for col in (
+            "roi_current", "roi_conservative", "breakeven_price",
+            "amazon_price", "new_fba_price", "buy_box_price",
+            "fba_seller_count", "amazon_status", "price_history_basis",
+            "fba_pick_pack_fee", "referral_fee_pct",
+        ):
+            assert col in OUTPUT_COLUMNS, f"{col} missing from csv schema"
+
+    def test_predicted_velocity_in_schema(self):
+        for col in (
+            "predicted_velocity_low", "predicted_velocity_mid",
+            "predicted_velocity_high", "predicted_velocity_share_source",
+            "buy_box_seller_stats",
+        ):
+            assert col in OUTPUT_COLUMNS, f"{col} missing from csv schema"
+
+    def test_dict_field_serialised_to_json(self, tmp_path: Path):
+        # buy_box_seller_stats is a dict — must round-trip through CSV
+        # without breaking pandas.
+        df = pd.DataFrame([_row(buy_box_seller_stats={
+            "ABC": {"pct_won": 45.0, "is_fba": True},
+            "DEF": {"pct_won": 25.0, "is_fba": True},
+        })])
+        out_path = tmp_path / "out.csv"
+        write_csv(df, str(out_path))
+        body = out_path.read_text(encoding="utf-8")
+        # JSON serialisation preserves the structure.
+        assert '"ABC"' in body
+        assert "45.0" in body
+
+    def test_list_fields_join_with_semicolons(self, tmp_path: Path):
+        df = pd.DataFrame([_row(
+            opportunity_reasons=["healthy ROI", "few sellers", "stable price"],
+            opportunity_blockers=["candidate_score < 75"],
+        )])
+        out_path = tmp_path / "out.csv"
+        write_csv(df, str(out_path))
+        df_back = pd.read_csv(out_path)
+        assert "healthy ROI; few sellers; stable price" in df_back["opportunity_reasons"].iloc[0]
+        assert df_back["opportunity_blockers"].iloc[0] == "candidate_score < 75"
+
+
 # ────────────────────────────────────────────────────────────────────────
 # Markdown
 # ────────────────────────────────────────────────────────────────────────
