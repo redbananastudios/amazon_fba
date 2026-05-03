@@ -266,12 +266,32 @@ def _judge_sales_estimate(row: dict) -> dict:
 
 
 def _judge_predicted_velocity(row: dict) -> dict:
-    sales = _num(row.get("sales_estimate"))
+    """Mirror the engine's internal sales-source reconciliation.
+
+    `predict_seller_velocity` in opportunity.py uses
+    `min(sales_estimate, bsr_drops_30d × 1.5)` as the conservative
+    sales floor (per CLAUDE.md: Keepa's monthlySold over-estimates
+    niche listings; BSR drops × 1.5 is the operator-validated cross-
+    check). The buyer-report rationale should compute share against
+    the SAME denominator the engine used so the numbers reconcile.
+    """
+    sales_est = _num(row.get("sales_estimate"))
+    bsr_drops = _num(row.get("bsr_drops_30d"))
     bb = _num(row.get("amazon_bb_pct_90"))
     mid = _num(row.get("predicted_velocity_mid"))
     label = "Your Share/mo"
-    if sales is None or bb is None or mid is None:
+    if bb is None or mid is None:
         return _grey("predicted_velocity", label)
+    # Reconcile sales floor — same logic as opportunity.predict_seller_velocity.
+    bsr_proxy = bsr_drops * 1.5 if bsr_drops is not None else None
+    if sales_est is None and bsr_proxy is None:
+        return _grey("predicted_velocity", label)
+    if sales_est is None:
+        sales = bsr_proxy
+    elif bsr_proxy is None:
+        sales = sales_est
+    else:
+        sales = min(sales_est, bsr_proxy)
     non_amazon_share = sales * (1 - bb)
     if non_amazon_share <= 0:
         return _grey("predicted_velocity", label)
@@ -298,7 +318,11 @@ def _judge_predicted_velocity(row: dict) -> dict:
 
 def _judge_bsr_drops(row: dict) -> dict:
     """BSR drops = sales-event count Amazon's BSR registered in 30 days.
-    Higher number = more frequent sales activity = healthier listing.
+
+    Engine convention: `BSR drops × 1.5` is the conservative monthly-
+    sales proxy (some sales don't move BSR visibly). Surface that
+    derived number in the rationale so it reconciles with Listing
+    Sales/mo (Keepa's smoothed estimate, which can be optimistic).
     """
     drops = _num(row.get("bsr_drops_30d"))
     sales = _num(row.get("sales_estimate")) or 0
@@ -306,24 +330,25 @@ def _judge_bsr_drops(row: dict) -> dict:
     if drops is None:
         return _grey("bsr_drops_30d", label)
     val = f"{int(drops)} sales"
+    implied_monthly = drops * 1.5
     green_floor = max(20.0, sales * 0.5)
     amber_floor = max(10.0, sales * 0.25)
     if drops >= green_floor:
         return {
             "key": "bsr_drops_30d", "label": label,
             "value_display": val, "verdict": "green",
-            "rationale": f"frequent sales (≥ {int(green_floor)} BSR drops/30d)",
+            "rationale": f"frequent — ~{int(implied_monthly)}/mo implied (BSR drops × 1.5)",
         }
     if drops >= amber_floor:
         return {
             "key": "bsr_drops_30d", "label": label,
             "value_display": val, "verdict": "amber",
-            "rationale": f"moderate sales (≥ {int(amber_floor)} BSR drops/30d)",
+            "rationale": f"moderate — ~{int(implied_monthly)}/mo implied (BSR drops × 1.5)",
         }
     return {
         "key": "bsr_drops_30d", "label": label,
         "value_display": val, "verdict": "red",
-        "rationale": f"slow listing (< {int(amber_floor)} BSR drops/30d)",
+        "rationale": f"slow — only ~{int(implied_monthly)}/mo implied (BSR drops × 1.5)",
     }
 
 

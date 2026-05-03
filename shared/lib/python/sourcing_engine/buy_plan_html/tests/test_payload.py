@@ -254,10 +254,15 @@ class TestMetricsTrafficLight:
         assert m["verdict"] == expected
 
     # ──────────────── predicted_velocity ────────────────
+    # Note: predicted_velocity reconciles `min(sales_estimate, bsr_drops × 1.5)`
+    # to mirror the engine's velocity calc. These tests set
+    # `bsr_drops_30d=None` so the reconciliation collapses to
+    # sales_estimate alone, isolating the share-of-rotation boundary.
     def test_predicted_velocity_green_above_half_share(self):
         # non_amazon_share = 250 × 0.9 = 225. Half = 112.5.
         row = self._row(
-            predicted_velocity_mid=120, sales_estimate=250, amazon_bb_pct_90=0.10,
+            predicted_velocity_mid=120, sales_estimate=250,
+            amazon_bb_pct_90=0.10, bsr_drops_30d=None,
         )
         m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "predicted_velocity")
         assert m["verdict"] == "green"
@@ -265,17 +270,32 @@ class TestMetricsTrafficLight:
     def test_predicted_velocity_amber_quarter_to_half(self):
         # 0.25 × 225 = 56.25 ≤ mid < 112.5 → amber.
         row = self._row(
-            predicted_velocity_mid=70, sales_estimate=250, amazon_bb_pct_90=0.10,
+            predicted_velocity_mid=70, sales_estimate=250,
+            amazon_bb_pct_90=0.10, bsr_drops_30d=None,
         )
         m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "predicted_velocity")
         assert m["verdict"] == "amber"
 
     def test_predicted_velocity_red_below_quarter_share(self):
         row = self._row(
-            predicted_velocity_mid=20, sales_estimate=250, amazon_bb_pct_90=0.10,
+            predicted_velocity_mid=20, sales_estimate=250,
+            amazon_bb_pct_90=0.10, bsr_drops_30d=None,
         )
         m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "predicted_velocity")
         assert m["verdict"] == "red"
+
+    def test_predicted_velocity_uses_min_of_sales_and_bsr_proxy(self):
+        # Engine convention: when bsr_drops × 1.5 < sales_estimate,
+        # use the conservative (lower) number for share calc.
+        # bsr=20 → bsr_proxy=30; sales=250 → use 30 not 250.
+        # non_amazon = 30 × 0.9 = 27. mid=15 → 15/27 = 56% → green.
+        # If we'd used sales=250 instead: 15/225 = 7% → red.
+        row = self._row(
+            predicted_velocity_mid=15, sales_estimate=250,
+            amazon_bb_pct_90=0.10, bsr_drops_30d=20,
+        )
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "predicted_velocity")
+        assert m["verdict"] == "green"
 
     def test_predicted_velocity_grey_when_amazon_bb_missing(self):
         row = self._row(
