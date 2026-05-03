@@ -85,6 +85,7 @@ def run_pipeline(
     market_data_path: str | None = None,
     preflight_enabled: bool = True,
     order_mode: str = "first",
+    html_enabled: bool = True,
 ):
     """Run the full pipeline for one supplier.
 
@@ -106,6 +107,7 @@ def run_pipeline(
     # Imported lazily so tests that monkeypatch the step modules work
     # against the canonical names.
     from fba_engine.steps.buy_plan import add_buy_plan
+    from fba_engine.steps.buy_plan_html import add_buy_plan_html
     from fba_engine.steps.calculate import calculate_economics
     from fba_engine.steps.candidate_score import add_candidate_score
     from fba_engine.steps.decide import decide_rows
@@ -178,6 +180,16 @@ def run_pipeline(
         market_data=market_data,
     )
 
+    # Stage 09 — buy_plan_html (buyer report JSON + HTML).
+    if html_enabled:
+        add_buy_plan_html(
+            planned_df,
+            run_dir=Path(run_dir),
+            timestamp=timestamp,
+            strategy="supplier_pricelist",
+            supplier=_friendly_supplier_label(supplier),
+        )
+
     _print_summary(planned_df, norm_df)
     return run_dir
 
@@ -241,6 +253,11 @@ def main():
              "days-of-cover and the per-ASIN capital cap. `reorder` uses "
              "longer cover and no cap — appropriate for known-selling ASINs.",
     )
+    parser.add_argument(
+        "--no-html", action="store_true",
+        help="Skip the 09_buy_plan_html buyer-report writer (JSON + HTML "
+             "alongside the existing CSV/XLSX/MD). Default: enabled.",
+    )
     args = parser.parse_args()
 
     repo_root = _find_repo_root()
@@ -255,6 +272,7 @@ def main():
         args.market_data,
         preflight_enabled=not args.no_preflight,
         order_mode=args.order_mode,
+        html_enabled=not args.no_html,
     )
 
 

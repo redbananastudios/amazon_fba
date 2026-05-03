@@ -9,6 +9,13 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Local run artefacts (CSV / XLSX / JSON / HTML output of scratch runs)
+out/
+output/
+
+# Transient handoff docs (live local; archive into docs/ when promoted)
+CLAUDE_CODE_HANDOFF.md
+
 # Node (legacy keepa)
 node_modules/
 package-lock.json

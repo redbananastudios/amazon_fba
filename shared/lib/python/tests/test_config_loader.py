@@ -563,3 +563,50 @@ def test_buy_plan_validates_stretch_multiplier_upper_bound(tmp_path):
     with pytest.raises(AssertionError, match="stretch_roi_multiplier"):
         cfg.get_buy_plan(config_dir=config_dir)
     cfg.reset_cache()
+
+
+# --------------------------------------------------------------------------- #
+# BuyPlanHtml (09_buy_plan_html)                                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_buy_plan_html_loads_from_canonical_yaml():
+    """Canonical decision_thresholds.yaml ships with the buy_plan_html
+    block. Pin the documented default."""
+    cfg.reset_cache()
+    bp_html = cfg.get_buy_plan_html()
+    assert bp_html.enabled is True
+
+
+def test_buy_plan_html_uses_defaults_when_block_missing(tmp_path):
+    """Backwards compat — older decision_thresholds.yaml without the
+    buy_plan_html block must still load with default-on."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    stripped = raw.split("# === Buyer report")[0].rstrip() + "\n"
+    (config_dir / "decision_thresholds.yaml").write_text(stripped)
+    cfg.reset_cache()
+    bp_html = cfg.get_buy_plan_html(config_dir=config_dir)
+    assert bp_html.enabled is True
+    cfg.reset_cache()
+
+
+def test_buy_plan_html_disabled_override(tmp_path):
+    """Operator can set buy_plan_html.enabled: false to skip the writer."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    custom = raw.replace("enabled: true                         # produce JSON+HTML by default",
+                         "enabled: false                        # disabled for test")
+    (config_dir / "decision_thresholds.yaml").write_text(custom)
+    cfg.reset_cache()
+    bp_html = cfg.get_buy_plan_html(config_dir=config_dir)
+    assert bp_html.enabled is False
+    cfg.reset_cache()

@@ -113,5 +113,16 @@ steps:
     config:
       order_mode: "{order_mode}"
 
+  # Stage 09 — buy_plan_html (buyer report — JSON + HTML).
+  # Single-ASIN runs use the per-ASIN filename pattern.
+  - name: buy_plan_html
+    module: fba_engine.steps.buy_plan_html
+    config:
+      run_dir: "{output_dir}"
+      timestamp: "{timestamp}"
+      strategy: single_asin
+      supplier: ""
+      asin: "{asin}"
+
 output:
   csv: "{output_dir}/single_asin_{asin}_{timestamp}.csv"
