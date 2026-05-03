@@ -56,13 +56,27 @@ steps:
   - name: decide
     module: fba_engine.steps.decide
 
-  # Stage 03 — enrich (SP-API preflight). Mirrors run_pipeline's
-  # AFTER-decide ordering. Set enabled=false for offline / no-creds
-  # environments.
+  # Stage 03 — enrich (SP-API preflight). Runs AFTER decide so we know
+  # which rows are actionable. `survivors_only: true` filters to non-
+  # REJECT rows before invoking the MCP — typical 5720-row ABGEE run
+  # has 5700 REJECTs the SP-API doesn't need to touch (saves ~10 min).
+  # Live BB price + offer counts populate live_* columns; the next
+  # step bridges them into canonical names.
   - name: enrich
     module: fba_engine.steps.enrich
     config:
       enabled: true
+      survivors_only: true
+
+  # Stage 05.45 — merge_live_pricing. The SP-API enrich step above
+  # already fetched live Buy Box price + offer counts via getItemOffersBatch,
+  # but wrote them to `live_*` columns the engine doesn't read. This
+  # step bridges them into the canonical columns (`buy_box_price`,
+  # `fba_seller_count`, `amazon_status`) so the second-pass calculate
+  # sees current data. Critical for niche listings where Keepa never
+  # tracked BB — SP-API has it in real-time. Live wins over stale.
+  - name: merge_live_pricing
+    module: fba_engine.steps.merge_live_pricing
 
   # Stage 05.5 — keepa_enrich_survivors. The first-pass `resolve` step
   # reads market data from a static Keepa Browser CSV, typically weeks
