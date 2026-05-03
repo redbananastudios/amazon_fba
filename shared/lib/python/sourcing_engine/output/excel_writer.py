@@ -29,6 +29,20 @@ COLUMNS = [
     ("predicted_velocity_mid",  "Velocity Mid",         12, "int"),
     ("predicted_velocity_high", "Velocity High",        12, "int"),
     ("predicted_velocity_share_source", "Share Source", 22, "text"),
+    # 08_buy_plan — order-list rollup. Pure additive, never alters
+    # the verdict. The operator-facing answer to "what do I order /
+    # what should I pay / how long until I sell through?".
+    ("order_qty_recommended",   "Order Qty",            10, "int"),
+    ("capital_required",        "Capital £",            12, "gbp"),
+    ("projected_30d_units",     "Proj 30d Units",       14, "int"),
+    ("projected_30d_revenue",   "Proj 30d Revenue",     16, "gbp"),
+    ("projected_30d_profit",    "Proj 30d Profit",      16, "gbp"),
+    ("payback_days",            "Payback (days)",       14, "num1"),
+    ("target_buy_cost_buy",     "Target Buy Cost",      16, "gbp"),
+    ("target_buy_cost_stretch", "Stretch Target",       14, "gbp"),
+    ("gap_to_buy_gbp",          "Gap to BUY £",         12, "gbp"),
+    ("gap_to_buy_pct",          "Gap to BUY %",         12, "pct"),
+    ("buy_plan_status",         "Buy Plan Status",      18, "text"),
     # Candidate score (HANDOFF WS3.6) — informational columns,
     # do NOT alter the decision column.
     ("candidate_band",          "Strength",             12, "text"),
@@ -163,11 +177,31 @@ def write_excel(
             out["__sort_decision"] = out["decision"].map(decision_priority).fillna(99)
         else:
             out["__sort_decision"] = 99
-        score_col = (
-            out["candidate_score"]
-            if "candidate_score" in out.columns
-            else pd.Series([0] * len(out), index=out.index)
-        )
+        # PRD §8.1 — within BUY rows, sort by projected_30d_profit
+        # desc (the operator's actual ranking question is "which
+        # order makes me the most money?"). Outside BUY tier, fall
+        # back to candidate_score desc.
+        if (
+            "projected_30d_profit" in out.columns
+            and "opportunity_verdict" in out.columns
+        ):
+            buy_mask = out["opportunity_verdict"].astype(str).str.upper() == "BUY"
+            buy_score = pd.to_numeric(
+                out["projected_30d_profit"], errors="coerce"
+            ).fillna(0)
+            cand_score = pd.to_numeric(
+                out["candidate_score"]
+                if "candidate_score" in out.columns
+                else pd.Series([0] * len(out), index=out.index),
+                errors="coerce",
+            ).fillna(0)
+            score_col = buy_score.where(buy_mask, cand_score)
+        else:
+            score_col = (
+                out["candidate_score"]
+                if "candidate_score" in out.columns
+                else pd.Series([0] * len(out), index=out.index)
+            )
         out["__sort_score"] = pd.to_numeric(
             score_col, errors="coerce"
         ).fillna(0) * -1   # negative for descending
@@ -318,6 +352,14 @@ def write_excel(
                         cell.number_format = int_fmt
                     except (ValueError, TypeError):
                         cell.value = val
+                elif fmt == "num1":
+                    # 1-dp number — used for payback_days where the
+                    # operator wants "21.7 days" not "22 days".
+                    try:
+                        cell.value = float(val)
+                        cell.number_format = "0.0"
+                    except (ValueError, TypeError):
+                        cell.value = val
                 else:
                     cell.value = str(val) if val is not None else None
 
@@ -436,6 +478,14 @@ def write_excel(
                     )
                     band_cell.font = Font(size=10, color="7F8C8D")
 
+            # 08_buy_plan colour coding (PRD §8.1):
+            #   order_qty_recommended  capital-graded  £0-50 light /
+            #                                          £50-150 mid /
+            #                                          £150+ dark green
+            #   payback_days           <30 green / 30-60 amber / >60 red
+            #   gap_to_buy_pct         red gradient — closer to 0 = lighter
+            _format_buy_plan_cells(ws, row_idx, row)
+
             ws.row_dimensions[row_idx].height = 22
 
         # Freeze panes — freeze title + header rows, and first 3 columns
@@ -449,6 +499,103 @@ def write_excel(
 
     except Exception:
         logger.exception("Failed to write Excel: %s", path)
+
+
+def _format_buy_plan_cells(ws, row_idx, row):
+    """Apply per-cell formatting to the buy_plan columns on one row.
+
+    Three rules per PRD §8.1:
+      - order_qty_recommended: capital-graded fill (lighter for small
+        orders, darker for big ones — visual cue for "how much capital
+        is at stake here").
+      - payback_days: green/amber/red bands (<30 / 30-60 / >60).
+      - gap_to_buy_pct: red gradient on NEGOTIATE rows (closer to 0
+        = lighter — closer to BUY-able).
+
+    Imports are local so the writer stays cheap to import (openpyxl is
+    already loaded above by write_excel).
+    """
+    from openpyxl.styles import Font, PatternFill
+
+    def _col_idx(name: str) -> int | None:
+        for i, c in enumerate(COLUMNS):
+            if c[0] == name:
+                return i + 1
+        return None
+
+    def _num(value):
+        if value is None:
+            return None
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return None
+        if n != n:   # NaN
+            return None
+        return n
+
+    # --- Order qty: capital-graded ---
+    qty_idx = _col_idx("order_qty_recommended")
+    cap = _num(row.get("capital_required"))
+    if qty_idx is not None and cap is not None and cap > 0:
+        cell = ws.cell(row=row_idx, column=qty_idx)
+        if cap < 50:
+            cell.fill = PatternFill(
+                start_color="EAFAF1", end_color="EAFAF1", fill_type="solid",
+            )
+            cell.font = Font(size=10, color="186A3B")
+        elif cap < 150:
+            cell.fill = PatternFill(
+                start_color="ABEBC6", end_color="ABEBC6", fill_type="solid",
+            )
+            cell.font = Font(bold=True, size=10, color="186A3B")
+        else:
+            cell.fill = PatternFill(
+                start_color="58D68D", end_color="58D68D", fill_type="solid",
+            )
+            cell.font = Font(bold=True, size=10, color="14532D")
+
+    # --- Payback days: <30 green / 30-60 amber / >60 red ---
+    pb_idx = _col_idx("payback_days")
+    pb = _num(row.get("payback_days"))
+    if pb_idx is not None and pb is not None:
+        cell = ws.cell(row=row_idx, column=pb_idx)
+        if pb < 30:
+            cell.fill = PatternFill(
+                start_color="ABEBC6", end_color="ABEBC6", fill_type="solid",
+            )
+            cell.font = Font(bold=True, size=10, color="186A3B")
+        elif pb <= 60:
+            cell.fill = PatternFill(
+                start_color="FAD7A0", end_color="FAD7A0", fill_type="solid",
+            )
+            cell.font = Font(bold=True, size=10, color="9C640C")
+        else:
+            cell.fill = PatternFill(
+                start_color="F5B7B1", end_color="F5B7B1", fill_type="solid",
+            )
+            cell.font = Font(bold=True, size=10, color="943126")
+
+    # --- Gap to BUY %: red gradient (smaller gap = lighter) ---
+    gap_idx = _col_idx("gap_to_buy_pct")
+    gap = _num(row.get("gap_to_buy_pct"))
+    if gap_idx is not None and gap is not None and gap > 0:
+        cell = ws.cell(row=row_idx, column=gap_idx)
+        if gap < 0.05:
+            cell.fill = PatternFill(
+                start_color="FADBD8", end_color="FADBD8", fill_type="solid",
+            )
+            cell.font = Font(size=10, color="943126")
+        elif gap < 0.15:
+            cell.fill = PatternFill(
+                start_color="F1948A", end_color="F1948A", fill_type="solid",
+            )
+            cell.font = Font(bold=True, size=10, color="641E16")
+        else:
+            cell.fill = PatternFill(
+                start_color="CD6155", end_color="CD6155", fill_type="solid",
+            )
+            cell.font = Font(bold=True, size=10, color="FFFFFF")
 
 
 def _enrich_from_keepa(df, market_data):

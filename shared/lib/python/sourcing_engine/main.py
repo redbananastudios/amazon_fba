@@ -84,6 +84,7 @@ def run_pipeline(
     output_dir: str,
     market_data_path: str | None = None,
     preflight_enabled: bool = True,
+    order_mode: str = "first",
 ):
     """Run the full pipeline for one supplier.
 
@@ -104,7 +105,9 @@ def run_pipeline(
 
     # Imported lazily so tests that monkeypatch the step modules work
     # against the canonical names.
+    from fba_engine.steps.buy_plan import add_buy_plan
     from fba_engine.steps.calculate import calculate_economics
+    from fba_engine.steps.candidate_score import add_candidate_score
     from fba_engine.steps.decide import decide_rows
     from fba_engine.steps.enrich import enrich_with_preflight
     from fba_engine.steps.resolve import resolve_matches
@@ -112,6 +115,7 @@ def run_pipeline(
         discover_supplier_pricelist,
     )
     from fba_engine.steps.supplier_pricelist_output import write_outputs
+    from fba_engine.steps.validate_opportunity import add_opportunity_verdict
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = os.path.join(output_dir, timestamp)
@@ -141,24 +145,40 @@ def run_pipeline(
     # Stage 04 — calculate (fees + conservative price + profit + risk).
     calculated_df = calculate_economics(resolved_df)
 
-    # Stage 05 — decide (SHORTLIST / REVIEW / REJECT).
-    decided_df = decide_rows(calculated_df)
+    # Stage 04.5 — candidate_score (0-100 strength + data-confidence
+    # label). Pure additive: feeds validate_opportunity downstream.
+    scored_df = add_candidate_score(calculated_df)
+
+    # Stage 05 — decide (SHORTLIST / REVIEW / REJECT). Run after
+    # candidate_score so any future decide overrides keyed on
+    # candidate_score / data_confidence are visible.
+    decided_df = decide_rows(scored_df)
 
     # Stage 03 — enrich (preflight). Order: legacy run_pipeline performs
     # preflight AFTER decide; preserved here. Strategies that want a
     # different order can compose YAML steps differently.
     enriched_df = enrich_with_preflight(decided_df, enabled=preflight_enabled)
 
+    # Stage 07 — validate_opportunity (BUY / SOURCE_ONLY / NEGOTIATE /
+    # WATCH / KILL). Pure additive — never changes the SHORTLIST/REVIEW/
+    # REJECT verdict. Needed before buy_plan because buy_plan reads
+    # opportunity_verdict / opportunity_confidence / predicted_velocity_*.
+    validated_df = add_opportunity_verdict(enriched_df)
+
+    # Stage 08 — buy_plan (order qty / capital / payback / target buy
+    # cost / negotiation gap). Pure additive — appends 11 columns.
+    planned_df = add_buy_plan(validated_df, order_mode=order_mode)
+
     # Stage 06 — output (CSV + XLSX + MD).
     write_outputs(
-        enriched_df,
+        planned_df,
         run_dir=Path(run_dir),
         timestamp=timestamp,
         supplier_label=_friendly_supplier_label(supplier),
         market_data=market_data,
     )
 
-    _print_summary(enriched_df, norm_df)
+    _print_summary(planned_df, norm_df)
     return run_dir
 
 
@@ -214,6 +234,13 @@ def main():
              "Default: enabled when MCP CLI is built and SP_API creds are set; "
              "no-ops silently otherwise.",
     )
+    parser.add_argument(
+        "--order-mode", default="first", dest="order_mode",
+        choices=("first", "reorder"),
+        help="08_buy_plan order-sizing mode. `first` (default) uses tighter "
+             "days-of-cover and the per-ASIN capital cap. `reorder` uses "
+             "longer cover and no cap — appropriate for known-selling ASINs.",
+    )
     args = parser.parse_args()
 
     repo_root = _find_repo_root()
@@ -227,6 +254,7 @@ def main():
         output_dir,
         args.market_data,
         preflight_enabled=not args.no_preflight,
+        order_mode=args.order_mode,
     )
 
 

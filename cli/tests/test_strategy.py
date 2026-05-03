@@ -302,6 +302,151 @@ class TestBuildContext:
         with pytest.raises(SystemExit, match="KEY=VALUE"):
             cli_strategy._build_context(ns)
 
+    def test_order_mode_defaults_to_first(self):
+        ns = cli_strategy._parse_args(["--strategy", "keepa_finder"])
+        assert ns.order_mode == "first"
+        ctx = cli_strategy._build_context(ns)
+        assert ctx["order_mode"] == "first"
+
+    def test_order_mode_reorder_flows_into_context(self):
+        ns = cli_strategy._parse_args([
+            "--strategy", "keepa_finder", "--order-mode", "reorder",
+        ])
+        assert ns.order_mode == "reorder"
+        ctx = cli_strategy._build_context(ns)
+        assert ctx["order_mode"] == "reorder"
+
+    def test_order_mode_rejects_unknown_value(self):
+        with pytest.raises(SystemExit):
+            cli_strategy._parse_args([
+                "--strategy", "keepa_finder", "--order-mode", "monthly",
+            ])
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Single-ASIN buy-plan printer (PRD §8.4).
+# ────────────────────────────────────────────────────────────────────────
+
+
+class TestPrintBuyPlanBlock:
+    """Verifies the printer's per-verdict output shape per PRD §8.4."""
+
+    def _capture(self, row: dict) -> str:
+        """Run the printer on a row dict, return captured stdout."""
+        import io, math, contextlib
+
+        # Mirrors the local helpers `_print_single_asin_verdict` defines.
+        def is_missing(v):
+            if v is None:
+                return True
+            try:
+                return math.isnan(float(v))
+            except (TypeError, ValueError):
+                return False
+
+        def fmt(v, prefix="GBP ", default="-"):
+            if is_missing(v):
+                return default
+            try:
+                return f"{prefix}{float(v):.2f}"
+            except (TypeError, ValueError):
+                return str(v) if v else default
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli_strategy._print_buy_plan_block(row, is_missing, fmt)
+        return buf.getvalue()
+
+    def test_buy_renders_full_block(self):
+        row = {
+            "opportunity_verdict": "BUY",
+            "order_qty_recommended": 13,
+            "capital_required": 52.0,
+            "projected_30d_units": 18,
+            "projected_30d_revenue": 303.30,
+            "projected_30d_profit": 64.20,
+            "payback_days": 21.7,
+            "target_buy_cost_buy": 6.85,
+            "target_buy_cost_stretch": 5.20,
+            "buy_cost": 4.00,
+            "buy_plan_status": "OK",
+        }
+        out = self._capture(row)
+        assert "Buy plan" in out
+        assert "13 units" in out
+        assert "GBP 52.00" in out
+        assert "Projected 30d" in out
+        assert "21" in out  # payback rendered
+        assert "GBP 6.85" in out
+        assert "stretch GBP 5.20" in out
+
+    def test_source_only_swaps_to_supplier_target_block(self):
+        row = {
+            "opportunity_verdict": "SOURCE_ONLY",
+            "order_qty_recommended": None,
+            "capital_required": None,
+            "projected_30d_units": 42,
+            "projected_30d_revenue": 710.00,
+            "projected_30d_profit": 136.00,
+            "payback_days": None,
+            "target_buy_cost_buy": 4.85,
+            "target_buy_cost_stretch": 4.10,
+            "buy_cost": 0.0,
+            "buy_plan_status": "NO_BUY_COST",
+        }
+        out = self._capture(row)
+        assert "Source target" in out
+        assert "GBP 4.85" in out
+        assert "stretch GBP 4.10" in out
+        # Order-block-specific labels MUST NOT appear.
+        assert "Order qty:" not in out
+        assert "Payback" not in out
+
+    def test_negotiate_renders_gap_at_current_cost(self):
+        row = {
+            "opportunity_verdict": "NEGOTIATE",
+            "order_qty_recommended": None,
+            "capital_required": None,
+            "projected_30d_units": 18,
+            "projected_30d_revenue": 303.30,
+            "projected_30d_profit": 42.30,
+            "payback_days": None,
+            "target_buy_cost_buy": 4.38,
+            "target_buy_cost_stretch": 3.50,
+            "buy_cost": 5.00,
+            "gap_to_buy_gbp": 0.62,
+            "gap_to_buy_pct": 0.124,
+            "buy_plan_status": "OK",
+        }
+        out = self._capture(row)
+        assert "Negotiation ask" in out
+        assert "GBP 5.00" in out
+        assert "GBP 4.38" in out
+        assert "GBP 0.62" in out
+        # Reviewer #4 — label must say "current cost", not "ceiling".
+        assert "At current cost:" in out
+        assert "At ceiling:" not in out
+
+    def test_watch_omits_block_entirely(self):
+        row = {
+            "opportunity_verdict": "WATCH",
+            "buy_plan_status": "BLOCKED_BY_VERDICT",
+        }
+        out = self._capture(row)
+        assert out == ""
+
+    def test_kill_omits_block_entirely(self):
+        row = {
+            "opportunity_verdict": "KILL",
+            "buy_plan_status": "BLOCKED_BY_VERDICT",
+        }
+        out = self._capture(row)
+        assert out == ""
+
+    def test_missing_verdict_is_silent(self):
+        out = self._capture({})
+        assert out == ""
+
 
 # ────────────────────────────────────────────────────────────────────────
 # End-to-end smoke: dispatch keepa_finder against a synthetic CSV.

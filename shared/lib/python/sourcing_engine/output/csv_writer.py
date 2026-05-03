@@ -26,6 +26,15 @@ OUTPUT_COLUMNS = [
     # a future click-through bot. Seeded as blank by the preflight step.
     "ungate_status", "ungate_required_docs", "ungate_brand_required",
     "ungate_attempted_at", "ungate_message",
+    # 08_buy_plan — order-list rollup. Pure additive: appended at end
+    # so existing CSV consumers don't shift. CSV is the audit trail
+    # — no formatting, no conditional rules.
+    "order_qty_recommended", "capital_required",
+    "projected_30d_units", "projected_30d_revenue", "projected_30d_profit",
+    "payback_days",
+    "target_buy_cost_buy", "target_buy_cost_stretch",
+    "gap_to_buy_gbp", "gap_to_buy_pct",
+    "buy_plan_status",
 ]
 
 

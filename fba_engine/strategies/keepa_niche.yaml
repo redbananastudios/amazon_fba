@@ -70,5 +70,13 @@ steps:
   - name: validate_opportunity
     module: fba_engine.steps.validate_opportunity
 
+  # Phase 8: buy_plan — order-list rollup (qty / capital / payback /
+  # target buy cost / negotiation gap). Pure additive — appends 11
+  # columns. order_mode threads from the --order-mode CLI flag.
+  - name: buy_plan
+    module: fba_engine.steps.buy_plan
+    config:
+      order_mode: "{order_mode}"
+
 output:
   csv: "{base}/working/{niche_snake}_phase6_decisions.csv"

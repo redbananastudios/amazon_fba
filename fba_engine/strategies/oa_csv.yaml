@@ -67,5 +67,12 @@ steps:
   - name: validate_opportunity
     module: fba_engine.steps.validate_opportunity
 
+  # Stage 08 — buy_plan: order qty / capital / payback / target buy
+  # cost / negotiation gap. Pure additive — appends 11 columns.
+  - name: buy_plan
+    module: fba_engine.steps.buy_plan
+    config:
+      order_mode: "{order_mode}"
+
 output:
   csv: "{run_dir}/oa_decisions_{feed}_{timestamp}.csv"

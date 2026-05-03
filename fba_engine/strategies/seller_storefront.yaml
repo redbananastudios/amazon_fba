@@ -45,6 +45,14 @@ steps:
     config:
       include: leads
 
+  # NOTE: buy_plan (08) is intentionally NOT wired into this leads-
+  # only chain. buy_plan reads opportunity_verdict + predicted_velocity_*
+  # which only exist after validate_opportunity, and this strategy
+  # stops at "leads list" by design. Operators who want verdicts +
+  # buy plan from a competitor's storefront should use
+  # `seller_storefront_csv` (Browser CSV path) instead, which runs
+  # the full chain.
+
   # Stage 07 — supplier_leads: append supplier_search_* URLs.
   # Reads brand + product_name from each row and renders the configured
   # search templates (Brand distributor UK, Brand trade account, Product

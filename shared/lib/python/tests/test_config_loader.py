@@ -415,3 +415,151 @@ def test_data_signals_validates_oos_threshold_is_fraction(tmp_path):
     cfg.reset_cache()
     with pytest.raises(AssertionError, match="oos_threshold_pct"):
         cfg.get_data_signals(config_dir=config_dir)
+
+
+# --------------------------------------------------------------------------- #
+# BuyPlan (08_buy_plan)                                                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_buy_plan_loads_from_canonical_yaml():
+    """Canonical decision_thresholds.yaml ships with the buy_plan block.
+    Pin the documented defaults so a typo gets caught."""
+    cfg.reset_cache()
+    bp = cfg.get_buy_plan()
+    assert bp.first_order_days == 21
+    assert bp.reorder_days == 45
+    assert bp.min_test_qty == 5
+    assert bp.max_first_order_units == 50
+    assert bp.risk_low_confidence == 0.70
+    assert bp.risk_medium_confidence == 0.85
+    assert bp.risk_floor == 0.50
+    assert bp.stretch_roi_multiplier == 1.5
+
+
+def test_buy_plan_uses_defaults_when_block_missing(tmp_path):
+    """Backwards compat — older decision_thresholds.yaml without the
+    buy_plan block must still load with documented defaults."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    # Strip the buy_plan block from the canonical thresholds yaml.
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    stripped = raw.split("# === Buy plan")[0].rstrip() + "\n"
+    (config_dir / "decision_thresholds.yaml").write_text(stripped)
+    cfg.reset_cache()
+    bp = cfg.get_buy_plan(config_dir=config_dir)
+    assert bp.first_order_days == 21
+    assert bp.reorder_days == 45
+    assert bp.min_test_qty == 5
+    assert bp.max_first_order_units == 50
+    assert bp.risk_floor == 0.50
+    cfg.reset_cache()
+
+
+def test_buy_plan_custom_values_override_defaults(tmp_path):
+    """Operator override of the buy_plan block flows through cleanly."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    custom = raw.replace(
+        "first_order_days: 21", "first_order_days: 28"
+    ).replace(
+        "max_first_order_units: 50", "max_first_order_units: 100"
+    )
+    (config_dir / "decision_thresholds.yaml").write_text(custom)
+    cfg.reset_cache()
+    bp = cfg.get_buy_plan(config_dir=config_dir)
+    assert bp.first_order_days == 28
+    assert bp.max_first_order_units == 100
+    cfg.reset_cache()
+
+
+def test_buy_plan_validates_unit_cap_at_least_min_test_qty(tmp_path):
+    """max_first_order_units below min_test_qty would make the cap
+    tighter than the floor — invariant rejects this."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    bad = raw.replace("max_first_order_units: 50", "max_first_order_units: 3")
+    (config_dir / "decision_thresholds.yaml").write_text(bad)
+    cfg.reset_cache()
+    with pytest.raises(AssertionError, match="max_first_order_units"):
+        cfg.get_buy_plan(config_dir=config_dir)
+    cfg.reset_cache()
+
+
+def test_buy_plan_validates_risk_floor_in_range(tmp_path):
+    """A negative or zero risk_floor amplifies / zeroes mid — must be
+    rejected at load."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    bad = raw.replace("risk_floor: 0.50", "risk_floor: -0.1")
+    (config_dir / "decision_thresholds.yaml").write_text(bad)
+    cfg.reset_cache()
+    with pytest.raises(AssertionError, match="risk_floor"):
+        cfg.get_buy_plan(config_dir=config_dir)
+    cfg.reset_cache()
+
+
+def test_buy_plan_validates_first_order_below_reorder(tmp_path):
+    """First-order cover should not exceed reorder cover (untested ASIN
+    holds less stock, not more)."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    bad = raw.replace("first_order_days: 21", "first_order_days: 60")
+    (config_dir / "decision_thresholds.yaml").write_text(bad)
+    cfg.reset_cache()
+    with pytest.raises(AssertionError, match="first_order_days above reorder_days"):
+        cfg.get_buy_plan(config_dir=config_dir)
+    cfg.reset_cache()
+
+
+def test_buy_plan_validates_stretch_multiplier_at_least_one(tmp_path):
+    """A stretch multiplier below 1.0 makes the stretch target above the
+    buy ceiling — that's nonsense."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    bad = raw.replace("stretch_roi_multiplier: 1.5", "stretch_roi_multiplier: 0.8")
+    (config_dir / "decision_thresholds.yaml").write_text(bad)
+    cfg.reset_cache()
+    with pytest.raises(AssertionError, match="stretch_roi_multiplier"):
+        cfg.get_buy_plan(config_dir=config_dir)
+    cfg.reset_cache()
+
+
+def test_buy_plan_validates_stretch_multiplier_upper_bound(tmp_path):
+    """An absurd multiplier (>5.0) produces wildly negative stretch
+    targets on thin-margin listings — reject at config load."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    bad = raw.replace("stretch_roi_multiplier: 1.5", "stretch_roi_multiplier: 100.0")
+    (config_dir / "decision_thresholds.yaml").write_text(bad)
+    cfg.reset_cache()
+    with pytest.raises(AssertionError, match="stretch_roi_multiplier"):
+        cfg.get_buy_plan(config_dir=config_dir)
+    cfg.reset_cache()

@@ -239,3 +239,28 @@ class TestPipelineEndToEnd:
         non_rejected = df[df["decision"] != "REJECT"]
         if len(non_rejected) > 0:
             assert (non_rejected["buy_cost"] > 0).all()
+
+    def test_buy_plan_columns_flow_through_pipeline(self, pipeline_run):
+        """run_pipeline now includes candidate_score → validate_opportunity
+        → buy_plan in the chain. The eleven new columns must reach the
+        canonical CSV schema for every row.
+
+        Note: `opportunity_verdict` is intentionally NOT in the canonical
+        CSV schema (csv_writer.OUTPUT_COLUMNS) — that schema is the
+        operator-facing audit trail and was frozen pre-buy_plan. Buy plan
+        ran on every row using the in-memory verdict; the CSV-visible
+        artefact is `buy_plan_status`.
+        """
+        df = pipeline_run["df"]
+        for col in (
+            "order_qty_recommended", "capital_required",
+            "projected_30d_units", "projected_30d_revenue",
+            "projected_30d_profit", "payback_days",
+            "target_buy_cost_buy", "target_buy_cost_stretch",
+            "gap_to_buy_gbp", "gap_to_buy_pct", "buy_plan_status",
+        ):
+            assert col in df.columns, f"{col} missing from pipeline output"
+        # buy_plan_status populated on every row (never empty / None).
+        assert df["buy_plan_status"].notna().all(), (
+            "buy_plan_status must be populated for every row"
+        )

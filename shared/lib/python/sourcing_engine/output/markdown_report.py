@@ -49,6 +49,11 @@ def _supplier_sections(sdf):
                     "profit_conservative", "margin_conservative", "sales_estimate",
                     "opportunity_verdict", "opportunity_score", "next_action",
                     "candidate_band", "candidate_score", "data_confidence",
+                    # 08_buy_plan — high-level columns; the per-row line
+                    # below the table carries the full breakdown.
+                    "order_qty_recommended", "capital_required",
+                    "payback_days", "target_buy_cost_buy",
+                    "buy_plan_status",
                     "risk_flags", "decision_reason"]
     shortlisted = sdf[sdf["decision"] == "SHORTLIST"] if "decision" in sdf.columns else pd.DataFrame()
     review = sdf[sdf["decision"] == "REVIEW"] if "decision" in sdf.columns else pd.DataFrame()
@@ -91,6 +96,9 @@ def _supplier_sections(sdf):
                 summary = _candidate_score_summary(subset)
                 if summary:
                     lines.append(summary)
+                buy_plan = _buy_plan_summary(subset)
+                if buy_plan:
+                    lines.append(buy_plan)
                 lines.append(_make_table(subset, display_cols))
 
     lines.append("\n### Manual Review\n")
@@ -100,6 +108,9 @@ def _supplier_sections(sdf):
         summary = _candidate_score_summary(review)
         if summary:
             lines.append(summary)
+        buy_plan = _buy_plan_summary(review)
+        if buy_plan:
+            lines.append(buy_plan)
         lines.append(_make_table(review, display_cols))
 
     reject_cols = ["ean", "product_name", "match_type", "decision_reason"]
@@ -220,3 +231,87 @@ def _clean_str(value) -> str:
     if value is None or pd.isna(value):
         return ""
     return str(value)
+
+
+def _buy_plan_summary(df: pd.DataFrame) -> str:
+    """Per-verdict buy-plan one-liners. Per PRD \u00a78.3.
+
+    BUY:        order qty + capital + projected revenue/profit + payback
+    SOURCE_ONLY: target buy cost + stretch + projected at-target revenue
+    NEGOTIATE:  \u00a3/% supplier needs to come down
+    WATCH/KILL: no line (verdict + blockers cover it)
+
+    Falls through silently when buy_plan_status isn't present (older
+    runs).
+    """
+    if "buy_plan_status" not in df.columns or df.empty:
+        return ""
+    lines: list[str] = []
+    for _, row in df.iterrows():
+        verdict = _clean_str(row.get("opportunity_verdict")).upper()
+        asin = _clean_str(row.get("asin"))
+        if not asin:
+            continue
+        if verdict == "BUY":
+            qty = _num(row.get("order_qty_recommended"))
+            cap = _num(row.get("capital_required"))
+            rev = _num(row.get("projected_30d_revenue"))
+            prof = _num(row.get("projected_30d_profit"))
+            pb = _num(row.get("payback_days"))
+            if qty is None or cap is None:
+                continue
+            parts = [
+                f"**Order plan ({asin}):** {int(qty)} units \u00b7 "
+                f"\u00a3{cap:.2f} capital",
+            ]
+            if rev is not None and prof is not None:
+                parts.append(
+                    f"projected 30d: \u00a3{rev:.2f} revenue, "
+                    f"\u00a3{prof:.2f} profit"
+                )
+            if pb is not None:
+                parts.append(f"payback {pb:.0f} days")
+            lines.append("- " + " \u00b7 ".join(parts))
+        elif verdict == "SOURCE_ONLY":
+            target = _num(row.get("target_buy_cost_buy"))
+            stretch = _num(row.get("target_buy_cost_stretch"))
+            rev = _num(row.get("projected_30d_revenue"))
+            if target is None:
+                continue
+            parts = [
+                f"**Source target ({asin}):** "
+                f"\u2264 \u00a3{target:.2f}/unit",
+            ]
+            if stretch is not None:
+                parts.append(f"stretch \u00a3{stretch:.2f}")
+            if rev is not None:
+                parts.append(
+                    f"projected at target: \u00a3{rev:.2f} 30d revenue"
+                )
+            lines.append("- " + " \u00b7 ".join(parts))
+        elif verdict == "NEGOTIATE":
+            gap = _num(row.get("gap_to_buy_gbp"))
+            gap_pct = _num(row.get("gap_to_buy_pct"))
+            buy_cost = _num(row.get("buy_cost"))
+            target = _num(row.get("target_buy_cost_buy"))
+            if gap is None or gap_pct is None or buy_cost is None or target is None:
+                continue
+            lines.append(
+                f"- **Negotiation ask ({asin}):** down "
+                f"\u00a3{gap:.2f}/unit ({gap_pct:.1%}) \u2014 currently "
+                f"\u00a3{buy_cost:.2f}, needs \u2264 \u00a3{target:.2f}"
+            )
+    return "\n".join(lines) + "\n" if lines else ""
+
+
+def _num(value):
+    """Coerce a cell to float. None / NaN / unparseable \u2192 None."""
+    if value is None:
+        return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    if n != n:   # NaN
+        return None
+    return n

@@ -303,6 +303,66 @@ class TestRunStrategyVariableInterpolation:
         # interpolated niche.
         assert "IP Risk Band" in out.columns
 
+    def test_order_mode_default_seeded_when_caller_omits(self):
+        """Regression — code-reviewer #1: callers (programmatic or
+        runner CLI) shouldn't have to know that buy_plan needs
+        order_mode threaded through context. The runner seeds a
+        sensible default so YAMLs interpolating ``{order_mode}`` don't
+        raise StrategyConfigError on missing-key.
+        """
+        # Build a one-step strategy whose config interpolates {order_mode}.
+        # The buy_plan step's wrapper accepts the raw value, so this is
+        # an end-to-end check that the runner doesn't blow up on the
+        # interpolation alone.
+        strat = _strategy(
+            steps=[
+                StepDef(
+                    "buy_plan",
+                    "fba_engine.steps.buy_plan",
+                    {"order_mode": "{order_mode}"},
+                ),
+            ]
+        )
+        df = pd.DataFrame([{"asin": "B0TESTORDER"}])
+        # Empty context — must not raise on the buy_plan step's
+        # {order_mode} interpolation.
+        out = run_strategy(strat, context={}, df_in=df)
+        # buy_plan added its 11 columns — confirms it ran.
+        assert "buy_plan_status" in out.columns
+
+    def test_explicit_order_mode_in_context_overrides_default(self):
+        # When the caller does provide order_mode, the runner must not
+        # clobber it with the default.
+        strat = _strategy(
+            steps=[
+                StepDef(
+                    "buy_plan",
+                    "fba_engine.steps.buy_plan",
+                    {"order_mode": "{order_mode}"},
+                ),
+            ]
+        )
+        df = pd.DataFrame([{
+            "asin": "B0TESTORDER",
+            "opportunity_verdict": "BUY",
+            "opportunity_confidence": "HIGH",
+            "predicted_velocity_mid": 18,
+            "raw_conservative_price": 16.85,
+            "fees_conservative": 4.50,
+            "profit_conservative": 8.35,
+            "buy_cost": 4.0,
+            "risk_flags": [],
+        }])
+        out_first = run_strategy(strat, context={"order_mode": "first"}, df_in=df)
+        out_reorder = run_strategy(
+            strat, context={"order_mode": "reorder"}, df_in=df,
+        )
+        # First-order: ceil(18 * 21 / 30) = 13.
+        # Reorder: ceil(18 * 45 / 30) = 27. Different cover days drive
+        # different qty; that's the proof the override flowed through.
+        assert out_first.iloc[0]["order_qty_recommended"] == 13
+        assert out_reorder.iloc[0]["order_qty_recommended"] == 27
+
 
 class TestRunSummary:
     """run_summary.json is written alongside output.csv when set."""
@@ -362,7 +422,13 @@ class TestRunSummary:
         summary = _json.loads(
             (tmp_path / "kids-toys.summary.json").read_text(encoding="utf-8")
         )
-        assert summary["context"] == {"niche": "kids-toys"}
+        # The runner seeds universally-applicable defaults (order_mode)
+        # so step YAMLs interpolating them don't crash on missing-key.
+        # Caller-supplied keys must still appear; assert containment
+        # rather than equality to keep the test robust as new defaults
+        # get seeded over time.
+        assert summary["context"]["niche"] == "kids-toys"
+        assert summary["context"]["order_mode"] == "first"
 
     def test_summary_records_step_failure_with_error(self, tmp_path: Path):
         # When a step raises, the summary's step_summary entry for that
@@ -753,6 +819,7 @@ class TestKeepaNicheStrategy:
             "niche": "kids-toys",
             "niche_snake": "kids_toys",
             "base": str(tmp_path),
+            "order_mode": "first",
         }
         # The runner reads input from `{base}/working/...` IFF df_in is None.
         # We pass df_in directly, so the input_path is unused; only the
@@ -818,6 +885,7 @@ class TestSupplierPricelistStrategy:
             "run_dir": str(run_dir),
             "timestamp": "20260429_120000",
             "supplier_label": "Connect Beauty",
+            "order_mode": "first",
         }
 
         # `enabled: true` in the YAML for enrich would call the MCP CLI.
@@ -850,6 +918,10 @@ class TestSellerStorefrontStrategy:
         assert strat.name == "seller_storefront"
         assert strat.input_discover is True
         # Three steps: discover -> enrich (leads-mode) -> supplier_leads.
+        # buy_plan is intentionally NOT in this leads-only chain — it
+        # reads opportunity_verdict / predicted_velocity_* which only
+        # exist after validate_opportunity. Operators who want full
+        # verdicts + buy plan should use seller_storefront_csv.
         assert [s.name for s in strat.steps] == [
             "discover", "enrich", "supplier_leads",
         ]
@@ -941,12 +1013,12 @@ class TestOaCsvStrategy:
         assert strat.name == "oa_csv"
         assert strat.input_discover is True
         # Full chain: discover -> keepa_enrich -> calculate -> decide
-        # -> candidate_score -> validate_opportunity (the last two
-        # wired post-#71 so OA runs emit the BUY/SOURCE_ONLY/...
-        # verdict alongside the SHORTLIST/REVIEW/REJECT decision).
+        # -> candidate_score -> validate_opportunity -> buy_plan.
+        # buy_plan rolls verdict + velocity into order qty / capital /
+        # payback / target buy cost / negotiation gap.
         assert [s.name for s in strat.steps] == [
             "discover", "keepa_enrich", "calculate", "decide",
-            "candidate_score", "validate_opportunity",
+            "candidate_score", "validate_opportunity", "buy_plan",
         ]
         for step in strat.steps:
             __import__(step.module)
@@ -1006,6 +1078,7 @@ class TestOaCsvStrategy:
             "csv_path": str(csv_in),
             "run_dir": str(run_dir),
             "timestamp": "20260430_120000",
+            "order_mode": "first",
         }
         out = run_strategy(strat, context=context, df_in=None)
 
@@ -1020,6 +1093,15 @@ class TestOaCsvStrategy:
         expensive = out[out["asin"] == "B0OA2"].iloc[0]
         assert cheap["decision"] in {"SHORTLIST", "REVIEW"}, cheap["decision_reason"]
         assert expensive["decision"] == "REJECT"
+        # buy_plan ran — every row carries the eleven new columns.
+        for col in (
+            "order_qty_recommended", "capital_required",
+            "projected_30d_units", "projected_30d_revenue",
+            "projected_30d_profit", "payback_days",
+            "target_buy_cost_buy", "target_buy_cost_stretch",
+            "gap_to_buy_gbp", "gap_to_buy_pct", "buy_plan_status",
+        ):
+            assert col in out.columns
         # Verdict CSV written at the configured location.
         assert (
             run_dir / "oa_decisions_selleramp_20260430_120000.csv"
@@ -1086,15 +1168,17 @@ class TestKeepaFinderStrategy:
         assert strat.input_discover is True
         # discover → enrich (leads) → calculate → decide →
         # keepa_browser_enrich → candidate_score → validate_opportunity
-        # → supplier_leads.
+        # → buy_plan → supplier_leads.
         # keepa_browser_enrich applies the .cache/keepa_browser
         # scrape if present (silent no-op otherwise) before the
         # validator runs, so the share-aware velocity predictor sees
         # real per-seller BB data when the operator has scraped it.
+        # buy_plan rolls verdict + velocity into the order-list view.
         assert [s.name for s in strat.steps] == [
             "discover", "enrich", "calculate", "decide",
             "keepa_browser_enrich",
-            "candidate_score", "validate_opportunity", "supplier_leads",
+            "candidate_score", "validate_opportunity",
+            "buy_plan", "supplier_leads",
         ]
         # All step modules import.
         for step in strat.steps:
@@ -1142,6 +1226,7 @@ class TestKeepaFinderStrategy:
             "recipe": "amazon_oos_wholesale",
             "output_dir": str(out_dir),
             "timestamp": "20260502_120000",
+            "order_mode": "first",
         }
         out = run_strategy(strat, context=context, df_in=None)
 
@@ -1162,6 +1247,16 @@ class TestKeepaFinderStrategy:
         # tells calculate to emit this as the negotiation ceiling).
         assert "max_buy_price" in out.columns
         assert out.iloc[0]["max_buy_price"] > 0
+
+        # buy_plan ran — every row carries the eleven new columns.
+        for col in (
+            "order_qty_recommended", "capital_required",
+            "projected_30d_units", "projected_30d_revenue",
+            "projected_30d_profit", "payback_days",
+            "target_buy_cost_buy", "target_buy_cost_stretch",
+            "gap_to_buy_gbp", "gap_to_buy_pct", "buy_plan_status",
+        ):
+            assert col in out.columns
 
         # Output CSV written at the configured path.
         assert (
@@ -1196,10 +1291,12 @@ class TestSellerStorefrontCsvStrategy:
         # storefront-specific module, the rest are shared (including
         # the candidate_score + validate_opportunity steps wired
         # post-#71 so storefront walks also emit the operator-facing
-        # BUY/SOURCE_ONLY/NEGOTIATE/WATCH/KILL verdict).
+        # BUY/SOURCE_ONLY/NEGOTIATE/WATCH/KILL verdict, plus buy_plan
+        # for the order-list rollup).
         assert [s.name for s in strat.steps] == [
             "discover", "enrich", "calculate", "decide",
-            "candidate_score", "validate_opportunity", "supplier_leads",
+            "candidate_score", "validate_opportunity",
+            "buy_plan", "supplier_leads",
         ]
         for step in strat.steps:
             __import__(step.module)
@@ -1253,6 +1350,7 @@ class TestSellerStorefrontCsvStrategy:
             "seller_id": seller_id,
             "output_dir": str(out_dir),
             "timestamp": "20260501_120000",
+            "order_mode": "first",
         }
         out = run_strategy(strat, context=context, df_in=None)
 
@@ -1271,6 +1369,16 @@ class TestSellerStorefrontCsvStrategy:
         # Decision verdicts from the canonical pipeline.
         valid = {"SHORTLIST", "REVIEW", "REJECT"}
         assert all(d in valid for d in out["decision"]), out["decision"].tolist()
+
+        # buy_plan ran — every row carries the eleven new columns.
+        for col in (
+            "order_qty_recommended", "capital_required",
+            "projected_30d_units", "projected_30d_revenue",
+            "projected_30d_profit", "payback_days",
+            "target_buy_cost_buy", "target_buy_cost_stretch",
+            "gap_to_buy_gbp", "gap_to_buy_pct", "buy_plan_status",
+        ):
+            assert col in out.columns
 
         # Output filename interpolates {seller_id} + {timestamp}.
         assert (

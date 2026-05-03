@@ -71,6 +71,15 @@ steps:
   - name: validate_opportunity
     module: fba_engine.steps.validate_opportunity
 
+  # Stage 08 — buy_plan (order qty / capital / payback / target buy
+  # cost / negotiation gap). Pure additive: appends 11 columns,
+  # never alters the verdict. order_mode threads from --order-mode
+  # CLI flag (default first-order; reorder for known-selling ASINs).
+  - name: buy_plan
+    module: fba_engine.steps.buy_plan
+    config:
+      order_mode: "{order_mode}"
+
   # Stage 06 — output (CSV + XLSX + MD writers).
   - name: output
     module: fba_engine.steps.supplier_pricelist_output

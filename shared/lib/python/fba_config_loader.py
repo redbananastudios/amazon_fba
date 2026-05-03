@@ -196,6 +196,34 @@ class OpportunityValidation:
 
 
 @dataclass(frozen=True)
+class BuyPlan:
+    """Buy-plan thresholds (08_buy_plan).
+
+    Loaded from ``decision_thresholds.yaml::buy_plan``. Drives the
+    order-qty / capital / payback / target-buy-cost rollup in
+    ``sourcing_engine.buy_plan``. Pure additive — never affects the
+    verdict or any upstream column.
+
+    Reuses ``min_roi_buy`` and ``min_profit_absolute_buy`` from
+    ``OpportunityValidation`` rather than duplicating them.
+    """
+
+    first_order_days: int
+    reorder_days: int
+    min_test_qty: int
+    max_first_order_units: int
+    risk_low_confidence: float
+    risk_medium_confidence: float
+    risk_insufficient_history: float
+    risk_listing_too_new: float
+    risk_competition_growing: float
+    risk_bsr_declining: float
+    risk_price_unstable: float
+    risk_floor: float
+    stretch_roi_multiplier: float
+
+
+@dataclass(frozen=True)
 class DataSignals:
     """History + competition thresholds added in HANDOFF WS2.4.
 
@@ -230,7 +258,13 @@ class DataSignals:
 @lru_cache(maxsize=1)
 def _load_all(
     config_dir_str: str | None = None,
-) -> tuple[BusinessRules, DecisionThresholds, DataSignals, OpportunityValidation]:
+) -> tuple[
+    BusinessRules,
+    DecisionThresholds,
+    DataSignals,
+    OpportunityValidation,
+    BuyPlan,
+]:
     """Internal cached loader keyed on resolved path."""
     config_dir = _find_config_dir(Path(config_dir_str) if config_dir_str else None)
     business_data = _load_yaml(config_dir / "business_rules.yaml")
@@ -346,10 +380,38 @@ def _load_all(
         watch_score=int(ov_data.get("watch_score", 60)),
     )
 
+    # buy_plan block (08_buy_plan). Permissive defaults so existing
+    # YAML files without the block still load.
+    bp_data = thresh_data.get("buy_plan") or {}
+    buy_plan = BuyPlan(
+        first_order_days=int(bp_data.get("first_order_days", 21)),
+        reorder_days=int(bp_data.get("reorder_days", 45)),
+        min_test_qty=int(bp_data.get("min_test_qty", 5)),
+        max_first_order_units=int(
+            bp_data.get("max_first_order_units", 50)
+        ),
+        risk_low_confidence=float(bp_data.get("risk_low_confidence", 0.70)),
+        risk_medium_confidence=float(bp_data.get("risk_medium_confidence", 0.85)),
+        risk_insufficient_history=float(
+            bp_data.get("risk_insufficient_history", 0.85)
+        ),
+        risk_listing_too_new=float(bp_data.get("risk_listing_too_new", 0.85)),
+        risk_competition_growing=float(
+            bp_data.get("risk_competition_growing", 0.75)
+        ),
+        risk_bsr_declining=float(bp_data.get("risk_bsr_declining", 0.85)),
+        risk_price_unstable=float(bp_data.get("risk_price_unstable", 0.85)),
+        risk_floor=float(bp_data.get("risk_floor", 0.50)),
+        stretch_roi_multiplier=float(
+            bp_data.get("stretch_roi_multiplier", 1.5)
+        ),
+    )
+
     _validate(business, thresh)
     _validate_data_signals(data_signals)
     _validate_opportunity_validation(opportunity)
-    return business, thresh, data_signals, opportunity
+    _validate_buy_plan(buy_plan)
+    return business, thresh, data_signals, opportunity, buy_plan
 
 
 def _validate(business: BusinessRules, thresh: DecisionThresholds) -> None:
@@ -424,6 +486,16 @@ def get_opportunity_validation(
     return _load_all(key)[3]
 
 
+def get_buy_plan(config_dir: Path | None = None) -> BuyPlan:
+    """Get buy-plan thresholds. Cached.
+
+    Loaded from ``decision_thresholds.yaml::buy_plan``. Permissive
+    defaults when the block is absent (older configs).
+    """
+    key = str(config_dir.resolve()) if config_dir else None
+    return _load_all(key)[4]
+
+
 def _validate_opportunity_validation(ov: OpportunityValidation) -> None:
     """Sanity-check opportunity_validation thresholds. Same defensive
     style as ``_validate`` and ``_validate_data_signals``."""
@@ -451,6 +523,42 @@ def _validate_opportunity_validation(ov: OpportunityValidation) -> None:
     assert (
         ov.watch_score <= ov.strong_score
     ), "watch_score above strong_score"
+
+
+def _validate_buy_plan(bp: BuyPlan) -> None:
+    """Sanity-check buy_plan thresholds. Same defensive style as
+    ``_validate_opportunity_validation``.
+    """
+    assert bp.first_order_days > 0, "first_order_days must be positive"
+    assert bp.reorder_days > 0, "reorder_days must be positive"
+    assert (
+        bp.first_order_days <= bp.reorder_days
+    ), "first_order_days above reorder_days (untested ASIN should hold less stock)"
+    assert bp.min_test_qty > 0, "min_test_qty must be positive"
+    assert bp.max_first_order_units > 0, (
+        "max_first_order_units must be positive"
+    )
+    assert bp.max_first_order_units >= bp.min_test_qty, (
+        f"max_first_order_units={bp.max_first_order_units} below "
+        f"min_test_qty={bp.min_test_qty} — the cap can't be tighter than "
+        "the floor or sizing collapses to ill-defined"
+    )
+    for name, value in (
+        ("risk_low_confidence", bp.risk_low_confidence),
+        ("risk_medium_confidence", bp.risk_medium_confidence),
+        ("risk_insufficient_history", bp.risk_insufficient_history),
+        ("risk_listing_too_new", bp.risk_listing_too_new),
+        ("risk_competition_growing", bp.risk_competition_growing),
+        ("risk_bsr_declining", bp.risk_bsr_declining),
+        ("risk_price_unstable", bp.risk_price_unstable),
+        ("risk_floor", bp.risk_floor),
+    ):
+        assert 0 < value <= 1.0, f"{name}={value} not in (0, 1] (must dampen, not amplify)"
+    assert 1.0 <= bp.stretch_roi_multiplier <= 5.0, (
+        f"stretch_roi_multiplier={bp.stretch_roi_multiplier} out of [1.0, 5.0]. "
+        "Below 1.0 the stretch is looser than the buy ceiling; above 5.0 "
+        "produces wildly negative stretch targets on thin-margin listings."
+    )
 
 
 @lru_cache(maxsize=1)
@@ -550,11 +658,13 @@ except (FileNotFoundError, KeyError) as e:
 __all__ = [
     # Typed accessors (preferred)
     "BusinessRules",
+    "BuyPlan",
     "DataSignals",
     "DecisionThresholds",
     "GlobalExclusions",
     "OpportunityValidation",
     "get_business_rules",
+    "get_buy_plan",
     "get_data_signals",
     "get_opportunity_validation",
     "get_thresholds",
