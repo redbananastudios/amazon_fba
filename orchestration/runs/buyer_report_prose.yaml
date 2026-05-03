@@ -1,0 +1,148 @@
+# Cowork Run Definition: buyer_report_prose
+#
+# Generic post-engine task. Reads the engine's structured
+# `buyer_report_<ts>.json` payload, generates a 2-3 sentence buyer-
+# perspective prose paragraph per card via Claude, and walks the
+# rendered HTML to inject each paragraph into its
+# `<!-- prose:{asin} -->` marker.
+#
+# Designed to be chained from any strategy run definition
+# (keepa_finder, supplier_pricelist, oa_csv, seller_storefront_csv,
+# single_asin) once those run definitions exist. The engine has
+# already written a working HTML with template-prose fallback by
+# the time this task starts; this task UPGRADES the HTML to LLM
+# prose. If this task is skipped (e.g. no Cowork orchestration),
+# the HTML is still operator-usable.
+#
+# Format note: this YAML is descriptive, not executable. Cowork is
+# expected to translate the `tasks[]` block into its native task
+# graph. The shape mirrors the existing keepa_finder.yaml file.
+
+name: buyer_report_prose
+description: >
+  Generate per-card buyer-report prose paragraphs from the engine's
+  structured JSON payload. Walks the HTML and injects each paragraph
+  into its <!-- prose:{asin} --> marker. Caches per-card responses
+  by content hash so re-runs against unchanged engine output cost
+  zero LLM calls.
+
+# ───────────────────────────────────────────────────────────────────────
+# Inputs the orchestrator must supply per run
+# ───────────────────────────────────────────────────────────────────────
+inputs:
+  json_path:
+    required: true
+    type: path
+    description: Absolute path to buyer_report_<ts>.json (engine output).
+
+  html_path:
+    required: true
+    type: path
+    description: >
+      Absolute path to buyer_report_<ts>.html (engine output, with
+      template-prose already populated). This task replaces template
+      prose with LLM prose in place; the file is atomically written
+      back per row.
+
+  cache_dir:
+    type: path
+    default: .cache/buyer_report_prose
+    description: >
+      Per-card cache directory. Cache files keyed on
+      hash(schema_version + prompt_version + asin + verdict +
+      sorted(metrics) + sorted(economics)).
+      Re-running on unchanged engine output → zero LLM calls.
+
+# ───────────────────────────────────────────────────────────────────────
+# Tasks dispatched in sequence
+# ───────────────────────────────────────────────────────────────────────
+tasks:
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Task 1: Generate prose per card (Claude API per row, with cache)
+  # ─────────────────────────────────────────────────────────────────────
+  - id: generate_prose
+    type: claude_agent_task
+
+    description: >
+      For each `rows[]` entry in the JSON payload, generate a
+      2-3 sentence prose paragraph using the v1 prompt template.
+      Cache responses by content hash. Tolerate per-row failures.
+
+    inputs:
+      payload_path: "{json_path}"
+      prompt_template_path: orchestration/runs/buyer_report_prose_prompt.md
+      cache_dir: "{cache_dir}"
+      cache_key_fields:
+        - schema_version
+        - prompt_version
+        - asin
+        - verdict
+        - metrics
+        - economics
+
+    behaviour:
+      - For each row: build cache key; if cache hit → use cached prose;
+        else call Claude with the prompt template + row JSON, store
+        response in cache.
+      - max_concurrent: 8 (avoid Anthropic API rate limits at scale).
+      - on_rate_limit: skip_row (log + leave the engine's template-prose
+        marker in place; the row stays operator-usable).
+      - on_error: skip_row (same — fail-soft, never abort the run).
+      - on_malformed_response: strip HTML tags, collapse whitespace,
+        cap at 500 chars before injection (matches prose_injector's
+        sanitise rules).
+
+    expected_outputs:
+      - prose_by_asin: dict[str, str]   # {asin: paragraph}
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Task 2: Inject prose into the HTML
+  # ─────────────────────────────────────────────────────────────────────
+  - id: inject_prose
+    type: python_call
+    depends_on: generate_prose
+
+    description: >
+      Walk the HTML and replace each <!-- prose:{asin} --> marker with
+      the corresponding paragraph from generate_prose. Atomic write
+      back to {html_path}. Idempotent — calling twice with the same
+      input is a no-op.
+
+    call:
+      module: sourcing_engine.buy_plan_html.prose_injector
+      function: inject_prose
+      args:
+        html_path: "{html_path}"
+        prose_by_asin: "{generate_prose.outputs.prose_by_asin}"
+        atomic_write: true
+
+    expected_behaviour:
+      - All ASINs in prose_by_asin that match a marker → replaced.
+      - Markers without matching prose → left in place + warning logged.
+      - ASINs supplied but no marker → ignored + warning logged.
+      - Crash mid-write → tmp+rename leaves either old HTML or fully-
+        replaced HTML, never a corrupt mix.
+
+    on_failure:
+      - retry_once: true
+      - if_html_missing: abort_run     # engine never produced the file
+      - if_no_markers_replaced: surface_warning   # could mean engine
+                                                    # changed marker format
+
+# ───────────────────────────────────────────────────────────────────────
+# Notes for orchestrator authors
+# ───────────────────────────────────────────────────────────────────────
+notes:
+  - >
+    This task is generic — chain it from any strategy run definition
+    that produces buyer_report_*.json + .html. Add a `tasks[]` entry
+    referencing this file via `uses:`.
+  - >
+    Cache keys include schema_version + prompt_version. Bumping either
+    in the engine forces re-generation on next run — this is the
+    designed migration path for prompt or schema changes.
+  - >
+    Engine-alone runs (no Cowork) skip this task entirely. The HTML
+    is already operator-usable thanks to the template-prose fallback.
+    LLM prose is an upgrade, not a requirement.
