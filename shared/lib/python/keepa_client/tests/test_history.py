@@ -20,11 +20,13 @@ from keepa_client.history import (
     bsr_slope,
     buy_box_min_in_window,
     buy_box_winner_flips,
+    has_in_window_observations,
     listing_age_days,
     offer_count_trend,
     out_of_stock_pct,
     parse_keepa_csv_series,
     price_volatility,
+    recent_drop_pct,
     review_count_change,
     sales_rank_consistency,
     yoy_bsr_ratio,
@@ -736,3 +738,78 @@ class TestYoyBsrRatio:
     def test_returns_none_for_empty(self):
         assert yoy_bsr_ratio([]) is None
         assert yoy_bsr_ratio(None) is None
+
+
+class TestHasInWindowObservations:
+    """Cheap predicate that drives the BB→Amazon fallback in
+    `KeepaProduct.market_snapshot`. Niche listings frequently have
+    csv[18] (BB) empty for 90d while csv[0] (Amazon) is rich; this
+    predicate decides whether to use BB or fall back to Amazon."""
+
+    def test_true_when_recent_observation_present(self):
+        now = _now_keepa_minutes()
+        csv = _interleave([(now - 5 * DAY, 1525)])
+        assert has_in_window_observations(csv, window_days=90) is True
+
+    def test_false_when_only_old_observations(self):
+        now = _now_keepa_minutes()
+        csv = _interleave([(now - 200 * DAY, 1525)])
+        assert has_in_window_observations(csv, window_days=90) is False
+
+    def test_false_when_only_sentinels_in_window(self):
+        now = _now_keepa_minutes()
+        csv = _interleave([(now - 5 * DAY, None), (now - 1 * DAY, None)])
+        assert has_in_window_observations(csv, window_days=90) is False
+
+    def test_false_for_empty_inputs(self):
+        assert has_in_window_observations(None, window_days=90) is False
+        assert has_in_window_observations([], window_days=90) is False
+
+
+class TestRecentDropPct:
+    """Closes the `bb_drop_pct_90` gap on the API path. Browser CSV
+    ships this as a precomputed column; live API users had `?` for
+    every price arrow on the buyer report until this helper landed."""
+
+    def test_zero_when_current_at_average(self):
+        now = _now_keepa_minutes()
+        csv = _interleave([
+            (now - 60 * DAY, 1500),
+            (now - 30 * DAY, 1500),
+            (now - 5 * DAY, 1500),
+        ])
+        assert recent_drop_pct(csv, window_days=90) == 0.0
+
+    def test_positive_drop_when_current_below_average(self):
+        # Returns FRACTION (matches engine convention; payload layer
+        # multiplies by 100 at the buyer-report boundary).
+        now = _now_keepa_minutes()
+        # avg ≈ £18.33, current £15 → ~18% drop = 0.18 fraction
+        csv = _interleave([
+            (now - 80 * DAY, 2000),
+            (now - 60 * DAY, 2000),
+            (now - 30 * DAY, 1500),
+            (now - 5 * DAY, 1500),
+        ])
+        result = recent_drop_pct(csv, window_days=90)
+        assert result is not None
+        assert 0.13 < result < 0.17
+
+    def test_zero_when_current_above_average(self):
+        # Price has RISEN — drop_pct returns 0 (no recent softening),
+        # not a negative number. The buyer report's price arrow doesn't
+        # care about rising prices for this metric (no down-arrow risk).
+        now = _now_keepa_minutes()
+        csv = _interleave([
+            (now - 60 * DAY, 1000),
+            (now - 5 * DAY, 1500),
+        ])
+        assert recent_drop_pct(csv, window_days=90) == 0.0
+
+    def test_returns_none_when_no_observations(self):
+        assert recent_drop_pct(None, window_days=90) is None
+        assert recent_drop_pct([], window_days=90) is None
+        # All-sentinels also returns None.
+        now = _now_keepa_minutes()
+        csv = _interleave([(now - 5 * DAY, None)])
+        assert recent_drop_pct(csv, window_days=90) is None

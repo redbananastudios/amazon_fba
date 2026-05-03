@@ -233,6 +233,8 @@ class TestColumnsConstant:
             "variation_count",
             "bsr_drops_30d",
             "buy_box_seller_stats",
+            "buy_box_drop_pct_90",
+            "price_history_basis",
         )
 
 

@@ -421,10 +421,12 @@ class KeepaProduct(BaseModel):
             amazon_bb_share_pct,
             bsr_slope,
             buy_box_min_in_window,
+            has_in_window_observations,
             listing_age_days,
             offer_count_trend,
             out_of_stock_pct,
             price_volatility,
+            recent_drop_pct,
             review_count_change,
             sales_rank_consistency,
             yoy_bsr_ratio,
@@ -432,6 +434,34 @@ class KeepaProduct(BaseModel):
 
         rank_csv = csv[_CSV_SALES_RANK] if len(csv) > _CSV_SALES_RANK else None
         bb_csv = csv[_CSV_BUY_BOX] if len(csv) > _CSV_BUY_BOX else None
+        amazon_csv = csv[_CSV_AMAZON] if len(csv) > _CSV_AMAZON else None
+        # Effective price-history series + basis. Many niche listings
+        # have no Buy Box data (csv[18] empty) but rich Amazon data
+        # (csv[0]). Without fallback, every BB-derived signal is None
+        # and the analyst's stability dimension scores 2/25 even on
+        # listings the operator has plenty of data for. Fall back to
+        # Amazon's series when BB has zero in-window observations;
+        # the basis flag tells the analyst layer to label the signals
+        # "(Amazon-tracked)" so the operator knows the source.
+        if has_in_window_observations(bb_csv, window_days=90):
+            effective_csv: Optional[list] = bb_csv
+            price_history_basis: Optional[str] = "BB"
+        elif has_in_window_observations(amazon_csv, window_days=90):
+            effective_csv = amazon_csv
+            price_history_basis = "AMAZON"
+        else:
+            effective_csv = None
+            price_history_basis = None
+
+        # `buy_box_avg30/90` from stats lane: prefer BB lane, fall
+        # back to Amazon lane when BB lane is unavailable. Mirrors
+        # the price-series fallback above.
+        avg30 = _stat_money(self.stats, _CSV_BUY_BOX, lane="avg30")
+        avg90 = _stat_money(self.stats, _CSV_BUY_BOX, lane="avg90")
+        if avg30 is None and price_history_basis == "AMAZON":
+            avg30 = _stat_money(self.stats, _CSV_AMAZON, lane="avg30")
+        if avg90 is None and price_history_basis == "AMAZON":
+            avg90 = _stat_money(self.stats, _CSV_AMAZON, lane="avg90")
         # COUNT_NEW (idx 11) is the closest FBA-offer-count proxy
         # available via the csv path. Per PR #52 we know this is
         # FBM + FBA combined — but for *trend* detection (joiners
@@ -453,8 +483,15 @@ class KeepaProduct(BaseModel):
             "amazon_price": _stat_money(self.stats, _CSV_AMAZON),
             "new_fba_price": new_fba_price,
             "buy_box_price": _stat_money(self.stats, _CSV_BUY_BOX),
-            "buy_box_avg30": _stat_money(self.stats, _CSV_BUY_BOX, lane="avg30"),
-            "buy_box_avg90": _stat_money(self.stats, _CSV_BUY_BOX, lane="avg90"),
+            "buy_box_avg30": avg30,
+            "buy_box_avg90": avg90,
+            # Which time-series fed the BB-derived signals below: "BB"
+            # when csv[18] had data, "AMAZON" when we fell back to
+            # csv[0], None when neither had any in-window observations.
+            # Buyer-report metrics layer reads this and labels signals
+            # "(Amazon-tracked)" suffix when basis is "AMAZON" so the
+            # operator knows the source.
+            "price_history_basis": price_history_basis,
             "fba_seller_count": fba_seller_count,
             # Total new-offer count (FBM + FBA combined) from
             # stats.current[11]. Some calculators legitimately want the
@@ -478,8 +515,22 @@ class KeepaProduct(BaseModel):
             "bsr_slope_365d": bsr_slope(rank_csv, window_days=365),
             "fba_offer_count_90d_start": offer_count_start,
             "fba_offer_count_90d_joiners": offer_count_joiners,
-            "buy_box_oos_pct_90": out_of_stock_pct(bb_csv, window_days=90),
-            "price_volatility_90d": price_volatility(bb_csv, window_days=90),
+            # BB-derived signals — fall back to Amazon's csv[0] when
+            # csv[18] (BB) is empty for niche listings. The basis flag
+            # above tells the analyst which series fed these. With BB
+            # absent and Amazon present, "% time out of stock" reads
+            # Amazon's OOS pattern; "price volatility" reads Amazon's
+            # price stability — both still useful operator signals.
+            "buy_box_oos_pct_90": out_of_stock_pct(effective_csv, window_days=90),
+            "price_volatility_90d": price_volatility(effective_csv, window_days=90),
+            # Recent price-drop magnitude vs 90d average. Reads from
+            # the effective series (BB when present, Amazon as fall-
+            # back). Drives the buyer report's price arrow + scoring.
+            # Was previously only populated by the Browser CSV path —
+            # the API path now provides parity.
+            "buy_box_drop_pct_90": recent_drop_pct(
+                effective_csv, window_days=90,
+            ),
             "listing_age_days": listing_age_days(self.tracking_since),
             "yoy_bsr_ratio": yoy_bsr_ratio(rank_csv),
             # Review velocity (PR 5) — net change in review_count over
@@ -505,9 +556,11 @@ class KeepaProduct(BaseModel):
             # Operator's "have we ever seen this cheaper?" check —
             # current price >> floor = peak-buying risk beyond the 90d
             # average that BUY_BOX_ABOVE_AVG90 already catches.
+            # 12-month minimum price (in pounds). Falls back to Amazon
+            # series when BB is empty (see price_history_basis above).
             "buy_box_min_365d": (
                 v / 100.0
-                if (v := buy_box_min_in_window(bb_csv, window_days=365))
+                if (v := buy_box_min_in_window(effective_csv, window_days=365))
                 is not None
                 else None
             ),

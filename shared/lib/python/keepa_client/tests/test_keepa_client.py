@@ -164,6 +164,65 @@ class TestKeepaProductModel:
         ):
             assert snap[k] is None, f"{k} should be None for -1 sentinel"
 
+    def test_market_snapshot_falls_back_to_amazon_when_bb_empty(self):
+        """Niche listings have csv[18] (BB) empty for 90d while csv[0]
+        (Amazon) is rich. Without fallback, every BB-derived signal
+        is None and the analyst's stability dimension scores 2/25.
+        Fix: fall back to Amazon's series, set price_history_basis
+        to "AMAZON" so the buyer report can label the metrics."""
+        from keepa_client.models import _now_keepa_minutes
+        DAY = 24 * 60
+        now = _now_keepa_minutes()
+        # Amazon has 5 observations spanning the last 60 days.
+        # BB has none — fully empty array (no data).
+        amazon_csv = []
+        for d in (60, 50, 30, 10, 1):
+            amazon_csv.extend([now - d * DAY, 1500])
+        # Build a 19-slot csv array. Index 0 = Amazon series; index 18 = BB (empty).
+        csv = [None] * 19
+        csv[0] = amazon_csv
+        # Provide stats with avg30/avg90 only on Amazon lane.
+        stats_current = [-1] * 19
+        avg30 = list(stats_current); avg30[0] = 1500
+        avg90 = list(stats_current); avg90[0] = 1500
+        payload = {
+            "asin": "B0NICHE",
+            "csv": csv,
+            "stats": {
+                "current": stats_current, "avg30": avg30, "avg90": avg90,
+            },
+        }
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        # Basis flag tells consumers Amazon was used.
+        assert snap["price_history_basis"] == "AMAZON"
+        # BB-derived signals now populate from Amazon's series.
+        assert snap["buy_box_avg30"] == 15.0
+        assert snap["buy_box_avg90"] == 15.0
+        # min_365d, oos_pct_90, price_volatility_90d, drop_pct_90 derive
+        # from the Amazon csv series.
+        assert snap["buy_box_min_365d"] == 15.0
+        assert snap["buy_box_oos_pct_90"] is not None
+        assert snap["buy_box_drop_pct_90"] is not None
+
+    def test_market_snapshot_basis_is_bb_when_bb_has_data(self):
+        from keepa_client.models import _now_keepa_minutes
+        DAY = 24 * 60
+        now = _now_keepa_minutes()
+        bb_csv = []
+        for d in (60, 30, 5):
+            bb_csv.extend([now - d * DAY, 1525])
+        csv = [None] * 19
+        csv[18] = bb_csv
+        payload = {"asin": "B0BB", "csv": csv}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["price_history_basis"] == "BB"
+
+    def test_market_snapshot_basis_is_none_when_neither_has_data(self):
+        # Both BB and Amazon are empty — nothing to read from.
+        payload = {"asin": "B0EMPTY", "csv": [None] * 19}
+        snap = KeepaProduct.model_validate(payload).market_snapshot()
+        assert snap["price_history_basis"] is None
+
     def test_market_snapshot_handles_short_current_array(self):
         # Keepa sometimes returns a stats.current shorter than the full
         # 30-index range — older products or partial caches. Indexing

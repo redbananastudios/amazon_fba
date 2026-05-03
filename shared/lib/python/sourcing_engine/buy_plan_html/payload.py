@@ -155,7 +155,13 @@ def build_row_payload(row: dict) -> dict:
             "buy_box_avg_90d": _num(row.get("buy_box_avg90")),
             "buy_box_min_365d": _num(row.get("buy_box_min_365d")),
             "buy_box_oos_pct_90": _num(row.get("buy_box_oos_pct_90")),
+            "price_volatility_90d": _num(row.get("price_volatility_90d")),
             "listing_age_days": _num(row.get("listing_age_days")),
+            # "BB" / "AMAZON" / None — which time series fed the
+            # BB-derived signals above. Operator-facing metrics use
+            # this to label rendered values "(Amazon-tracked)" suffix
+            # when basis is "AMAZON".
+            "price_history_basis": row.get("price_history_basis"),
         },
 
         "metrics": _build_metrics(row),
@@ -409,8 +415,16 @@ def _build_metrics(row: dict) -> list[dict]:
     """Compose the 7 traffic-light metric entries per PRD §4.3.
 
     Order is contractual — tests pin it.
+
+    When `price_history_basis == "AMAZON"`, the BB-derived metrics
+    surface "(Amazon-tracked)" on their labels so the operator knows
+    Keepa never tracked a Buy Box for this listing and the values
+    come from Amazon's price series instead. Most ABGEE niche
+    listings sit in this state — without the suffix the operator
+    can't tell whether the green "stable" rating reflects BB
+    consistency or Amazon-price consistency.
     """
-    return [
+    metrics = [
         _judge_fba_seller_count(row),
         _judge_amazon_on_listing(row),
         _judge_amazon_bb_share(row),
@@ -419,6 +433,16 @@ def _build_metrics(row: dict) -> list[dict]:
         _judge_predicted_velocity(row),
         _judge_bsr_drops(row),
     ]
+    basis = row.get("price_history_basis")
+    if basis == "AMAZON":
+        # BB-sourced signals get the suffix. fba_seller_count,
+        # amazon_on_listing, sales_estimate, predicted_velocity,
+        # bsr_drops are independent of price-history basis.
+        BB_SOURCED = {"amazon_bb_pct_90", "price_volatility"}
+        for m in metrics:
+            if m.get("key") in BB_SOURCED and m.get("verdict") != "grey":
+                m["label"] = f"{m['label']} (Amazon-tracked)"
+    return metrics
 
 
 def build_payload(
