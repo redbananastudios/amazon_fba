@@ -112,6 +112,7 @@ def run_pipeline(
     from fba_engine.steps.candidate_score import add_candidate_score
     from fba_engine.steps.decide import decide_rows
     from fba_engine.steps.enrich import enrich_with_preflight
+    from fba_engine.steps.keepa_enrich_survivors import refresh_survivors
     from fba_engine.steps.resolve import resolve_matches
     from fba_engine.steps.supplier_pricelist_discover import (
         discover_supplier_pricelist,
@@ -161,11 +162,39 @@ def run_pipeline(
     # different order can compose YAML steps differently.
     enriched_df = enrich_with_preflight(decided_df, enabled=preflight_enabled)
 
+    # Stage 05.5 — keepa_enrich_survivors. Refresh per-ASIN market data
+    # via live Keepa API for non-REJECT rows so the analyst layer sees
+    # the same signals as single_asin (current Buy Box, bsr_slope_*,
+    # joiners_90d, buy_box_oos_pct_90, listing_age_days). Without this,
+    # the bulk supplier path's verdicts diverge from single_asin on the
+    # same ASIN because the static `keepa_combined.csv` is typically
+    # weeks stale and lacks the API-only history signals.
+    #
+    # Best-effort: if KEEPA_API_KEY is not set or the call fails,
+    # fall back to the stale-but-usable static data and log a warning.
+    # This keeps offline / no-creds environments unblocked.
+    refreshed_df = refresh_survivors(enriched_df, with_offers=False)
+
+    # Stage 05.6 — calculate (re-run on survivors). Recompute economics
+    # against the refreshed Buy Box prices.
+    recalced_df = calculate_economics(refreshed_df, recalculate=True)
+
+    # Stage 05.7 — decide (re-run on survivors). A SHORTLIST against
+    # stale data may flip to REJECT once the live BB price erodes the
+    # margin (Schleich Sea Turtle, Ravensburger Colour Blast etc. in
+    # the 2026-05-03 abgee verdict-parity calibration).
+    redecided_df = decide_rows(recalced_df, force=True)
+
+    # Stage 05.8 — candidate_score (re-run). Idempotent: reads the
+    # refreshed market columns, overwrites the score / band /
+    # data_confidence columns from the first pass.
+    rescored_df = add_candidate_score(redecided_df)
+
     # Stage 07 — validate_opportunity (BUY / SOURCE_ONLY / NEGOTIATE /
     # WATCH / KILL). Pure additive — never changes the SHORTLIST/REVIEW/
     # REJECT verdict. Needed before buy_plan because buy_plan reads
     # opportunity_verdict / opportunity_confidence / predicted_velocity_*.
-    validated_df = add_opportunity_verdict(enriched_df)
+    validated_df = add_opportunity_verdict(rescored_df)
 
     # Stage 08 — buy_plan (order qty / capital / payback / target buy
     # cost / negotiation gap). Pure additive — appends 11 columns.

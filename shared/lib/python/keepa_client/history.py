@@ -330,6 +330,60 @@ def buy_box_min_in_window(
     return float(min(valid))
 
 
+def has_in_window_observations(csv: Any, *, window_days: int) -> bool:
+    """Cheap predicate: does this Keepa csv array have any real
+    (non-sentinel) observation inside the trailing `window_days`?
+
+    Used by `KeepaProduct.market_snapshot` to decide whether the BB
+    series (csv[18]) carries enough data to feed the analyst's
+    BB-derived signals, or whether to fall back to Amazon's series
+    (csv[0]). Niche listings frequently have csv[18] empty for 90d
+    while csv[0] is rich; without this predicate the analyst's
+    stability dimension scores 2/25 even when the operator has
+    plenty of data to read.
+    """
+    pairs = _window_pairs_with_sentinels(csv, window_days=window_days)
+    return any(v is not None and v > 0 for _, v in pairs)
+
+
+def recent_drop_pct(csv: Any, *, window_days: int = 90) -> Optional[float]:
+    """How much has the price softened recently? — fractional drop
+    from the in-window average to the most recent observation.
+
+    Mirrors what the Keepa Browser CSV ships as the precomputed
+    "Buy Box: 90 days drop %" column on its export side. The API
+    path didn't have this — operators running single_asin against
+    niche listings saw the price arrow stuck at "?" because
+    `bb_drop_pct_90` came through as None. This helper closes that
+    gap by reading the same csv array.
+
+    Returns FRACTION (0.0–1.0) to match the engine convention for
+    bb_drop fields — `pipeline/market_data.py::_parse_pct` stores
+    Keepa's "%" column as a fraction, and `payload._bb_drop_pct`
+    converts to raw percent at the buyer-report boundary. Returning
+    a fraction here keeps the convention consistent.
+
+    Returns:
+        Positive fraction = current price below window average
+            (price softening — the operator's "buy the dip" signal).
+        0 = current at or above the average (no recent softening).
+        None = window has no real observations OR no current value.
+
+    Example: avg90 = £20, current = £15 → returns 0.25 (25% drop).
+    Example: avg90 = £15, current = £20 → returns 0 (no drop).
+    """
+    pairs = _window_pairs_with_sentinels(csv, window_days=window_days)
+    valid = [v for _, v in pairs if v is not None and v > 0]
+    if not valid:
+        return None
+    avg = sum(valid) / len(valid)
+    if avg <= 0:
+        return None
+    current = valid[-1]  # most recent in-window observation
+    drop = (avg - current) / avg
+    return max(0.0, drop)
+
+
 def sales_rank_consistency(
     rank_csv: Any, *, window_days: int = 90,
 ) -> Optional[float]:

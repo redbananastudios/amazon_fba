@@ -98,6 +98,52 @@ class TestRunStep:
         assert out.empty
 
 
+class TestForceFlag:
+    """Second-pass redecide on supplier_pricelist survivors after
+    `keepa_enrich_survivors` + `calculate(recalculate=True)` refresh
+    economics. A SHORTLIST against stale data may flip to REJECT once
+    the live BB price erodes the margin (or vice versa)."""
+
+    def test_default_skips_pre_decided_shortlist(self):
+        # Pre-decided SHORTLIST with stale-pass reason.
+        df = pd.DataFrame([_calculated_row(
+            decision="SHORTLIST", decision_reason="stale-pass profit OK",
+        )])
+        out = decide_rows(df, force=False)
+        assert out.iloc[0]["decision"] == "SHORTLIST"
+        assert out.iloc[0]["decision_reason"] == "stale-pass profit OK"
+
+    def test_force_recomputes_pre_decided_shortlist(self):
+        # Stale SHORTLIST flips to REJECT when force=True sees the
+        # row's actual numbers (profit < 0).
+        df = pd.DataFrame([_calculated_row(
+            decision="SHORTLIST", decision_reason="stale-pass profit OK",
+            profit_current=-1.0, profit_conservative=-1.5,
+            roi_current=-0.20, roi_conservative=-0.30,
+        )])
+        out = decide_rows(df, force=True)
+        # Verdict was recomputed against the actual numbers.
+        assert out.iloc[0]["decision"] == "REJECT"
+        assert out.iloc[0]["decision_reason"] != "stale-pass profit OK"
+
+    def test_force_still_skips_reject_rows(self):
+        # REJECT rows from earlier stages are immutable — force=True
+        # doesn't resurrect them.
+        df = pd.DataFrame([_reject_row()])
+        out = decide_rows(df, force=True)
+        assert out.iloc[0]["decision"] == "REJECT"
+        assert out.iloc[0]["decision_reason"] == "Invalid or missing EAN"
+
+    def test_run_step_truthy_string_force(self):
+        df = pd.DataFrame([_calculated_row(
+            decision="SHORTLIST", decision_reason="stale-pass profit OK",
+            profit_current=-1.0, profit_conservative=-1.5,
+            roi_current=-0.20, roi_conservative=-0.30,
+        )])
+        out = run_step(df, {"force": "true"})
+        assert out.iloc[0]["decision"] == "REJECT"
+
+
 class TestDecideOverrides:
     """Per-call threshold overrides (no_rank_hidden_gem strategy etc.).
 

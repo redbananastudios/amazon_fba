@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)
 
 
 def decide_rows(
-    df: pd.DataFrame, *, overrides: dict[str, Any] | None = None,
+    df: pd.DataFrame,
+    *,
+    overrides: dict[str, Any] | None = None,
+    force: bool = False,
 ) -> pd.DataFrame:
     """Set ``decision`` + ``decision_reason`` for each match row.
 
@@ -42,6 +45,12 @@ def decide_rows(
     docstring for supported keys (``min_sales_shortlist``,
     ``min_sales_review``, ``min_profit``, ``target_roi``). Default
     ``None`` keeps every call's existing behaviour intact.
+
+    ``force`` (optional) — when True, recompute the decision for every
+    non-REJECT row, even if it already carries a SHORTLIST / REVIEW
+    verdict. Used by the supplier_pricelist second pass after
+    `keepa_enrich_survivors` + `calculate(recalculate=True)` refresh
+    economics on survivors. REJECT rows still pass through.
     """
     if df.empty:
         return df
@@ -58,7 +67,11 @@ def decide_rows(
     for idx, row in df.iterrows():
         row_dict = row.to_dict()
         existing = row_dict.get("decision")
-        if not is_missing(existing) and existing:
+        skip_existing = (
+            not is_missing(existing) and existing
+            and (not force or existing == "REJECT")
+        )
+        if skip_existing:
             # Pre-decided rows (REJECT from resolve / "No valid market
             # price" REJECT from calculate) flow through unchanged.
             # NaN-aware to avoid the truthy-NaN trap when rows are
@@ -109,6 +122,16 @@ def run_step(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
         to 5 because no-rank ASINs have lower expected volume.
         Unknown keys raise ValueError. Default = no overrides
         (backwards-compat with every existing strategy).
+      - ``force``: when truthy, recompute the decision for every
+        non-REJECT row even if it already has SHORTLIST / REVIEW.
+        Used by the supplier_pricelist second pass after
+        `keepa_enrich_survivors` refreshes economics on survivors.
+        Default ``False``.
     """
     overrides = config.get("overrides")
-    return decide_rows(df, overrides=overrides)
+    force_raw = config.get("force", False)
+    if isinstance(force_raw, str):
+        force = force_raw.strip().lower() in ("true", "1", "yes")
+    else:
+        force = bool(force_raw)
+    return decide_rows(df, overrides=overrides, force=force)

@@ -121,6 +121,16 @@ KEEPA_ENRICH_COLUMNS: tuple[str, ...] = (
     # velocity predictor to replace equal-split with real distribution.
     # None when listing has no BB history.
     "buy_box_seller_stats",
+    # Recent price-drop magnitude vs 90d average (raw percent — 25.0
+    # means current is 25% below avg). Falls back to Amazon series
+    # when BB is empty for niche listings. Was previously only
+    # populated by the Browser CSV path; API path now has parity.
+    "buy_box_drop_pct_90",
+    # Which time-series fed the BB-derived signals: "BB" / "AMAZON" /
+    # None. Buyer-report metrics layer reads this to label signals
+    # "(Amazon-tracked)" suffix when basis is "AMAZON" so the
+    # operator knows the source.
+    "price_history_basis",
 )
 
 DEFAULT_KEEPA_CONFIG_PATH: Path = (
