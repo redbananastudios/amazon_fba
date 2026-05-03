@@ -35,6 +35,10 @@ This PRD is deliberately narrow. The following are real follow-ups, **not** in t
 - **A/B prose styles.** The Cowork agent's prompt is pinned (one tone, one length).
 - **Multi-marketplace.** UK only.
 - **PDF rendering.** The HTML is print-friendly via `@media print`, but no separate PDF artefact is produced.
+- **Extending SP-API `enrich` to capture image URLs.** Today the catalog response provides `image_count` (int) but no URL; capturing the URL would require changes to the MCP + the preflight step. This PRD uses only the deterministic public URL pattern (§4.4) — extending enrich for first-party image URLs is a separate workstream.
+- **Per-strategy orchestration YAMLs for the 5 strategies that don't yet have one** (only `orchestration/runs/keepa_finder.yaml` exists today). This PRD creates the generic `buyer_report_prose.yaml` task; wiring it into per-strategy orchestrations is deferred to those strategies' own orchestration work.
+- **Uploading `buyer_report_<ts>.json` to Google Drive alongside the XLSX.** The JSON is a Cowork-internal contract; operators inspect via the rendered HTML.
+- **Changes to `csv_writer.py`, `excel_writer.py`, or `markdown_report.py`.** All three are unchanged by this work — `09_buy_plan_html` only adds new artefacts.
 
 ---
 
@@ -44,10 +48,13 @@ This PRD is deliberately narrow. The following are real follow-ups, **not** in t
 01_discover → 02_resolve → 03_enrich → 04_calculate
             → 04.5_candidate_score → 05_decide
             → 07_validate_opportunity → 08_buy_plan
-            → 06_output → 09_buy_plan_html
+            → 06_output (CSV / XLSX / MD)
+            → 09_buy_plan_html
 ```
 
-`09_buy_plan_html` runs **after** the existing CSV / XLSX / MD writers (`06_output`). It must run last so any prior writer failure surfaces first, and so the buyer report is the freshest deliverable.
+`09_buy_plan_html` runs **after** `06_output`. It must run last so any prior writer failure surfaces first, and so the buyer report is the freshest deliverable.
+
+**Test-count baseline:** branch `feat/buyer-report` cuts off `main` at the head of PR #78 (08_buy_plan, merged). The Python test count at that point is the post-merge baseline; this PRD's acceptance criterion is that the existing tests still pass at whatever count `main` shows when implementation starts, not a magic number pinned in the PRD.
 
 Implemented as `fba_engine/steps/buy_plan_html.py` (runner-compatible step wrapper). Core logic in `shared/lib/python/sourcing_engine/buy_plan_html/`:
 
@@ -76,6 +83,7 @@ NOT `seller_storefront.yaml` (leads-only, no `validate_opportunity` upstream →
 ```json
 {
   "schema_version": 1,
+  "prompt_version": 1,
   "run_id": "20260503_120000",
   "strategy": "supplier_pricelist",
   "supplier": "abgee",
@@ -90,6 +98,10 @@ NOT `seller_storefront.yaml` (leads-only, no `validate_opportunity` upstream →
 }
 ```
 
+`schema_version` and `prompt_version` both feed the orchestration cache key (§6.1). Bumping either invalidates cached prose so a schema or prompt change forces re-generation.
+
+`supplier` is `null` when the strategy has no supplier dimension (`keepa_finder`, `single_asin`). The HTML title falls back to `Buyer Report — {strategy} — {date}`.
+
 ### 4.2 Per-row entry
 
 ```json
@@ -100,8 +112,7 @@ NOT `seller_storefront.yaml` (leads-only, no `validate_opportunity` upstream →
   "supplier": "Casdon",
   "supplier_sku": "12345",
   "amazon_url": "https://www.amazon.co.uk/dp/B0B636ZKZQ",
-  "image_url": "https://m.media-amazon.com/images/I/...jpg",
-  "image_url_fallback": "https://images-na.ssl-images-amazon.com/images/P/B0B636ZKZQ.jpg",
+  "image_url": "https://images-na.ssl-images-amazon.com/images/P/B0B636ZKZQ.jpg",
 
   "verdict": "BUY",
   "verdict_confidence": "HIGH",
@@ -147,26 +158,25 @@ NOT `seller_storefront.yaml` (leads-only, no `validate_opportunity` upstream →
 
 ### 4.3 Per-metric traffic-light keys (locked schema)
 
-Exactly these seven, in this order:
+Exactly these seven, in this order, with explicit thresholds for all three verdicts. Each row in this table is the contract; `payload.py::_judge_metric` implements it directly with no additional logic. Tests parametrise every boundary value.
 
-| key                    | label                       | source column                  | green threshold                       |
-|------------------------|-----------------------------|--------------------------------|---------------------------------------|
-| `fba_seller_count`     | FBA Sellers                 | `fba_seller_count`             | `_is_seller_count_healthy()` per OV   |
-| `amazon_on_listing`    | Amazon on Listing           | `amazon_on_listing`            | "N" (or absent)                       |
-| `amazon_bb_pct_90`     | Amazon BB Share 90d         | `amazon_bb_pct_90`             | `< OV.max_amazon_bb_share_buy` (0.30) |
-| `price_volatility`     | Price Consistency           | `price_volatility_90d`         | `< OV.max_price_volatility_buy` (0.20) |
-| `sales_estimate`       | Volume (units/mo)           | `sales_estimate`               | `>= OV.target_monthly_sales` (100)    |
-| `predicted_velocity`   | Your Expected Sales         | `predicted_velocity_mid`       | `> 0.5 × sales_estimate × (1 - bb%)` (top-quartile rotation share) |
-| `bsr_drops_30d`        | Stock Replenishments        | `bsr_drops_30d`                | `>= max(20, sales_estimate × 0.5)`    |
+| key                    | label                  | source column            | green                                   | amber                                          | red                                |
+|------------------------|------------------------|--------------------------|-----------------------------------------|------------------------------------------------|------------------------------------|
+| `fba_seller_count`     | FBA Sellers            | `fba_seller_count`       | passes `_is_seller_count_healthy()` per OV | within 50% over the OV ceiling for sales tier | beyond 150% of the OV ceiling      |
+| `amazon_on_listing`    | Amazon on Listing      | `amazon_on_listing`      | `"N"` or absent                         | `"UNKNOWN"`                                    | `"Y"`                              |
+| `amazon_bb_pct_90`     | Amazon BB Share 90d    | `amazon_bb_pct_90`       | `< 0.30` (`OV.max_amazon_bb_share_buy`) | `0.30 ≤ x < 0.70` (`OV.max_amazon_bb_share_watch`) | `≥ 0.70`                       |
+| `price_volatility`     | Price Consistency      | `price_volatility_90d`   | `< 0.20` (`OV.max_price_volatility_buy`)| `0.20 ≤ x < 0.40` (`OV.kill_price_volatility`) | `≥ 0.40`                           |
+| `sales_estimate`       | Volume (units/mo)      | `sales_estimate`         | `≥ 100` (`OV.target_monthly_sales`)     | `20 ≤ x < 100`                                 | `< 20` (`OV.kill_min_sales`)       |
+| `predicted_velocity`   | Your Expected Sales    | `predicted_velocity_mid` | `≥ 0.5 × non_amazon_share`              | `0.25 × non_amazon_share ≤ x < 0.5 ×`          | `< 0.25 × non_amazon_share`        |
+| `bsr_drops_30d`        | Stock Replenishments   | `bsr_drops_30d`          | `≥ max(20, sales_estimate × 0.5)`       | `≥ max(10, sales_estimate × 0.25)`             | below the amber floor              |
 
-Each metric has 3 verdicts: `green` / `amber` / `red`. Amber thresholds are halfway between green threshold and severe ("red") cutoff. Concrete amber/red logic captured in `payload.py::_judge_metric` and pinned by parametrised tests.
+`non_amazon_share` (predicted_velocity row) is a **per-row deterministic value**: `non_amazon_share = sales_estimate × (1 - amazon_bb_pct_90)` when both are present. When either is None, predicted_velocity falls through to `verdict: grey`. **No percentile / dataset-wide statistics** — every threshold is row-local.
 
-When a source column is missing/None, `verdict = "grey"` and `value_display = "—"`. Rationale = "signal missing".
+When any source column is missing/None, `verdict = "grey"` and `value_display = "—"`, `rationale = "signal missing"`. The HTML renders grey as a hollow circle (○̇) so the operator can spot signal gaps.
 
 ### 4.4 Field-level rules
 
-- `image_url` populated **only when** the row carries `catalog_image_url` (set by `enrich` step when SP-API ran with creds). Else `null`.
-- `image_url_fallback` always populated as `https://images-na.ssl-images-amazon.com/images/P/{asin}.jpg`. The HTML renderer uses `image_url` if non-null, falls back via `<img src="" onerror="this.src='{fallback}'">` (one-time fallback; we accept that some ASINs will show neither).
+- `image_url` is always populated as `https://images-na.ssl-images-amazon.com/images/P/{asin}.jpg`. This is an **empirical Amazon URL pattern** — not part of any documented API. It returns a real product image for the majority of UK ASINs but breaks on some (especially recent listings or private label). The HTML renderer uses `<img onerror="this.style.display='none'">` so a broken image hides cleanly instead of showing a broken-image icon next to a card the operator is supposed to act on. Acceptable miss rate: ≤20% of cards on a typical run; if higher in practice, the follow-up workstream that extends SP-API enrich (out of scope here per §2) will provide a higher-quality primary URL.
 - `buy_plan` block: copy of the eleven `08_buy_plan` columns. `null` for blanks.
 - `economics` block: derived from the calculate-step columns; `null` when buy_cost is absent (SOURCE_ONLY / wholesale-flow rows).
 - `metrics[].value_display` is always a pre-formatted string (the renderer doesn't apply formatting). Engine emits `"4"`, `"10%"`, `"45 /mo"`, etc. — same format the operator sees.
@@ -237,10 +247,10 @@ Single self-contained `<!DOCTYPE html>` document, embedded `<style>` block, no J
 
   <div class="card-identity-economics">
     <a class="card-image" href="https://www.amazon.co.uk/dp/B0B636ZKZQ" target="_blank" rel="noopener">
-      <img src="https://m.media-amazon.com/images/I/...jpg"
-           onerror="this.onerror=null; this.src='https://images-na.ssl-images-amazon.com/images/P/B0B636ZKZQ.jpg'"
+      <img src="https://images-na.ssl-images-amazon.com/images/P/B0B636ZKZQ.jpg"
+           onerror="this.style.display='none'"
            alt="Casdon Morphy Richards Toaster Toy"
-           loading="lazy" width="200" height="200">
+           loading="lazy">
     </a>
     <div class="card-summary">
       <h3 class="card-title">Casdon Morphy Richards Toaster Toy</h3>
@@ -274,23 +284,77 @@ Single self-contained `<!DOCTYPE html>` document, embedded `<style>` block, no J
 
 ### 5.3 Per-verdict economics grid variants
 
-| Verdict       | economics-grid contents (rows × cols)                                                    |
-|---------------|------------------------------------------------------------------------------------------|
-| `BUY`         | Buy cost · Target buy (stretch) // Order qty · Capital // Payback · 30d profit           |
-| `SOURCE_ONLY` | Buy cost: not found · Target ≤ £X (stretch £Y) // Projected 30d revenue · 30d profit (at target) |
-| `NEGOTIATE`   | Currently · Target ceiling // Gap (£ + %) // 30d profit at current cost                  |
-| `WATCH`       | Buy cost · Target buy (stretch) // Projected 30d revenue · 30d profit // (no order block) |
+Each variant is a `<table class="economics-grid">` with three two-column rows. Cells use `<td class="econ-label">` for the label and `<td class="econ-value">` for the value, with verdict-specific contents.
 
-Per-verdict prose heading also varies: *"Why we should buy"* / *"Why source this"* / *"Why negotiate"* / *"Why watch"*.
+**`BUY` — full order plan:**
+
+```html
+<table class="economics-grid">
+  <tr><td class="econ-label">Buy cost</td><td class="econ-value">£4.00</td>
+      <td class="econ-label">Target buy</td><td class="econ-value">£9.50 (stretch £8.52)</td></tr>
+  <tr><td class="econ-label">Order qty</td><td class="econ-value">13</td>
+      <td class="econ-label">Capital</td><td class="econ-value">£52.00</td></tr>
+  <tr><td class="econ-label">Payback</td><td class="econ-value">22 days</td>
+      <td class="econ-label">30d profit</td><td class="econ-value">£150.30</td></tr>
+</table>
+```
+
+**`SOURCE_ONLY` — no buy_cost, supplier outreach target:**
+
+```html
+<table class="economics-grid">
+  <tr><td class="econ-label">Buy cost</td><td class="econ-value">— (no supplier yet)</td>
+      <td class="econ-label">Target buy</td><td class="econ-value">≤ £4.85 (stretch £4.10)</td></tr>
+  <tr><td class="econ-label">Projected 30d revenue</td><td class="econ-value">£710.00</td>
+      <td class="econ-label">30d profit at target</td><td class="econ-value">£136.00</td></tr>
+</table>
+```
+(Two rows, not three — no order block.)
+
+**`NEGOTIATE` — current cost over the BUY ceiling:**
+
+```html
+<table class="economics-grid">
+  <tr><td class="econ-label">Currently</td><td class="econ-value">£5.00</td>
+      <td class="econ-label">Target ceiling</td><td class="econ-value">£4.38 (stretch £3.50)</td></tr>
+  <tr><td class="econ-label">Gap to BUY</td><td class="econ-value gap-positive">£0.62 (12.4%)</td>
+      <td class="econ-label">30d profit (current cost)</td><td class="econ-value">£42.30</td></tr>
+</table>
+```
+The `.gap-positive` class on the gap cell renders red so the buyer eye-jumps to it.
+
+**`WATCH` — re-evaluable, no sizing:**
+
+```html
+<table class="economics-grid">
+  <tr><td class="econ-label">Buy cost</td><td class="econ-value">£4.00</td>
+      <td class="econ-label">Target buy</td><td class="econ-value">£9.50 (stretch £8.52)</td></tr>
+  <tr><td class="econ-label">Projected 30d revenue</td><td class="econ-value">£303.30</td>
+      <td class="econ-label">30d profit</td><td class="econ-value">£150.30</td></tr>
+</table>
+```
+
+**Per-verdict prose heading varies:**
+
+| Verdict       | Prose heading       |
+|---------------|---------------------|
+| `BUY`         | Why we should buy   |
+| `SOURCE_ONLY` | Why source this     |
+| `NEGOTIATE`   | Why negotiate       |
+| `WATCH`       | Why watch           |
 
 ### 5.4 Style rules
 
-- Single embedded `<style>` block. No external CSS, no `<link>`, no JS.
+- Single embedded `<style>` block. No external CSS, no `<link>`, no JS (other than the `<img onerror>` inline attribute for image fallback).
 - System font stack: `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`.
 - Verdict colours: BUY green (`#27AE60`), SOURCE_ONLY blue (`#2980B9`), NEGOTIATE amber (`#E67E22`), WATCH yellow (`#F1C40F`). Border-left 4px on cards uses the verdict colour.
-- Traffic-light dot CSS: `<span class="dot dot-green"></span>` renders as a 12px circle via `border-radius: 50%; background: <colour>`.
-- Card max-width 900px, centred. TOC sticky on desktop (`position: sticky` at sidebar widths ≥ 1280px), collapsed to top of body on narrow viewports.
-- `@media print`: hide `<nav class="toc">`, page-break-inside: avoid on cards, drop background colours to white, keep verdict-badge colour for visual identity.
+- Traffic-light dot CSS: `<span class="dot dot-green"></span>` renders as a 12px circle via `border-radius: 50%; background: <colour>`. Grey state (signal missing) renders as a hollow circle via `border: 1.5px solid #B0B0B0; background: transparent`.
+- Card image: CSS `width: 200px; height: auto; max-width: 100%; object-fit: contain` — no `width`/`height` HTML attributes. Lets the image scale on retina + narrow viewports without distortion.
+- Card max-width 900px, centred.
+- **Within-verdict sort order:** BUY rows sorted by `projected_30d_profit` desc (matches the XLSX sort introduced in PR #78); other verdicts sorted by `opportunity_score` desc. Stable sort so equal values keep their input ordering.
+- **TOC behaviour:** the `<nav class="toc">` is rendered when the run has more than 3 actionable rows (BUY + SOURCE_ONLY + NEGOTIATE + WATCH). For runs with ≤3 rows (e.g. single-ASIN), the TOC is omitted — the cards themselves are the navigation.
+- TOC stickiness deferred to a follow-up PR — v1 ships with a top-of-body TOC. Sticky-on-desktop is a 5-line CSS addition but fights with print rendering and adds `@media` complexity that's not worth the v1 footprint.
+- `@media print`: hide `<nav class="toc">` (when present), `page-break-inside: avoid` on cards, drop background colours to white, keep verdict-badge colour for visual identity.
 
 ---
 
@@ -310,7 +374,7 @@ Behaviour:
 1. Load JSON.
 2. For each `rows[]` entry: dispatch a Claude agent with the row's verdict + structured metrics + rationales + risk flags. Prompt asks for a 2-3 sentence buyer-perspective paragraph (what to do, why, what to watch).
 3. After all paragraphs returned: read HTML, replace each `<!-- prose:{asin} -->` marker with `<p class="prose-text">{paragraph}</p>`. Atomic-write back to `html_path`.
-4. Cache responses keyed on `hash(asin + verdict + sorted(metric values + economics))`. Cache lives at `.cache/buyer_report_prose/<hash>.txt`. Re-running on unchanged engine output costs zero LLM calls.
+4. Cache responses keyed on `hash(schema_version + prompt_version + asin + verdict + sorted(metric values + economics))`. Cache lives at `.cache/buyer_report_prose/<hash>.txt`. Re-running on unchanged engine output costs zero LLM calls. Bumping `schema_version` (engine-side) or `prompt_version` (orchestration-side) invalidates the cache so a schema or prompt change forces re-generation.
 
 ### 6.2 Strategy orchestration wiring
 
@@ -338,7 +402,27 @@ The prose-generation agent receives the row JSON as input and must:
 - Tone: terse, operator-to-operator. No marketing fluff.
 - No HTML tags in the response (renderer wraps in `<p>`).
 
-The prompt template lives at `orchestration/runs/buyer_report_prose_prompt.md`. Pinned at v1; future tone changes ship as v2 with a config knob.
+The prompt template lives at `orchestration/runs/buyer_report_prose_prompt.md`. Pinned at v1; future tone changes ship as v2 with a config knob (and the `prompt_version: 2` field in the JSON forces a cache miss on rerun).
+
+### 6.3.1 Worked examples (input → expected paragraph)
+
+These examples are the contract — the v1 prompt + sample inputs must reproduce paragraphs of equivalent shape and length. Tests assert structural properties (sentence count, word count, mentions of verdict-implication + at least one metric) rather than exact wording.
+
+**BUY input** (from §4.2 example): verdict `BUY`/HIGH, sales 250/mo (green), Amazon BB 10% (green), 4 FBA sellers (green), 13-unit order at £4 cost = £52 capital, 22-day payback, all-green metrics.
+
+> Strong demand at 250 units/mo with healthy share rotation; only 4 FBA sellers, Amazon holds 10% of Buy Box well under our 30% cap, and price has been stable. ROI of 111% on a £52 first-order test pays back in 22 days. No risk flags — order it.
+
+**SOURCE_ONLY input:** verdict `SOURCE_ONLY`/HIGH, sales 320/mo (green), no buy_cost, target ceiling £4.85 (stretch £4.10), projected revenue £710/mo at target.
+
+> Demand looks strong — 320 units/mo with safe Buy Box rotation — but we don't have a supplier cost yet. Target supplier outreach at ≤£4.85/unit; £4.10 is the stretch ask. At target cost, this lands ~£136 of monthly profit with a clean risk profile.
+
+**NEGOTIATE input:** verdict `NEGOTIATE`/MEDIUM, sales 180/mo (green), current buy_cost £5.00, target ceiling £4.38, 12.4% gap, profit_conservative thin at £1.50/unit.
+
+> Current cost of £5.00 is 12.4% above the BUY ceiling — conservative profit thins to £1.50/unit at this price. Demand justifies the listing (180/mo, healthy seller count), but we need to negotiate the supplier down to £4.38 or below before this becomes BUY-grade. Worth a 5-minute supplier call.
+
+**WATCH input:** verdict `WATCH`/LOW, sales 70/mo (amber), `INSUFFICIENT_HISTORY` flag, target ceiling £6.85, no immediate action.
+
+> Below our 100/mo BUY threshold (sales running ~70/mo) and history is too thin for a confident call — `INSUFFICIENT_HISTORY` flag is firing. Target ceiling is £6.85 if economics improve. Re-check next week; if sales pick up or history matures, this could rotate to BUY.
 
 ---
 
@@ -349,18 +433,15 @@ New optional block in `shared/config/decision_thresholds.yaml`:
 ```yaml
 buy_plan_html:
   enabled: true                          # always produce JSON+HTML by default
-  metrics_traffic_light:
-    predicted_velocity_amber_pct: 0.25   # below 25th-percentile share → amber
-    bsr_drops_floor: 20                  # < 20/mo always amber regardless of sales
 ```
 
-Values are conservative defaults; ops can override per-run via `--context`.
+Currently the only knob is the on/off switch. Traffic-light thresholds are **derived from existing config** (`OpportunityValidation` and `BuyPlan` blocks) per the §4.3 table — no duplicate threshold knobs in this block. If a future tuning pass needs per-buyer-report-only thresholds, add them here as a v2 schema bump.
 
 Per-run override:
 - `--no-html` CLI flag on `run.py` (skips both JSON and HTML)
 - `html_enabled` runner-context value (default `"true"`)
 
-`min_roi_buy`, `min_profit_absolute_buy`, `target_monthly_sales`, etc. are reused from `OpportunityValidation` — do not duplicate. The traffic-light judgments use the same thresholds the verdict layer used.
+`min_roi_buy`, `min_profit_absolute_buy`, `target_monthly_sales`, `max_amazon_bb_share_buy`, `max_price_volatility_buy`, `kill_min_sales`, `kill_price_volatility`, `kill_amazon_bb_share` are all reused from `OpportunityValidation` — the traffic-light logic uses the same thresholds the verdict layer used.
 
 Loaded via a new `BuyPlanHtml` dataclass in `fba_config_loader.py` (mirror `BuyPlan`). Permissive defaults so existing yaml files without the block still load.
 
@@ -379,6 +460,10 @@ The step must never crash the pipeline. All of the following degrade gracefully,
 7. **Cowork agent returns malformed prose** (HTML tags, multiple paragraphs, etc.) — strip tags + collapse whitespace before injection. Hard cap at 500 chars.
 8. **Cowork run uses `--no-html`** — engine wrote nothing; orchestration's `if: file_exists(...)` guard short-circuits cleanly.
 9. **Re-running orchestration on unchanged engine output** — cache hits all rows, zero LLM calls, HTML re-injected idempotently.
+10. **Anthropic API rate-limit / quota error** during orchestration — log the error per affected row, leave that row's marker in place (engine template prose persists), continue with remaining rows. Orchestration exits successfully so the run doesn't fail on a transient API blip. Operator can re-run orchestration to pick up the missing rows from the cache or live API.
+11. **Crash mid-orchestration after partial injection** — orchestration writes the cache file BEFORE mutating the HTML for that row, so on retry already-cached rows hit the cache and re-injection is idempotent (the same `<!-- prose:{asin} -->` regex finds and replaces correctly even if the marker was already replaced). HTML is atomically written via tmp+rename per row, so a crash mid-write leaves either the prior HTML or the fully-replaced HTML — never a corrupt mix.
+12. **Single-ASIN runs with ≤3 rows** — TOC is omitted entirely (per §5.4); cards alone are the navigation. Verdict-section headings still render.
+13. **Strategy with `null` supplier** (`keepa_finder`, `single_asin`) — JSON `supplier: null`; HTML title falls back to `Buyer Report — {strategy} — {date}`.
 
 ---
 
@@ -409,10 +494,13 @@ Mirror the patterns in `fba_engine/steps/tests/test_validate_opportunity.py` and
 - Mock-Claude unit test: canned-response patch → assert each marker replaced, idempotency, malformed-prose stripping.
 - Live LLM smoke test (skipped in CI when `ANTHROPIC_API_KEY` missing): 4-row fixture → real agent run → assert each output is 2-3 sentences, mentions verdict and at least one metric. No exact-wording assertion.
 
+**Integration regression (parallel to buy_plan PRD §9):**
+- Re-run the existing strategy fixtures (the abgee + connect-beauty supplier_pricelist tests, the keepa_finder synthetic-CSV test, the oa_csv test). Assert `buyer_report_*.html` and `buyer_report_*.json` land at the expected output path and have ≥ 1 BUY card on the runs that produce SHORTLIST rows. This catches strategy-wiring drift the unit + step tests can't.
+
 **Manual verification (one-off, not in CI):**
 - Real `python run.py --supplier abgee --market-data ... --no-preflight` run produces a `buyer_report_*.html` that:
   - Parses cleanly in Chrome / Safari / Firefox.
-  - Renders the image rail (or alt text fallback gracefully).
+  - Renders the image rail (or hides broken images cleanly via the `onerror` rule).
   - Prints to PDF cleanly (no broken card splits).
   - Forwards to email (Gmail / Outlook) without losing layout.
   - Renders in Notion when pasted as HTML.
@@ -429,7 +517,7 @@ A real `python run.py --supplier abgee` (or `--strategy keepa_finder ...`) run p
 4. All four verdicts (BUY / SOURCE_ONLY / NEGOTIATE / WATCH) render their correct economics-grid variant (per §5.3).
 5. Every card has a `<!-- prose:{asin} -->` marker AND a `<div class="prose" data-asin="...">` wrapper. With Cowork orchestration: prose paragraphs land in every marker. Without: template prose is in every marker (no marker left empty).
 6. Prints to PDF cleanly — no card split across pages where `page-break-inside: avoid` should hold.
-7. All 1357 existing Python tests still pass. ~45 new tests added per §9, all passing.
+7. All Python tests on `main` still pass after this branch's work (the test count at branch-cut is the baseline — no magic number pinned in the PRD). ~45 new tests added per §9, all passing.
 8. MCP suite untouched.
 
 ---
@@ -441,7 +529,7 @@ After ship and sign-off:
 1. Fold this PRD into `docs/SPEC.md` as section **§8e — Buyer report**, mirroring the §8c / §8d style.
 2. Move this file to `docs/archive/PRD-buyer-report.md`.
 3. Update `CLAUDE.md` Current State block.
-4. Add a row to SPEC §9 (signal availability) noting which fields the buyer report consumes (none new — all reuse existing engine signals).
+4. **Signal availability:** the buyer report consumes only existing engine signals (verdict, score, confidence, predicted velocity, candidate score, validate_opportunity outputs, the eleven buy_plan columns, and the calculate-step economics). It introduces no new engine signals — `image_url` is derived deterministically from `asin` alone via the public URL pattern. SPEC §9 needs no row addition unless/until a follow-up workstream extends `enrich` to capture a first-party image URL.
 
 ---
 
