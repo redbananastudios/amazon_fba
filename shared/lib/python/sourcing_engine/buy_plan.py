@@ -215,9 +215,15 @@ def _compute_target_buy_costs(
     )
     target_stretch = round(min(roi_stretch, abs_stretch), 2)
 
-    # Defensive: stretch must never exceed buy ceiling. Algebra above
-    # already guarantees this, but pin it.
-    if target_stretch > target_buy:
+    # On thin-margin listings (gross < min_profit_absolute_buy ×
+    # stretch_multiplier — default £3.75), abs_stretch goes negative.
+    # A negative ceiling makes no economic sense — surface as None
+    # so the operator sees "no positive stretch exists" not "£-1.24".
+    # Defensive: stretch also must never exceed buy ceiling (algebra
+    # guarantees this, but pin it).
+    if target_stretch is not None and target_stretch <= 0:
+        target_stretch = None
+    elif target_stretch > target_buy:
         target_stretch = target_buy
 
     return target_buy, target_stretch, None
@@ -262,9 +268,11 @@ def _compute_sizing(
 
     # MOQ — supplier-imposed lower bound. PRD §7.5 — MOQ wins even
     # when it busts the capital cap; HIGH_MOQ flag (separate, upstream)
-    # already surfaces this to the operator.
+    # already surfaces this to the operator. Use ceil to round UP on
+    # fractional MOQs (a supplier saying "20.5 minimum" means 21, not
+    # 20 — we need to satisfy their floor, not undercut it).
     if moq is not None and moq > 0:
-        order_qty = max(order_qty, int(moq))
+        order_qty = max(order_qty, math.ceil(moq))
 
     capital_required = round(order_qty * buy_cost, 2)
     payback_days = round(order_qty / projected_units * 30, 1)
@@ -412,7 +420,10 @@ def compute_buy_plan(
     # ── Verdict-driven population matrix (PRD §5.4) ───────────────────
     if verdict == VERDICT_WATCH:
         # Projections + targets stay populated so WATCH stays
-        # re-evaluable. Sizing + gap blank.
+        # re-evaluable. Sizing + gap blank. UNECONOMIC override
+        # surfaces structural unprofitability that the operator
+        # would otherwise miss (the BLOCKED_BY_VERDICT label looks
+        # the same as a viable WATCH).
         return {
             "order_qty_recommended": None,
             "capital_required": None,
@@ -424,7 +435,11 @@ def compute_buy_plan(
             "target_buy_cost_stretch": target_stretch,
             "gap_to_buy_gbp": None,
             "gap_to_buy_pct": None,
-            "buy_plan_status": STATUS_BLOCKED_BY_VERDICT,
+            "buy_plan_status": (
+                target_status_override
+                if target_status_override == STATUS_UNECONOMIC_AT_ANY_PRICE
+                else STATUS_BLOCKED_BY_VERDICT
+            ),
         }
 
     if verdict == VERDICT_SOURCE_ONLY:
@@ -526,6 +541,17 @@ def compute_buy_plan(
                 "buy_plan_status": STATUS_INSUFFICIENT_DATA,
             }
 
+        # UNECONOMIC override applies even on a successful sizing —
+        # if validate_opportunity emitted BUY despite gross_after_fees
+        # being below the absolute floor, the operator should still
+        # see the structural-unprofitability flag. Defensive: shouldn't
+        # reach here in practice, but the "fail soft, never crash"
+        # mandate covers malformed upstream rows.
+        status = (
+            STATUS_UNECONOMIC_AT_ANY_PRICE
+            if target_status_override == STATUS_UNECONOMIC_AT_ANY_PRICE
+            else STATUS_OK
+        )
         return {
             "order_qty_recommended": sizing["order_qty"],
             "capital_required": sizing["capital_required"],
@@ -537,7 +563,7 @@ def compute_buy_plan(
             "target_buy_cost_stretch": target_stretch,
             "gap_to_buy_gbp": None,
             "gap_to_buy_pct": None,
-            "buy_plan_status": STATUS_OK,
+            "buy_plan_status": status,
         }
 
     # Unknown verdict (defensive — validate_opportunity guarantees a

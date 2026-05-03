@@ -529,3 +529,20 @@ def test_buy_plan_validates_stretch_multiplier_at_least_one(tmp_path):
     with pytest.raises(AssertionError, match="stretch_roi_multiplier"):
         cfg.get_buy_plan(config_dir=config_dir)
     cfg.reset_cache()
+
+
+def test_buy_plan_validates_stretch_multiplier_upper_bound(tmp_path):
+    """An absurd multiplier (>5.0) produces wildly negative stretch
+    targets on thin-margin listings — reject at config load."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "business_rules.yaml").write_text(
+        (LIB_DIR.parents[1] / "config" / "business_rules.yaml").read_text()
+    )
+    raw = (LIB_DIR.parents[1] / "config" / "decision_thresholds.yaml").read_text()
+    bad = raw.replace("stretch_roi_multiplier: 1.5", "stretch_roi_multiplier: 100.0")
+    (config_dir / "decision_thresholds.yaml").write_text(bad)
+    cfg.reset_cache()
+    with pytest.raises(AssertionError, match="stretch_roi_multiplier"):
+        cfg.get_buy_plan(config_dir=config_dir)
+    cfg.reset_cache()

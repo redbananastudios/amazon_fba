@@ -352,6 +352,42 @@ class TestTargetBuyCost:
         out = compute_buy_plan(row)
         assert out["buy_plan_status"] == STATUS_UNECONOMIC_AT_ANY_PRICE
 
+    def test_uneconomic_status_routes_to_uneconomic_for_buy(self):
+        # Defensive — validate_opportunity shouldn't emit BUY for
+        # gross < min_profit_absolute_buy, but a malformed upstream
+        # row could. The status must reflect structural unprofitability,
+        # not OK + a bogus order_qty.
+        row = _buy_row(
+            raw_conservative_price=5.00, fees_conservative=4.50,
+            profit_conservative=-1.00, buy_cost=1.50,
+        )
+        out = compute_buy_plan(row)
+        assert out["buy_plan_status"] == STATUS_UNECONOMIC_AT_ANY_PRICE
+        assert out["target_buy_cost_buy"] is None
+
+    def test_uneconomic_status_routes_to_uneconomic_for_watch(self):
+        row = _watch_row(
+            raw_conservative_price=4.50, fees_conservative=4.50,
+        )
+        out = compute_buy_plan(row)
+        assert out["buy_plan_status"] == STATUS_UNECONOMIC_AT_ANY_PRICE
+
+    def test_negative_stretch_target_collapses_to_none(self):
+        # Thin-margin listing where abs_stretch goes negative.
+        # gross = 3.00, ROI ceiling = 2.31, abs ceiling = 0.50 (binds).
+        # Stretch: roi_stretch = 3.00/1.45 = 2.07, abs_stretch = 3.00 -
+        # 2.50 × 1.5 = -0.75 → min = -0.75 → clamp to None.
+        row = _buy_row(
+            raw_conservative_price=7.50, fees_conservative=4.50,
+            profit_conservative=1.50, buy_cost=1.50,
+        )
+        out = compute_buy_plan(row)
+        # target_buy is positive (£0.50)
+        assert out["target_buy_cost_buy"] is not None
+        assert out["target_buy_cost_buy"] > 0
+        # stretch went negative → None
+        assert out["target_buy_cost_stretch"] is None
+
     def test_target_buy_blank_when_inputs_absent(self):
         row = _buy_row()
         row.pop("raw_conservative_price")

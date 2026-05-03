@@ -729,8 +729,12 @@ def _print_buy_plan_block(row: Any, is_missing, fmt) -> None:
                 f"{float(gap_pct):.1%})"
             )
         if _ok(p_units) and _ok(p_prof):
+            # NEGOTIATE projection uses profit_conservative (current
+            # cost), not target — see _compute_projections in the
+            # core. The label calls out the current-cost basis so the
+            # operator doesn't read "At ceiling" and assume otherwise.
             print(
-                f"  At ceiling:            {int(p_units)} units/mo "
+                f"  At current cost:       {int(p_units)} units/mo "
                 f"→ {fmt(p_prof)} 30d profit"
             )
         print()

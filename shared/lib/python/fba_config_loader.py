@@ -549,8 +549,10 @@ def _validate_buy_plan(bp: BuyPlan) -> None:
         ("risk_floor", bp.risk_floor),
     ):
         assert 0 < value <= 1.0, f"{name}={value} not in (0, 1] (must dampen, not amplify)"
-    assert bp.stretch_roi_multiplier >= 1.0, (
-        "stretch_roi_multiplier below 1.0 — stretch must be tighter than buy ceiling"
+    assert 1.0 <= bp.stretch_roi_multiplier <= 5.0, (
+        f"stretch_roi_multiplier={bp.stretch_roi_multiplier} out of [1.0, 5.0]. "
+        "Below 1.0 the stretch is looser than the buy ceiling; above 5.0 "
+        "produces wildly negative stretch targets on thin-margin listings."
     )
 
 

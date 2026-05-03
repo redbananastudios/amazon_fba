@@ -303,6 +303,66 @@ class TestRunStrategyVariableInterpolation:
         # interpolated niche.
         assert "IP Risk Band" in out.columns
 
+    def test_order_mode_default_seeded_when_caller_omits(self):
+        """Regression — code-reviewer #1: callers (programmatic or
+        runner CLI) shouldn't have to know that buy_plan needs
+        order_mode threaded through context. The runner seeds a
+        sensible default so YAMLs interpolating ``{order_mode}`` don't
+        raise StrategyConfigError on missing-key.
+        """
+        # Build a one-step strategy whose config interpolates {order_mode}.
+        # The buy_plan step's wrapper accepts the raw value, so this is
+        # an end-to-end check that the runner doesn't blow up on the
+        # interpolation alone.
+        strat = _strategy(
+            steps=[
+                StepDef(
+                    "buy_plan",
+                    "fba_engine.steps.buy_plan",
+                    {"order_mode": "{order_mode}"},
+                ),
+            ]
+        )
+        df = pd.DataFrame([{"asin": "B0TESTORDER"}])
+        # Empty context — must not raise on the buy_plan step's
+        # {order_mode} interpolation.
+        out = run_strategy(strat, context={}, df_in=df)
+        # buy_plan added its 11 columns — confirms it ran.
+        assert "buy_plan_status" in out.columns
+
+    def test_explicit_order_mode_in_context_overrides_default(self):
+        # When the caller does provide order_mode, the runner must not
+        # clobber it with the default.
+        strat = _strategy(
+            steps=[
+                StepDef(
+                    "buy_plan",
+                    "fba_engine.steps.buy_plan",
+                    {"order_mode": "{order_mode}"},
+                ),
+            ]
+        )
+        df = pd.DataFrame([{
+            "asin": "B0TESTORDER",
+            "opportunity_verdict": "BUY",
+            "opportunity_confidence": "HIGH",
+            "predicted_velocity_mid": 18,
+            "raw_conservative_price": 16.85,
+            "fees_conservative": 4.50,
+            "profit_conservative": 8.35,
+            "buy_cost": 4.0,
+            "risk_flags": [],
+        }])
+        out_first = run_strategy(strat, context={"order_mode": "first"}, df_in=df)
+        out_reorder = run_strategy(
+            strat, context={"order_mode": "reorder"}, df_in=df,
+        )
+        # First-order: ceil(18 * 21 / 30) = 13.
+        # Reorder: ceil(18 * 45 / 30) = 27. Different cover days drive
+        # different qty; that's the proof the override flowed through.
+        assert out_first.iloc[0]["order_qty_recommended"] == 13
+        assert out_reorder.iloc[0]["order_qty_recommended"] == 27
+
 
 class TestRunSummary:
     """run_summary.json is written alongside output.csv when set."""
@@ -362,7 +422,13 @@ class TestRunSummary:
         summary = _json.loads(
             (tmp_path / "kids-toys.summary.json").read_text(encoding="utf-8")
         )
-        assert summary["context"] == {"niche": "kids-toys"}
+        # The runner seeds universally-applicable defaults (order_mode)
+        # so step YAMLs interpolating them don't crash on missing-key.
+        # Caller-supplied keys must still appear; assert containment
+        # rather than equality to keep the test robust as new defaults
+        # get seeded over time.
+        assert summary["context"]["niche"] == "kids-toys"
+        assert summary["context"]["order_mode"] == "first"
 
     def test_summary_records_step_failure_with_error(self, tmp_path: Path):
         # When a step raises, the summary's step_summary entry for that

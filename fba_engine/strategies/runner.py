@@ -286,6 +286,12 @@ def run_strategy(
     started_at_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     started_at_mono = time.monotonic()
 
+    # Seed universally-applicable defaults so callers don't have to
+    # know every step's interpolation knobs. Copy first so we never
+    # mutate the caller's context dict.
+    context = {**context}
+    context.setdefault("order_mode", "first")
+
     df = _resolve_input_df(strategy, context, df_in)
     initial_rows = len(df)
 
@@ -556,6 +562,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     context = _parse_context_pairs(args.context)
+    # Seed universally-applicable defaults so direct runner invocations
+    # don't have to know every step's interpolation knobs. Any key the
+    # operator passes via --context overrides these. Mirrors the
+    # default-seeding in cli/strategy.py:_build_context.
+    context.setdefault("order_mode", "first")
 
     # Wrap the load + run in clean stderr error reporting so operators see
     # a one-line message instead of a Python traceback for the common
