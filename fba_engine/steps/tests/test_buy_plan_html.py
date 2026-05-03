@@ -187,3 +187,32 @@ def test_does_not_mutate_input_df(tmp_path):
         strategy="supplier_pricelist", supplier="abgee",
     )
     pd.testing.assert_frame_equal(df, df_before)
+
+
+def test_decision_invariant_columns_unchanged(tmp_path):
+    """Per the buyer-report PRD's pure-additive contract, the step
+    must NEVER mutate `decision`, `opportunity_verdict`, or any other
+    upstream column. This test pins the contract column-by-column
+    across every verdict that flows into the step.
+    """
+    df = pd.DataFrame([
+        _row("BUY", decision="SHORTLIST"),
+        _row("WATCH", decision="REVIEW", asin="B0WATCH0001"),
+        _row("KILL", decision="REJECT", asin="B0KILLED001"),
+    ])
+    columns_before = list(df.columns)
+    decision_before = list(df["decision"])
+    verdict_before = list(df["opportunity_verdict"])
+    add_buy_plan_html(
+        df, run_dir=tmp_path, timestamp="20260503",
+        strategy="supplier_pricelist", supplier="abgee",
+    )
+    assert list(df.columns) == columns_before, (
+        "buy_plan_html added columns to the input DataFrame"
+    )
+    assert list(df["decision"]) == decision_before, (
+        "buy_plan_html mutated the decision column"
+    )
+    assert list(df["opportunity_verdict"]) == verdict_before, (
+        "buy_plan_html mutated opportunity_verdict"
+    )

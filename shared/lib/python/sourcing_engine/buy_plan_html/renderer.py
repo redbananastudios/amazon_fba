@@ -22,14 +22,12 @@ _TOC_MIN_ROWS = 4
 
 # Analyst-verdict taxonomy (Q4 — buyer-action shaped).
 _ANALYST_VERDICT_TO_SECTION = [
-    ("BUY",       "section-buy",       "Why BUY"),
-    ("NEGOTIATE", "section-negotiate", "Why NEGOTIATE"),
-    ("SOURCE",    "section-source",    "Why SOURCE"),
-    ("WAIT",      "section-wait",      "Why WAIT"),
-    ("SKIP",      "section-skip",      "Why SKIP"),
+    ("BUY",       "section-buy"),
+    ("NEGOTIATE", "section-negotiate"),
+    ("SOURCE",    "section-source"),
+    ("WAIT",      "section-wait"),
+    ("SKIP",      "section-skip"),
 ]
-
-_ANALYST_VERDICT_LABELS = {v[0]: v[2] for v in _ANALYST_VERDICT_TO_SECTION}
 
 
 def render_html(payload: dict) -> str:
@@ -58,7 +56,7 @@ def render_html(payload: dict) -> str:
     if not rows:
         parts.append('<div class="empty-notice">No actionable rows in this run.</div>')
     else:
-        for verdict, section_id, _heading in _ANALYST_VERDICT_TO_SECTION:
+        for verdict, section_id in _ANALYST_VERDICT_TO_SECTION:
             section_rows = [
                 r for r in rows
                 if (_analyst_verdict(r) or "").upper() == verdict
@@ -114,7 +112,7 @@ def _render_header(payload: dict) -> str:
     title_suffix = supplier if supplier else strategy
     chips = " ".join(
         f'<span class="vc vc-{v.lower()}">{v} {counts[v]}</span>'
-        for v, _, _ in _ANALYST_VERDICT_TO_SECTION
+        for v, _ in _ANALYST_VERDICT_TO_SECTION
     )
     return (
         '<header class="report-header">'
@@ -136,7 +134,7 @@ def _render_footer(payload: dict) -> str:
 
 def _render_toc(rows: list[dict]) -> str:
     parts = ['<nav class="toc"><h3>Contents</h3>']
-    for verdict, section_id, _heading in _ANALYST_VERDICT_TO_SECTION:
+    for verdict, section_id in _ANALYST_VERDICT_TO_SECTION:
         section_rows = [
             r for r in rows
             if (_analyst_verdict(r) or "").upper() == verdict

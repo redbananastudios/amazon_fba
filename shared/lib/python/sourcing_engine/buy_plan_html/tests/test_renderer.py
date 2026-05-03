@@ -131,42 +131,50 @@ class TestRenderHtmlStructure:
         i_skip = out.find('id="section-skip"')
         assert -1 < i_buy < i_neg < i_src < i_wait < i_skip
 
-    def test_card_has_verdict_badge(self):
-        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
+    @pytest.mark.parametrize("verdict", ["BUY", "NEGOTIATE", "SOURCE", "WAIT", "SKIP"])
+    def test_card_has_verdict_badge(self, verdict):
+        asin = f"B0{verdict[:6]:06s}1"[:10]
+        p = _payload(rows=[_row_payload(asin, verdict)])
         out = render_html(p)
         soup = BeautifulSoup(out, "html.parser")
-        card = soup.find("article", id="asin-B0BUY00001")
+        card = soup.find("article", id=f"asin-{asin}")
+        assert card is not None, f"card not rendered for {verdict}"
         badge = card.find("div", class_="verdict-badge")
         assert badge is not None
-        assert "BUY" in badge.get_text()
+        assert verdict in badge.get_text()
 
-    def test_card_has_dimension_breakdown(self):
-        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
+    @pytest.mark.parametrize("verdict", ["BUY", "NEGOTIATE", "SOURCE", "WAIT", "SKIP"])
+    def test_card_has_dimension_breakdown(self, verdict):
+        asin = f"B0{verdict[:6]:06s}1"[:10]
+        p = _payload(rows=[_row_payload(asin, verdict)])
         out = render_html(p)
         soup = BeautifulSoup(out, "html.parser")
-        # 4 dimension rows
         dim_rows = soup.select(".dimensions tbody tr")
-        assert len(dim_rows) == 4
-        # Profit dimension shows score
+        assert len(dim_rows) == 4, f"{verdict} card missing dimension breakdown"
         profit_row = next(r for r in dim_rows if "Profit" in r.get_text())
         assert "22" in profit_row.get_text()
 
-    def test_card_has_buyers_read_section(self):
-        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
+    @pytest.mark.parametrize("verdict", ["BUY", "NEGOTIATE", "SOURCE", "WAIT", "SKIP"])
+    def test_card_has_buyers_read_section(self, verdict):
+        asin = f"B0{verdict[:6]:06s}1"[:10]
+        p = _payload(rows=[_row_payload(asin, verdict)])
         out = render_html(p)
         soup = BeautifulSoup(out, "html.parser")
         section = soup.find("section", class_="card-buyers-read")
-        assert section is not None
+        assert section is not None, f"{verdict} card missing buyer's read"
         narrative = section.find("p", class_="buyers-narrative")
         assert narrative is not None
+        # Fixture narrative is the same string across verdicts.
         assert "Strong economics" in narrative.get_text()
 
-    def test_card_has_direction_section_with_arrows(self):
-        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
+    @pytest.mark.parametrize("verdict", ["BUY", "NEGOTIATE", "SOURCE", "WAIT", "SKIP"])
+    def test_card_has_direction_section_with_arrows(self, verdict):
+        asin = f"B0{verdict[:6]:06s}1"[:10]
+        p = _payload(rows=[_row_payload(asin, verdict)])
         out = render_html(p)
         soup = BeautifulSoup(out, "html.parser")
         section = soup.find("section", class_="card-direction")
-        assert section is not None
+        assert section is not None, f"{verdict} card missing direction section"
         arrows = section.select(".dir-arrow")
         # 3 arrows: sales / sellers / price
         assert len(arrows) == 3
