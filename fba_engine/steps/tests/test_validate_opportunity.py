@@ -107,9 +107,38 @@ class TestKill:
         out = validate_opportunity(row)
         assert out["opportunity_verdict"] == VERDICT_KILL
 
-    def test_low_sales_becomes_kill(self):
+    def test_low_sales_does_not_kill_with_canonical_config(self):
+        # Canonical config has kill_min_sales=0 (operator preference:
+        # low volume is not a KILL — surface as WATCH for manual filter).
+        # sales=10 should NOT KILL, even though it's well below the
+        # 100 target_monthly_sales BUY threshold.
         row = _shortlist_row(sales_estimate=10)
         out = validate_opportunity(row)
+        assert out["opportunity_verdict"] != VERDICT_KILL
+
+    def test_kill_min_sales_gate_fires_when_explicitly_configured(self):
+        # The kill_min_sales gate logic still works — operators who
+        # want to enable it can override the canonical 0 default.
+        from fba_config_loader import OpportunityValidation
+        cfg = OpportunityValidation(
+            target_monthly_sales=100, min_candidate_score_buy=75,
+            min_data_confidence_buy="HIGH", min_profit_absolute_buy=2.50,
+            min_roi_buy=0.30, max_amazon_bb_share_buy=0.30,
+            max_amazon_bb_share_watch=0.70, max_price_volatility_buy=0.20,
+            max_buy_box_oos_buy=0.15, max_competition_joiners_buy=5,
+            max_fba_sellers_low_sales=3, max_fba_sellers_100_sales=8,
+            max_fba_sellers_200_sales=12, allow_gated_buy=False,
+            allow_restricted_buy=False,
+            kill_min_sales=20,            # explicit override
+            kill_min_roi=0.15, kill_amazon_bb_share=0.90,
+            kill_price_volatility=0.40, kill_bsr_decline_slope=0.10,
+            source_only_min_sales=100, source_only_min_candidate_score=75,
+            source_only_max_volatility=0.20, source_only_max_amazon_bb_share=0.70,
+            negotiate_min_sales=100, negotiate_min_candidate_score=65,
+            strong_score=80, watch_score=60,
+        )
+        row = _shortlist_row(sales_estimate=10)
+        out = validate_opportunity(row, config=cfg)
         assert out["opportunity_verdict"] == VERDICT_KILL
 
     def test_restricted_does_not_become_kill(self):

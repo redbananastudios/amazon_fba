@@ -240,22 +240,27 @@ def _judge_sales_estimate(row: dict) -> dict:
     if sales is None:
         return _grey("sales_estimate", "Volume (units/mo)")
     val = f"{int(sales)}"
+    # Traffic-light boundaries are operator-visual cues, independent of
+    # the kill_min_sales engine gate (which the operator may have set to
+    # 0 to disable auto-KILL on volume). 20/mo is the "very low" mark
+    # where a buyer should pause regardless of engine config.
+    LOW_VOLUME_RED = 20.0
     if sales >= cfg.target_monthly_sales:
         return {
             "key": "sales_estimate", "label": "Volume (units/mo)",
             "value_display": val, "verdict": "green",
             "rationale": f"above {cfg.target_monthly_sales} target",
         }
-    if sales >= cfg.kill_min_sales:
+    if sales >= LOW_VOLUME_RED:
         return {
             "key": "sales_estimate", "label": "Volume (units/mo)",
             "value_display": val, "verdict": "amber",
-            "rationale": f"between {cfg.kill_min_sales} kill floor and {cfg.target_monthly_sales} target",
+            "rationale": f"between {int(LOW_VOLUME_RED)} and {cfg.target_monthly_sales} target",
         }
     return {
         "key": "sales_estimate", "label": "Volume (units/mo)",
         "value_display": val, "verdict": "red",
-        "rationale": f"below {cfg.kill_min_sales} kill floor",
+        "rationale": f"very low volume (< {int(LOW_VOLUME_RED)}/mo)",
     }
 
 

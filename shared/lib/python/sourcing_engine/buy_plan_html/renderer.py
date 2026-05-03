@@ -193,6 +193,19 @@ def _render_economics_grid(row: dict) -> str:
     def num(v, suffix=""):
         return f"{float(v):.0f}{suffix}" if v is not None else "—"
 
+    def units_and_gbp(units, gbp_val):
+        # "{N} units · £X.XX" — keeps revenue/profit visually tied to
+        # the unit count that produced it. Falls back gracefully when
+        # either is None.
+        if gbp_val is None:
+            return "—"
+        cash = f"£{float(gbp_val):.2f}"
+        if units is None:
+            return cash
+        return f"{int(float(units))} units · {cash}"
+
+    units = bp.get("projected_30d_units")
+
     if verdict == "BUY":
         return (
             '<table class="economics-grid"><tbody>'
@@ -201,7 +214,7 @@ def _render_economics_grid(row: dict) -> str:
             f'<tr><td class="econ-label">Order qty</td><td class="econ-value">{num(bp.get("order_qty_recommended"))}</td>'
             f'<td class="econ-label">Capital</td><td class="econ-value">{gbp(bp.get("capital_required_gbp"))}</td></tr>'
             f'<tr><td class="econ-label">Payback</td><td class="econ-value">{num(bp.get("payback_days"))} days</td>'
-            f'<td class="econ-label">30d profit</td><td class="econ-value">{gbp(bp.get("projected_30d_profit_gbp"))}</td></tr>'
+            f'<td class="econ-label">30d profit</td><td class="econ-value">{units_and_gbp(units, bp.get("projected_30d_profit_gbp"))}</td></tr>'
             "</tbody></table>"
         )
     if verdict == "SOURCE_ONLY":
@@ -209,7 +222,7 @@ def _render_economics_grid(row: dict) -> str:
             '<table class="economics-grid"><tbody>'
             f'<tr><td class="econ-label">Buy cost</td><td class="econ-value">— (no supplier yet)</td>'
             f'<td class="econ-label">Target buy</td><td class="econ-value">≤ {gbp(eco.get("target_buy_cost_gbp"))} (stretch {gbp(eco.get("target_buy_cost_stretch_gbp"))})</td></tr>'
-            f'<tr><td class="econ-label">Projected 30d revenue</td><td class="econ-value">{gbp(bp.get("projected_30d_revenue_gbp"))}</td>'
+            f'<tr><td class="econ-label">Projected 30d revenue</td><td class="econ-value">{units_and_gbp(units, bp.get("projected_30d_revenue_gbp"))}</td>'
             f'<td class="econ-label">30d profit at target</td><td class="econ-value">{gbp(bp.get("projected_30d_profit_gbp"))}</td></tr>'
             "</tbody></table>"
         )
@@ -222,7 +235,7 @@ def _render_economics_grid(row: dict) -> str:
             f'<tr><td class="econ-label">Currently</td><td class="econ-value">{gbp(eco.get("buy_cost_gbp"))}</td>'
             f'<td class="econ-label">Target ceiling</td><td class="econ-value">{gbp(eco.get("target_buy_cost_gbp"))} (stretch {gbp(eco.get("target_buy_cost_stretch_gbp"))})</td></tr>'
             f'<tr><td class="econ-label">Gap to BUY</td><td class="econ-value gap-positive">{gap_str}</td>'
-            f'<td class="econ-label">30d profit (current)</td><td class="econ-value">{gbp(bp.get("projected_30d_profit_gbp"))}</td></tr>'
+            f'<td class="econ-label">30d profit (current)</td><td class="econ-value">{units_and_gbp(units, bp.get("projected_30d_profit_gbp"))}</td></tr>'
             "</tbody></table>"
         )
     # WATCH
@@ -230,7 +243,7 @@ def _render_economics_grid(row: dict) -> str:
         '<table class="economics-grid"><tbody>'
         f'<tr><td class="econ-label">Buy cost</td><td class="econ-value">{gbp(eco.get("buy_cost_gbp"))}</td>'
         f'<td class="econ-label">Target buy</td><td class="econ-value">{gbp(eco.get("target_buy_cost_gbp"))} (stretch {gbp(eco.get("target_buy_cost_stretch_gbp"))})</td></tr>'
-        f'<tr><td class="econ-label">Projected 30d revenue</td><td class="econ-value">{gbp(bp.get("projected_30d_revenue_gbp"))}</td>'
+        f'<tr><td class="econ-label">Projected 30d revenue</td><td class="econ-value">{units_and_gbp(units, bp.get("projected_30d_revenue_gbp"))}</td>'
         f'<td class="econ-label">30d profit</td><td class="econ-value">{gbp(bp.get("projected_30d_profit_gbp"))}</td></tr>'
         "</tbody></table>"
     )

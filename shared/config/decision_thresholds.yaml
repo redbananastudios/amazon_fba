@@ -197,7 +197,11 @@ opportunity_validation:
   allow_restricted_buy: false           # restriction_status == RESTRICTED → BUY when true
 
   # --- KILL thresholds (severe — beyond REVIEW-flag firing) ---
-  kill_min_sales: 20                    # below this → KILL
+  # Operator preference: low volume is not a KILL — surface those rows
+  # in the buyer report (as WATCH/SOURCE_ONLY) so the operator can
+  # filter manually by predicted velocity rather than have the engine
+  # auto-exclude them.
+  kill_min_sales: 0                     # disabled — never KILL on volume
   kill_min_roi: 0.15                    # below this → KILL
   kill_amazon_bb_share: 0.90            # at/above → KILL
   kill_price_volatility: 0.40           # 2x the BUY ceiling → KILL
