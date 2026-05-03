@@ -87,3 +87,14 @@ steps:
       run_dir: "{run_dir}"
       timestamp: "{timestamp}"
       supplier_label: "{supplier_label}"
+
+  # Stage 09 — buy_plan_html (buyer report — JSON + HTML).
+  # Pure additive: writes buyer_report_<ts>.{json,html} alongside
+  # the existing CSV/XLSX/MD. Honours `buy_plan_html.enabled` config.
+  - name: buy_plan_html
+    module: fba_engine.steps.buy_plan_html
+    config:
+      run_dir: "{run_dir}"
+      timestamp: "{timestamp}"
+      strategy: supplier_pricelist
+      supplier: "{supplier}"

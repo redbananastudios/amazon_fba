@@ -1013,12 +1013,13 @@ class TestOaCsvStrategy:
         assert strat.name == "oa_csv"
         assert strat.input_discover is True
         # Full chain: discover -> keepa_enrich -> calculate -> decide
-        # -> candidate_score -> validate_opportunity -> buy_plan.
-        # buy_plan rolls verdict + velocity into order qty / capital /
-        # payback / target buy cost / negotiation gap.
+        # -> candidate_score -> validate_opportunity -> buy_plan ->
+        # buy_plan_html. The trailing buy_plan_html step writes the
+        # buyer-report JSON + HTML artefacts.
         assert [s.name for s in strat.steps] == [
             "discover", "keepa_enrich", "calculate", "decide",
             "candidate_score", "validate_opportunity", "buy_plan",
+            "buy_plan_html",
         ]
         for step in strat.steps:
             __import__(step.module)
@@ -1178,7 +1179,7 @@ class TestKeepaFinderStrategy:
             "discover", "enrich", "calculate", "decide",
             "keepa_browser_enrich",
             "candidate_score", "validate_opportunity",
-            "buy_plan", "supplier_leads",
+            "buy_plan", "supplier_leads", "buy_plan_html",
         ]
         # All step modules import.
         for step in strat.steps:
@@ -1296,7 +1297,7 @@ class TestSellerStorefrontCsvStrategy:
         assert [s.name for s in strat.steps] == [
             "discover", "enrich", "calculate", "decide",
             "candidate_score", "validate_opportunity",
-            "buy_plan", "supplier_leads",
+            "buy_plan", "supplier_leads", "buy_plan_html",
         ]
         for step in strat.steps:
             __import__(step.module)

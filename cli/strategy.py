@@ -261,6 +261,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-html", action="store_true",
+        help=(
+            "Skip the 09_buy_plan_html buyer-report writer (JSON + HTML "
+            "alongside the existing CSV/XLSX/MD). Default: enabled."
+        ),
+    )
+    parser.add_argument(
         "--timestamp", default=None,
         help=(
             "Run identifier — used in output filenames and as part of "
@@ -345,6 +352,14 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     args = _parse_args(argv if argv is not None else sys.argv[1:])
+
+    # --no-html: monkey-patch the BuyPlanHtml accessor to disable the
+    # writer for this run. The step honours `enabled=False` and silent-
+    # noops. Avoids threading another flag through the runner config.
+    if args.no_html:
+        import fba_engine.steps.buy_plan_html as _bph_mod
+        from fba_config_loader import BuyPlanHtml
+        _bph_mod.get_buy_plan_html = lambda: BuyPlanHtml(enabled=False)
 
     yaml_path = _resolve_strategy_yaml(args.strategy)
     recipe_data = _resolve_recipe_json(args.recipe)

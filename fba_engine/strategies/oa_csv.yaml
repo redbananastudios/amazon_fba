@@ -74,5 +74,14 @@ steps:
     config:
       order_mode: "{order_mode}"
 
+  # Stage 09 — buy_plan_html (buyer report — JSON + HTML).
+  - name: buy_plan_html
+    module: fba_engine.steps.buy_plan_html
+    config:
+      run_dir: "{run_dir}"
+      timestamp: "{timestamp}"
+      strategy: oa_csv
+      supplier: "{feed}"
+
 output:
   csv: "{run_dir}/oa_decisions_{feed}_{timestamp}.csv"

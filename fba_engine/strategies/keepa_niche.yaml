@@ -78,5 +78,14 @@ steps:
     config:
       order_mode: "{order_mode}"
 
+  # Phase 9: buy_plan_html (buyer report — JSON + HTML).
+  - name: buy_plan_html
+    module: fba_engine.steps.buy_plan_html
+    config:
+      run_dir: "{base}/working"
+      timestamp: "{niche_snake}_phase9"
+      strategy: keepa_niche
+      supplier: ""
+
 output:
   csv: "{base}/working/{niche_snake}_phase6_decisions.csv"

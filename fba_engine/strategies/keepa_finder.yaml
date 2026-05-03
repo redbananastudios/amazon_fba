@@ -107,6 +107,17 @@ steps:
       output_md_path: "{output_dir}/supplier_leads_{recipe}_{timestamp}.md"
       niche: "{recipe}"
 
+  # Stage 09 — buy_plan_html (buyer report — JSON + HTML). Reads
+  # only existing engine columns. supplier=null (no supplier dimension
+  # for keepa_finder — title falls back to strategy + date).
+  - name: buy_plan_html
+    module: fba_engine.steps.buy_plan_html
+    config:
+      run_dir: "{output_dir}"
+      timestamp: "{timestamp}"
+      strategy: keepa_finder
+      supplier: ""
+
 output:
   csv: "{output_dir}/keepa_finder_{recipe}_{timestamp}.csv"
   # Styled workbook — clickable hyperlinks on amazon_url + restriction_links,

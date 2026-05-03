@@ -101,6 +101,15 @@ steps:
       output_md_path: "{output_dir}/supplier_leads_{seller_id}_{timestamp}.md"
       niche: "{seller_id}"
 
+  # Stage 09 — buy_plan_html (buyer report — JSON + HTML).
+  - name: buy_plan_html
+    module: fba_engine.steps.buy_plan_html
+    config:
+      run_dir: "{output_dir}"
+      timestamp: "{timestamp}"
+      strategy: seller_storefront_csv
+      supplier: "{seller_id}"
+
 output:
   csv: "{output_dir}/seller_storefront_{seller_id}_{timestamp}.csv"
   # Styled workbook — clickable Amazon URL + Ungate Links, gated rows
