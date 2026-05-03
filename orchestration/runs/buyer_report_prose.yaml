@@ -1,30 +1,32 @@
-# Cowork Run Definition: buyer_report_prose
+# Cowork Run Definition: buyer_report_analyst (v2)
 #
 # Generic post-engine task. Reads the engine's structured
-# `buyer_report_<ts>.json` payload, generates a 2-3 sentence buyer-
-# perspective prose paragraph per card via Claude, and walks the
-# rendered HTML to inject each paragraph into its
-# `<!-- prose:{asin} -->` marker.
+# `buyer_report_<ts>.json` payload (which arrives with a deterministic
+# `analyst` block already populated by the engine's fallback), invokes
+# Claude per row to UPGRADE that analyst block to a real LLM analysis,
+# writes the upgraded JSON back, then re-renders the HTML.
 #
-# Designed to be chained from any strategy run definition
-# (keepa_finder, supplier_pricelist, oa_csv, seller_storefront_csv,
-# single_asin) once those run definitions exist. The engine has
-# already written a working HTML with template-prose fallback by
-# the time this task starts; this task UPGRADES the HTML to LLM
-# prose. If this task is skipped (e.g. no Cowork orchestration),
-# the HTML is still operator-usable.
+# v2 architecture (per /brainstorming session, 2026-05-03):
+#   Engine = data layer (signals, trends, economics, ceilings).
+#   Claude = analyst (verdict + score + dimensions + narrative).
+#   Cowork = orchestrator that wires Claude to the engine output.
+#
+# Engine-alone runs (no Cowork in the loop) still produce a complete
+# usable card via the deterministic fallback. This task UPGRADES it.
 #
 # Format note: this YAML is descriptive, not executable. Cowork is
 # expected to translate the `tasks[]` block into its native task
-# graph. The shape mirrors the existing keepa_finder.yaml file.
+# graph. Shape mirrors orchestration/runs/keepa_finder.yaml.
 
-name: buyer_report_prose
+name: buyer_report_analyst
 description: >
-  Generate per-card buyer-report prose paragraphs from the engine's
-  structured JSON payload. Walks the HTML and injects each paragraph
-  into its <!-- prose:{asin} --> marker. Caches per-card responses
-  by content hash so re-runs against unchanged engine output cost
-  zero LLM calls.
+  Upgrade per-card buyer-report analysis from the engine's deterministic
+  fallback to a real Claude-driven read. Reads the engine's structured
+  JSON payload, calls Claude per row to produce verdict + score +
+  4-dim breakdown + trend story + narrative + action_prompt, writes
+  back into each row's `analyst` block, then re-renders the HTML.
+  Caches per-card responses by content hash so re-runs against
+  unchanged engine output cost zero LLM calls.
 
 # ───────────────────────────────────────────────────────────────────────
 # Inputs the orchestrator must supply per run
@@ -33,25 +35,27 @@ inputs:
   json_path:
     required: true
     type: path
-    description: Absolute path to buyer_report_<ts>.json (engine output).
+    description: >
+      Absolute path to buyer_report_<ts>.json (engine output). Each
+      row carries a deterministic `analyst` block from the engine
+      fallback; this task overwrites it with Claude's analysis.
 
   html_path:
     required: true
     type: path
     description: >
-      Absolute path to buyer_report_<ts>.html (engine output, with
-      template-prose already populated). This task replaces template
-      prose with LLM prose in place; the file is atomically written
-      back per row.
+      Absolute path to buyer_report_<ts>.html. Re-rendered atomically
+      from the upgraded JSON after Claude has populated each row's
+      analyst block.
 
   cache_dir:
     type: path
-    default: .cache/buyer_report_prose
+    default: .cache/buyer_report_analyst
     description: >
-      Per-card cache directory. Cache files keyed on
-      hash(schema_version + prompt_version + asin + verdict +
-      sorted(metrics) + sorted(economics)).
-      Re-running on unchanged engine output → zero LLM calls.
+      Per-card cache directory. Cache files keyed on hash(schema_version +
+      prompt_version + asin + sorted_payload). Bumping either version
+      in the engine forces re-generation. Re-running on unchanged engine
+      output → zero LLM calls.
 
 # ───────────────────────────────────────────────────────────────────────
 # Tasks dispatched in sequence
@@ -59,15 +63,18 @@ inputs:
 tasks:
 
   # ─────────────────────────────────────────────────────────────────────
-  # Task 1: Generate prose per card (Claude API per row, with cache)
+  # Task 1: Generate analyst output per row (Claude per row, cached)
   # ─────────────────────────────────────────────────────────────────────
-  - id: generate_prose
+  - id: generate_analyst
     type: claude_agent_task
 
     description: >
-      For each `rows[]` entry in the JSON payload, generate a
-      2-3 sentence prose paragraph using the v1 prompt template.
-      Cache responses by content hash. Tolerate per-row failures.
+      For each `rows[]` entry in the JSON payload, call Claude with
+      the v2 prompt template. Claude returns a structured-JSON
+      analyst block ({verdict, verdict_confidence, score, dimensions,
+      trend_arrows, trend_story, narrative, action_prompt}). Cache by
+      content hash. Per-row failures fall back to engine's deterministic
+      analyst block (already in the payload).
 
     inputs:
       payload_path: "{json_path}"
@@ -77,72 +84,100 @@ tasks:
         - schema_version
         - prompt_version
         - asin
-        - verdict
-        - metrics
         - economics
+        - buy_plan
+        - trends
+        - metrics
+        - risk_flags
 
     behaviour:
-      - For each row: build cache key; if cache hit → use cached prose;
-        else call Claude with the prompt template + row JSON, store
-        response in cache.
-      - max_concurrent: 8 (avoid Anthropic API rate limits at scale).
-      - on_rate_limit: skip_row (log + leave the engine's template-prose
-        marker in place; the row stays operator-usable).
-      - on_error: skip_row (same — fail-soft, never abort the run).
-      - on_malformed_response: strip HTML tags, collapse whitespace,
-        cap at 500 chars before injection (matches prose_injector's
-        sanitise rules).
+      - For each row: build cache key from the payload fields above;
+        if cache hit → use cached analyst block; else call Claude with
+        the prompt template + row payload, parse JSON, store in cache.
+      - max_concurrent: 8 (avoid Anthropic rate limits at scale).
+      - on_rate_limit: skip_row (engine's deterministic analyst block
+        stays in place — row remains operator-usable).
+      - on_error: skip_row (fail-soft, never abort the run).
+      - on_malformed_response: log + skip_row (don't accept invalid
+        JSON; the engine fallback already produced valid output).
+      - on_schema_mismatch: log + skip_row (verdict not in the 5-state
+        taxonomy, score out of range, etc. — reject and keep fallback).
 
     expected_outputs:
-      - prose_by_asin: dict[str, str]   # {asin: paragraph}
+      - analyst_by_asin: dict[str, dict]   # {asin: analyst_block}
 
   # ─────────────────────────────────────────────────────────────────────
-  # Task 2: Inject prose into the HTML
+  # Task 2: Write upgraded analyst blocks back into the JSON payload
   # ─────────────────────────────────────────────────────────────────────
-  - id: inject_prose
+  - id: merge_analyst_into_json
     type: python_call
-    depends_on: generate_prose
+    depends_on: generate_analyst
 
     description: >
-      Walk the HTML and replace each <!-- prose:{asin} --> marker with
-      the corresponding paragraph from generate_prose. Atomic write
-      back to {html_path}. Idempotent — calling twice with the same
-      input is a no-op.
+      Walk the JSON payload's `rows[]`, for each ASIN with a Claude-
+      generated analyst block in generate_analyst.outputs, overwrite
+      the engine-generated fallback. Atomic write (tmp + rename).
 
     call:
-      module: sourcing_engine.buy_plan_html.prose_injector
-      function: inject_prose
-      args:
-        html_path: "{html_path}"
-        prose_by_asin: "{generate_prose.outputs.prose_by_asin}"
-        atomic_write: true
-
-    expected_behaviour:
-      - All ASINs in prose_by_asin that match a marker → replaced.
-      - Markers without matching prose → left in place + warning logged.
-      - ASINs supplied but no marker → ignored + warning logged.
-      - Crash mid-write → tmp+rename leaves either old HTML or fully-
-        replaced HTML, never a corrupt mix.
+      # Operates inline; logical pseudo-call shown.
+      action: |
+        payload = json.load(json_path)
+        for row in payload["rows"]:
+            asin = row["asin"]
+            if asin in analyst_by_asin:
+                row["analyst"] = analyst_by_asin[asin]
+        atomic_write_json(json_path, payload)
 
     on_failure:
       - retry_once: true
-      - if_html_missing: abort_run     # engine never produced the file
-      - if_no_markers_replaced: surface_warning   # could mean engine
-                                                    # changed marker format
+      - if_json_missing: abort_run
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Task 3: Re-render HTML from the upgraded JSON
+  # ─────────────────────────────────────────────────────────────────────
+  - id: rerender_html
+    type: shell_command
+    depends_on: merge_analyst_into_json
+
+    description: >
+      Invoke the engine's renderer CLI to produce HTML from the
+      upgraded JSON. Atomic write (tmp + rename) — a crash mid-write
+      leaves either the previous HTML or the fully-rendered HTML,
+      never a corrupt mix.
+
+    command: |
+      python -m sourcing_engine.buy_plan_html.cli render-from-json \
+        {json_path} \
+        {html_path}
+
+    expected_outputs:
+      - "{html_path}"
+
+    on_failure:
+      - retry_once: true
+      - if_render_fails: surface_warning   # leave the engine's HTML
+                                            # in place (still useful)
 
 # ───────────────────────────────────────────────────────────────────────
 # Notes for orchestrator authors
 # ───────────────────────────────────────────────────────────────────────
 notes:
   - >
-    This task is generic — chain it from any strategy run definition
-    that produces buyer_report_*.json + .html. Add a `tasks[]` entry
-    referencing this file via `uses:`.
+    Chain this task from any strategy run definition that produces
+    buyer_report_*.json + .html (keepa_finder, supplier_pricelist,
+    oa_csv, seller_storefront_csv, single_asin). Add a `tasks[]`
+    entry referencing this file via `uses:`.
   - >
     Cache keys include schema_version + prompt_version. Bumping either
-    in the engine forces re-generation on next run — this is the
-    designed migration path for prompt or schema changes.
+    forces re-generation. The engine ships at schema_version=2 +
+    prompt_version=2 (v2 = analyst-led architecture).
   - >
-    Engine-alone runs (no Cowork) skip this task entirely. The HTML
-    is already operator-usable thanks to the template-prose fallback.
-    LLM prose is an upgrade, not a requirement.
+    Engine-alone runs (no Cowork) skip this task entirely. The
+    deterministic analyst fallback in the engine produces a complete
+    usable card. This task UPGRADES it to LLM-generated analysis.
+  - >
+    The `next_action` field in the engine output is the rule-based
+    operator playbook; the analyst's `action_prompt` is the LLM-
+    derived recommendation. They sit alongside each other — the card
+    leads with action_prompt; the engine cross-check details panel
+    surfaces next_action for sceptical comparison.

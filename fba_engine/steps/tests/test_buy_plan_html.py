@@ -57,7 +57,7 @@ def test_writes_json_and_html(tmp_path):
     assert json_path.exists()
     assert html_path.exists()
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
     assert len(data["rows"]) == 1
     soup = BeautifulSoup(html_path.read_text(encoding="utf-8"), "html.parser")
     assert soup.find("article", id="asin-B0TEST00001") is not None

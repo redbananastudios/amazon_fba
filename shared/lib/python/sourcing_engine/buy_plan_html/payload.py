@@ -15,8 +15,8 @@ from typing import Any, Optional
 import pandas as pd
 
 
-SCHEMA_VERSION = 1
-PROMPT_VERSION = 1
+SCHEMA_VERSION = 2   # bumped: trends + analyst blocks added
+PROMPT_VERSION = 2   # bumped: structured-JSON output (verdict + score + dims)
 
 VERDICTS = ("BUY", "SOURCE_ONLY", "NEGOTIATE", "WATCH", "KILL")
 ACTIONABLE_VERDICTS = ("BUY", "SOURCE_ONLY", "NEGOTIATE", "WATCH")
