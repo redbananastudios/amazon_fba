@@ -99,6 +99,55 @@ class TestCalculateEconomics:
         assert len(out) == 3
 
 
+class TestRecalculateFlag:
+    """Second-pass recompute on supplier_pricelist survivors after
+    `keepa_enrich_survivors` refreshes the Buy Box price."""
+
+    def test_default_skips_pre_decided_shortlist(self):
+        # First-pass economics computed with stale BB; row carries SHORTLIST.
+        df = pd.DataFrame([_match_row(
+            decision="SHORTLIST", decision_reason="stale-pass profit OK",
+            buy_box_price=20.0,  # stale-stale price
+            profit_current=5.0, profit_conservative=5.0,
+        )])
+        out = calculate_economics(df, recalculate=False)
+        # Pre-decided row passed through — profit unchanged.
+        assert out.iloc[0]["decision"] == "SHORTLIST"
+        assert out.iloc[0]["profit_current"] == 5.0
+
+    def test_recalculate_recomputes_pre_decided_row(self):
+        # Same row but BB has dropped; recalculate=True should rerun
+        # economics and clear the stale decision so a re-decide step
+        # sees fresh inputs.
+        df = pd.DataFrame([_match_row(
+            decision="SHORTLIST", decision_reason="stale-pass profit OK",
+            buy_box_price=8.0,  # live BB much lower than stale 20.0
+            profit_current=5.0, profit_conservative=5.0,
+        )])
+        out = calculate_economics(df, recalculate=True)
+        # Stale decision cleared, fresh profit < stale profit (or REJECT
+        # when no positive profit remains at the lower BB).
+        assert out.iloc[0]["profit_current"] != 5.0
+
+    def test_recalculate_still_skips_reject_rows(self):
+        # Even with recalculate=True, REJECT rows from resolve flow
+        # through untouched — we never resurrect rows the engine already
+        # killed structurally (invalid EAN, no Amazon match, etc).
+        df = pd.DataFrame([_reject_row()])
+        out = calculate_economics(df, recalculate=True)
+        assert out.iloc[0]["decision"] == "REJECT"
+
+    def test_run_step_truthy_string_recalculate(self):
+        # YAML interpolation produces strings — make sure "true" works.
+        df = pd.DataFrame([_match_row(
+            decision="SHORTLIST", buy_box_price=8.0,
+            profit_current=5.0, profit_conservative=5.0,
+        )])
+        out = run_step(df, {"recalculate": "true"})
+        # Recalculation happened — profit no longer the stale 5.0.
+        assert out.iloc[0]["profit_current"] != 5.0
+
+
 class TestAmazonOnlyPriceFallback:
     """When both Keepa Buy Box (idx 18) and FBA-only (idx 10) stats are
     empty, the engine falls back to Amazon's price (idx 0) as the market

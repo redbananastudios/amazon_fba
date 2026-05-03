@@ -57,13 +57,23 @@ from sourcing_engine.utils.flags import (
 logger = logging.getLogger(__name__)
 
 
-def calculate_economics(df: pd.DataFrame) -> pd.DataFrame:
+def calculate_economics(
+    df: pd.DataFrame, *, recalculate: bool = False,
+) -> pd.DataFrame:
     """Apply fees / cp / profit / capital exposure to match rows.
 
     Match rows are identified as rows without a pre-set ``decision``
     column value (REJECT rows from resolve already carry one). The
     function preserves row order and count: every input row produces
     exactly one output row.
+
+    When ``recalculate=True``, the pre-decided guard is dropped:
+    every non-REJECT row gets re-computed from its current market /
+    economic columns. Used by `supplier_pricelist` after
+    `keepa_enrich_survivors` refreshes Buy Box prices on survivors —
+    the second-pass economics need to ignore the first-pass decision
+    set against stale data. REJECT rows still pass through (we don't
+    resurrect rows the engine already killed at the resolve stage).
 
     Returns a new DataFrame; the input is not mutated.
     """
@@ -73,13 +83,24 @@ def calculate_economics(df: pd.DataFrame) -> pd.DataFrame:
     output_rows: list[dict] = []
     for idx, row in df.iterrows():
         row_dict = row.to_dict()
-        if not is_missing(row_dict.get("decision")) and row_dict.get("decision"):
-            # Pre-decided (REJECT from resolve). Pass through.
-            # NaN-aware: pd.DataFrame fills missing dict keys with NaN,
-            # which is truthy — bare `if row_dict.get("decision")` would
-            # skip every match row that has no real decision yet.
+        existing = row_dict.get("decision")
+        skip_existing = (
+            not is_missing(existing) and existing
+            and (not recalculate or existing == "REJECT")
+        )
+        if skip_existing:
+            # Pre-decided rows pass through unchanged. NaN-aware to
+            # avoid the truthy-NaN trap when rows are round-tripped
+            # through DataFrame construction.
             output_rows.append(row_dict)
             continue
+
+        if recalculate:
+            # Drop stale decision so _calculate_match's path runs.
+            # decision_reason is also cleared so a re-decide step's
+            # output isn't mixed with the stale reason.
+            row_dict["decision"] = None
+            row_dict["decision_reason"] = None
 
         try:
             output_rows.append(_calculate_match(row_dict))
@@ -393,8 +414,22 @@ def run_step(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
         family (amazon_oos_wholesale, stable_price_low_volatility).
         Default ``False`` — existing strategies keep the same output
         schema.
+      - ``recalculate``: when truthy, ignore existing ``decision``
+        on non-REJECT rows and recompute economics from the current
+        market columns. Used by the supplier_pricelist second pass
+        after `keepa_enrich_survivors` refreshes Buy Box prices.
+        Default ``False`` — first-pass calls behave unchanged.
     """
-    out = calculate_economics(df)
+    recalculate = _truthy(config.get("recalculate", False))
+    out = calculate_economics(df, recalculate=recalculate)
     if config.get("compute_stability_score"):
         out = add_stability_score(out)
     return out
+
+
+def _truthy(v: Any) -> bool:
+    """YAML interpolation produces strings — accept both bool and the
+    canonical truthy strings ("true", "1", "yes")."""
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes")
+    return bool(v)

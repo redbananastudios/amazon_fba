@@ -64,6 +64,43 @@ steps:
     config:
       enabled: true
 
+  # Stage 05.5 — keepa_enrich_survivors. The first-pass `resolve` step
+  # reads market data from a static Keepa Browser CSV, typically weeks
+  # old. After `decide` filters to a small set of survivors (non-REJECT
+  # rows), refresh those rows with live Keepa per-ASIN data so the
+  # analyst layer (validate_opportunity / buy_plan_html) sees the same
+  # signals it would in the single_asin chain — current Buy Box,
+  # bsr_slope_*, joiners_90d, buy_box_oos_pct_90, listing_age_days,
+  # buy_box_seller_stats. Token cost is bounded — typically 5-50 ASINs
+  # × ~7 tokens. REJECT rows pass through untouched.
+  - name: keepa_enrich_survivors
+    module: fba_engine.steps.keepa_enrich_survivors
+    config:
+      with_offers: true
+
+  # Stage 05.6 — calculate (re-run on survivors). Recompute economics
+  # against the refreshed Buy Box prices. `recalculate=true` clears
+  # the stale decision on non-REJECT rows so the math runs again.
+  - name: calculate
+    module: fba_engine.steps.calculate
+    config:
+      recalculate: true
+
+  # Stage 05.7 — decide (re-run on survivors). A SHORTLIST against
+  # stale data may flip to REJECT once the live BB price erodes the
+  # margin (this caught Schleich Sea Turtle, Ravensburger Colour
+  # Blast, etc. in the 2026-05-03 abgee verdict-parity calibration).
+  - name: decide
+    module: fba_engine.steps.decide
+    config:
+      force: true
+
+  # Stage 05.8 — candidate_score (re-run). Idempotent: reads the
+  # refreshed market columns, overwrites the score / band /
+  # data_confidence columns from the first pass.
+  - name: candidate_score
+    module: fba_engine.steps.candidate_score
+
   # Stage 07 — validate_opportunity (BUY / SOURCE_ONLY / NEGOTIATE /
   # WATCH / KILL). Final operator-facing verdict on top of the
   # SHORTLIST/REVIEW/REJECT decision. Runs after enrich so it sees
