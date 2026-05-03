@@ -79,6 +79,21 @@ class TestKeepaProductModel:
         )
         assert product2.category_tree == [{"catId": 1, "name": "X"}]
 
+    def test_null_variations_coerced_to_empty_list(self):
+        """Real Keepa /product responses occasionally return ``variations: null``
+        for products with no parent/child cluster (e.g. B01BZ20FE2, the
+        Britains John Deere tractor that surfaced this in the abgee live run).
+        Same coercion pattern as ``categoryTree`` — a null must yield ``[]``,
+        never reject the model."""
+        payload = {"asin": "B01BZ20FE2", "variations": None}
+        product = KeepaProduct.model_validate(payload)
+        assert product.variations == []
+        # Populated variations still pass through.
+        product2 = KeepaProduct.model_validate(
+            {"asin": "B01EXAMPLE", "variations": [{"asin": "B0SIB1", "attributes": []}]}
+        )
+        assert len(product2.variations) == 1
+
     def test_market_snapshot_extracts_canonical_columns(self):
         # Stats current[] is keyed by Keepa's CSV index enum:
         #   0=AMAZON, 3=SALES (rank), 10=NEW_FBA, 11=COUNT_NEW, 18=BUY_BOX

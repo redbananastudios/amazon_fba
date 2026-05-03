@@ -297,7 +297,17 @@ class KeepaProduct(BaseModel):
     # `variation_count` in the snapshot — operator-level signal that a
     # niche-looking parent ASIN may aggregate to real demand once
     # children are summed.
-    variations: list[dict[str, Any]] = Field(default_factory=list)
+    variations: list[dict[str, Any]] = Field(
+        default_factory=list, validate_default=False,
+    )
+
+    @field_validator("variations", mode="before")
+    @classmethod
+    def _coerce_none_variations(cls, v: Any) -> Any:
+        # Keepa returns ``variations=None`` for some products (no
+        # parent/child cluster) — coerce to empty list rather than
+        # rejecting the model.
+        return [] if v is None else v
 
     def market_snapshot(self) -> dict[str, Any]:
         """Extract the canonical engine's market-data columns from `stats`.
