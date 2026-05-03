@@ -216,3 +216,29 @@ opportunity_validation:
   # --- Opportunity score bands (independent of verdict) ---
   strong_score: 80                      # opportunity_score ≥ this → "strong"
   watch_score: 60                       # opportunity_score ≥ this → "viable, watch"
+
+# === Buy plan (08_buy_plan) ===
+# Runs after validate_opportunity, before output. Pure additive: turns a
+# verdict + velocity into an order-quantity / capital / payback view.
+# Reuses min_roi_buy + min_profit_absolute_buy from opportunity_validation
+# above — do not duplicate.
+buy_plan:
+  # --- Sizing — days of cover ---
+  first_order_days: 21                  # cover for a first / untested ASIN
+  reorder_days: 45                      # cover for a known-selling ASIN reorder
+  min_test_qty: 5                       # never order less than this on a BUY
+  max_first_order_capital: 200          # GBP — cap on per-ASIN first-order spend
+
+  # --- Risk dampener (multiplied with predicted_velocity_mid) ---
+  risk_low_confidence: 0.70             # opportunity_confidence == LOW
+  risk_medium_confidence: 0.85          # opportunity_confidence == MEDIUM
+  risk_insufficient_history: 0.85       # INSUFFICIENT_HISTORY flag
+  risk_listing_too_new: 0.85            # LISTING_TOO_NEW flag
+  risk_competition_growing: 0.75        # COMPETITION_GROWING flag
+  risk_bsr_declining: 0.85              # BSR_DECLINING flag
+  risk_price_unstable: 0.85             # PRICE_UNSTABLE flag
+  risk_floor: 0.50                      # never below 50% of mid
+
+  # --- Target buy cost ---
+  stretch_roi_multiplier: 1.5           # stretch ROI = min_roi_buy × this
+                                        # default: 0.30 × 1.5 = 0.45

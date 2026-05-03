@@ -250,6 +250,17 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--order-mode", default="first", dest="order_mode",
+        choices=("first", "reorder"),
+        help=(
+            "08_buy_plan order-sizing mode. `first` (default) uses tighter "
+            "days-of-cover and the per-ASIN capital cap — appropriate for "
+            "untested ASINs. `reorder` uses longer cover and no cap — "
+            "appropriate for ASINs the operator has already sold through "
+            "successfully."
+        ),
+    )
+    parser.add_argument(
         "--timestamp", default=None,
         help=(
             "Run identifier — used in output filenames and as part of "
@@ -282,6 +293,11 @@ def _build_context(args: argparse.Namespace) -> dict[str, str]:
     ctx: dict[str, str] = {
         "timestamp": timestamp,
         "output_dir": output_dir,
+        # 08_buy_plan order_mode toggle. Default "first" — tighter
+        # days-of-cover + capital cap for untested ASINs. Always
+        # seeded so strategy YAMLs that reference {order_mode} resolve
+        # cleanly even when the operator omits --order-mode.
+        "order_mode": args.order_mode,
     }
     if args.csv:
         ctx["csv_path"] = args.csv
@@ -569,14 +585,12 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
         if not _is_missing(v_high):
             print(f"  High (best case):      {int(v_high)}/mo  "
                   f"(~{_fmt(int(v_high) * float(p_unit))})")
-        # Test-order recommendation: ~3 weeks of mid (75% of monthly).
-        # Conservative — lets the operator validate sell-through before
-        # scaling. Skipped when mid isn't computable.
-        if not _is_missing(v_mid) and int(v_mid) > 0:
-            test_units = max(5, int(round(int(v_mid) * 0.75)))
-            print(f"  Test-order rec:        {test_units} units "
-                  f"(~3 weeks of mid)")
         print()
+
+    # 08_buy_plan — full breakdown replaces the legacy "Test-order rec"
+    # one-liner. Per-verdict shape per PRD §8.4. Skipped silently for
+    # WATCH / KILL (existing next_action covers those).
+    _print_buy_plan_block(row, _is_missing, _fmt)
 
     risk = row.get("risk_flags")
     # risk_flags can come back as a list, a stringified list, or empty
@@ -628,6 +642,98 @@ def _print_single_asin_verdict(row: Any, context: dict[str, Any]) -> None:
             print(f"  SKIP - engine rejected based on the data above.")
     print()
     print(f"Audit CSV: {context['output_dir']}")
+
+
+def _print_buy_plan_block(row: Any, is_missing, fmt) -> None:
+    """Print the 08_buy_plan operator-facing block per PRD §8.4.
+
+    Reads the eleven buy_plan columns and renders a per-verdict
+    breakdown. WATCH / KILL emit nothing — `next_action` and the
+    blockers list already cover those.
+
+    The printer is dense already; labels are kept short and aligned
+    with the existing label-padding style (matches the older
+    "Test-order rec:" block this replaces).
+    """
+    verdict = row.get("opportunity_verdict")
+    if verdict is None or is_missing(verdict):
+        return
+    verdict = str(verdict).upper().strip()
+    if verdict in ("WATCH", "KILL"):
+        return
+
+    qty = row.get("order_qty_recommended")
+    cap = row.get("capital_required")
+    p_units = row.get("projected_30d_units")
+    p_rev = row.get("projected_30d_revenue")
+    p_prof = row.get("projected_30d_profit")
+    payback = row.get("payback_days")
+    target = row.get("target_buy_cost_buy")
+    stretch = row.get("target_buy_cost_stretch")
+    gap_gbp = row.get("gap_to_buy_gbp")
+    gap_pct = row.get("gap_to_buy_pct")
+    status = row.get("buy_plan_status")
+    buy_cost = row.get("buy_cost")
+
+    def _ok(v):
+        return v is not None and not is_missing(v)
+
+    if verdict == "BUY" and _ok(qty) and _ok(cap):
+        print("Buy plan (mode: first-order, 21d cover):")
+        print(f"  Order qty:             {int(qty)} units (capital {fmt(cap)})")
+        if _ok(p_units) and _ok(p_rev) and _ok(p_prof):
+            print(
+                f"  Projected 30d:         {int(p_units)} units "
+                f"→ {fmt(p_rev)} revenue / {fmt(p_prof)} profit"
+            )
+        if _ok(payback):
+            print(f"  Payback:               {float(payback):.0f} days")
+        if _ok(target):
+            stretch_part = f" (stretch {fmt(stretch)})" if _ok(stretch) else ""
+            head_part = ""
+            if _ok(buy_cost) and float(buy_cost) > 0 and float(target) > 0:
+                # Headroom = (target - cost) / target. Positive = under
+                # ceiling; negative would mean operator is paying above
+                # (unusual on a BUY but defensive).
+                headroom = (float(target) - float(buy_cost)) / float(target)
+                head_part = (
+                    f" — currently {fmt(buy_cost)}, "
+                    f"headroom {headroom:.0%}"
+                )
+            print(
+                f"  Target buy cost:       {fmt(target)}{stretch_part}"
+                f"{head_part}"
+            )
+        print()
+    elif verdict == "SOURCE_ONLY":
+        print("Source target (mode: supplier outreach):")
+        if _ok(target):
+            stretch_part = f" (stretch {fmt(stretch)})" if _ok(stretch) else ""
+            print(f"  Target buy cost:       ≤ {fmt(target)}{stretch_part}")
+        if _ok(p_rev):
+            print(f"  Projected 30d revenue: {fmt(p_rev)}  (at the target)")
+        if _ok(p_prof):
+            print(f"  Projected 30d profit:  {fmt(p_prof)}  (best case at target)")
+        if status:
+            print(f"  Status:                {status}")
+        print()
+    elif verdict == "NEGOTIATE":
+        print("Negotiation ask:")
+        if _ok(buy_cost) and _ok(target) and _ok(gap_gbp) and _ok(gap_pct):
+            print(
+                f"  Currently:             {fmt(buy_cost)}"
+            )
+            print(
+                f"  Target ceiling:        {fmt(target)}  "
+                f"(needs to come down {fmt(gap_gbp)} / "
+                f"{float(gap_pct):.1%})"
+            )
+        if _ok(p_units) and _ok(p_prof):
+            print(
+                f"  At ceiling:            {int(p_units)} units/mo "
+                f"→ {fmt(p_prof)} 30d profit"
+            )
+        print()
 
 
 if __name__ == "__main__":

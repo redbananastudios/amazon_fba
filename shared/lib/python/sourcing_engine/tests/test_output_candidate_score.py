@@ -83,9 +83,10 @@ class TestExcelColumns:
         assert verdict_idx == decision_idx + 1
         # candidate_band sits after the 6 opportunity columns + the 4
         # velocity columns (predicted_velocity_low / mid / high /
-        # share_source — added in PR I). Pin both positions so the
-        # layout is contractual.
-        assert band_idx == verdict_idx + 10
+        # share_source — added in PR I) + the 11 buy_plan columns
+        # (08_buy_plan). Pin all three positions so the layout is
+        # contractual.
+        assert band_idx == verdict_idx + 21
 
 
 class TestExcelSort:

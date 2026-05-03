@@ -90,6 +90,14 @@ steps:
   - name: validate_opportunity
     module: fba_engine.steps.validate_opportunity
 
+  # Stage 08 — buy_plan: order-list rollup (qty / capital / payback /
+  # target buy cost / negotiation gap). Pure additive — appends 11
+  # columns. order_mode threads from the --order-mode CLI flag.
+  - name: buy_plan
+    module: fba_engine.steps.buy_plan
+    config:
+      order_mode: "{order_mode}"
+
   # Stage 07 — supplier_leads: append Brand-distributor / Product-
   # wholesale / Brand-trade-account search URLs per row. The recipe
   # name passes through as `niche` for output organisation.
