@@ -63,15 +63,34 @@ def test_writes_json_and_html(tmp_path):
     assert soup.find("article", id="asin-B0TEST00001") is not None
 
 
-def test_template_prose_filled_in_when_engine_alone(tmp_path):
+def test_analyst_fallback_populates_card_when_engine_alone(tmp_path):
+    """Engine-alone runs (no Cowork orchestration) should still produce
+    a complete card via the deterministic analyst fallback. v2 design
+    has no markers — analyst block is populated in JSON before render.
+    """
     df = pd.DataFrame([_row("BUY")])
     add_buy_plan_html(
         df, run_dir=tmp_path, timestamp="20260503_120000",
         strategy="supplier_pricelist", supplier="abgee",
     )
     html = (tmp_path / "buyer_report_20260503_120000.html").read_text(encoding="utf-8")
-    assert "<!-- prose:B0TEST00001 -->" not in html
-    assert "prose-text" in html
+    # Buyer's read section is rendered (analyst.narrative present).
+    assert "Buyer&#x27;s read" in html or "Buyer's read" in html
+    assert "buyers-narrative" in html or "buyers-action" in html
+    # Verdict badge rendered.
+    assert "verdict-badge" in html
+    # Dimension breakdown rendered.
+    assert "dimensions" in html
+    assert "Score breakdown" in html
+
+    # JSON also has analyst block populated.
+    import json
+    data = json.loads((tmp_path / "buyer_report_20260503_120000.json").read_text(encoding="utf-8"))
+    a = data["rows"][0]["analyst"]
+    assert a["verdict"] in ("BUY", "NEGOTIATE", "SOURCE", "WAIT", "SKIP")
+    assert isinstance(a["score"], int)
+    assert isinstance(a["dimensions"], list)
+    assert len(a["dimensions"]) == 4
 
 
 def test_empty_df_writes_minimal_artefacts(tmp_path):

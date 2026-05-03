@@ -114,9 +114,13 @@ def test_build_row_payload_buy_identity_block():
     assert out["brand"] == "Casdon"
     assert out["amazon_url"] == "https://www.amazon.co.uk/dp/B0B636ZKZQ"
     assert out["image_url"] == "https://images-na.ssl-images-amazon.com/images/P/B0B636ZKZQ.jpg"
-    assert out["verdict"] == "BUY"
-    assert out["verdict_confidence"] == "HIGH"
-    assert out["opportunity_score"] == 85
+    # Engine's deterministic verdict — kept as a cross-check signal
+    # in v2; the operator-facing verdict comes from the analyst block.
+    assert out["engine_verdict"] == "BUY"
+    assert out["engine_verdict_confidence"] == "HIGH"
+    assert out["engine_opportunity_score"] == 85
+    # Analyst block is initialised to nulls — populated downstream.
+    assert out["analyst"]["verdict"] is None
 
 
 def test_build_row_payload_buy_economics_block():

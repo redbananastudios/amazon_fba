@@ -5,90 +5,123 @@
 <title>Buyer Report — test — 20260503_120000</title>
 <style>
 :root {
-  --buy: #27AE60; --source: #2980B9; --negotiate: #E67E22; --watch: #F1C40F;
+  --buy: #27AE60; --negotiate: #E67E22; --source: #2980B9;
+  --wait: #F1C40F; --skip: #95A5A6;
   --grey: #B0B0B0; --green: #27AE60; --amber: #E67E22; --red: #C0392B;
+  --strong: #27AE60; --ok: #F1C40F; --weak: #C0392B;
 }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1B2A4A; max-width: 1280px; margin: 0 auto; padding: 1rem; }
-.report-header { padding: 1rem; border-bottom: 1px solid #ddd; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1B2A4A; max-width: 1280px; margin: 0 auto; padding: 1rem; background: #FAFBFC; }
+.report-header { padding: 1rem; border-bottom: 1px solid #ddd; background: white; border-radius: 4px; }
 .report-header h1 { margin: 0; }
 .run-meta { color: #666; font-size: 0.9rem; }
 .verdict-counts { margin-top: 0.5rem; }
+.vat-note { color: #999; font-size: 0.8rem; margin-top: 0.3rem; }
 .vc { display: inline-block; padding: 0.2rem 0.6rem; margin-right: 0.4rem; border-radius: 3px; font-size: 0.85rem; color: white; font-weight: bold; }
 .vc-buy { background: var(--buy); }
-.vc-source-only { background: var(--source); }
 .vc-negotiate { background: var(--negotiate); }
-.vc-watch { background: var(--watch); color: #1B2A4A; }
+.vc-source { background: var(--source); }
+.vc-wait { background: var(--wait); color: #1B2A4A; }
+.vc-skip { background: var(--skip); }
 .toc { padding: 1rem; background: #f8f9fa; border-radius: 4px; margin: 1rem 0; }
 .toc h3 { margin-top: 0; }
 .toc ul { margin: 0; padding-left: 1.2rem; font-size: 0.9rem; }
 .empty-notice { padding: 2rem; text-align: center; color: #666; }
 .verdict-section { margin: 2rem 0; }
-.card { border: 1px solid #ddd; border-left: 4px solid #ddd; border-radius: 4px; padding: 1rem; margin: 1rem 0; max-width: 900px; }
+.verdict-section h2 { padding-bottom: 0.3rem; border-bottom: 2px solid #eee; }
+.card { background: white; border: 1px solid #e0e0e0; border-left: 5px solid #ddd; border-radius: 4px; padding: 1.2rem; margin: 1rem 0; max-width: 980px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
 .verdict-buy { border-left-color: var(--buy); }
-.verdict-source-only { border-left-color: var(--source); }
 .verdict-negotiate { border-left-color: var(--negotiate); }
-.verdict-watch { border-left-color: var(--watch); }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.verdict-badge { font-weight: bold; padding: 0.2rem 0.6rem; border-radius: 3px; background: #1B2A4A; color: white; }
+.verdict-source { border-left-color: var(--source); }
+.verdict-wait { border-left-color: var(--wait); }
+.verdict-skip { border-left-color: var(--skip); }
+.card section { padding: 0.6rem 0; border-top: 1px solid #f0f0f0; }
+.card section:first-of-type, .card-header { border-top: none; }
+.card h4 { margin: 0.3rem 0 0.5rem 0; font-size: 0.95rem; color: #34495E; }
+
+/* Card header — image left, identity centre, verdict block right */
+.card-header { display: grid; grid-template-columns: auto 1fr auto; gap: 1rem; align-items: center; padding-bottom: 1rem; border-bottom: 2px solid #f0f0f0; }
+.card-image img { width: 110px; height: auto; max-width: 100%; object-fit: contain; }
+.card-id-block .card-title { margin: 0 0 0.2rem 0; font-size: 1.15rem; }
+.card-id { color: #666; font-size: 0.85rem; }
+.card-verdict-block { text-align: right; }
+.verdict-badge { font-size: 1.5rem; font-weight: bold; padding: 0.4rem 0.9rem; border-radius: 4px; background: #1B2A4A; color: white; display: inline-block; }
 .verdict-buy .verdict-badge { background: var(--buy); }
-.verdict-source-only .verdict-badge { background: var(--source); }
 .verdict-negotiate .verdict-badge { background: var(--negotiate); }
-.verdict-watch .verdict-badge { background: var(--watch); color: #1B2A4A; }
-.card-score { color: #666; font-size: 0.9rem; }
-.card-identity-economics { display: flex; gap: 1rem; margin: 1rem 0; }
-.card-image img { width: 200px; height: auto; max-width: 100%; object-fit: contain; }
-.card-summary { flex: 1; }
-.card-title { margin: 0 0 0.5rem 0; }
-.card-id { color: #666; font-size: 0.9rem; margin-bottom: 0.8rem; }
+.verdict-source .verdict-badge { background: var(--source); }
+.verdict-wait .verdict-badge { background: var(--wait); color: #1B2A4A; }
+.verdict-skip .verdict-badge { background: var(--skip); }
+.verdict-confidence { font-size: 0.8rem; color: #666; margin-top: 0.3rem; }
+.card-score { font-size: 1.1rem; margin-top: 0.4rem; }
+.card-score strong { font-size: 1.3rem; }
+
+/* Dimension breakdown bars */
+.dimensions { width: 100%; border-collapse: collapse; }
+.dimensions td { padding: 0.4rem 0.5rem; vertical-align: middle; font-size: 0.9rem; }
+.dim-name { width: 18%; font-weight: bold; color: #34495E; }
+.dim-score { width: 8%; font-family: ui-monospace, monospace; font-size: 0.95rem; }
+.dim-max { color: #999; font-size: 0.8em; }
+.dim-bar-cell { width: 30%; padding: 0.4rem; }
+.dim-bar { height: 8px; border-radius: 4px; transition: width 0.3s; }
+.dim-bar.dim-strong { background: var(--strong); }
+.dim-bar.dim-ok { background: var(--ok); }
+.dim-bar.dim-weak { background: var(--weak); }
+.dim-rationale { color: #555; font-size: 0.85rem; }
+
+/* Buyer's read — prominent narrative */
+.card-buyers-read { background: #F4F8FB; padding: 0.8rem 1rem !important; border-radius: 4px; margin-top: 0.5rem; }
+.buyers-narrative { margin: 0 0 0.5rem 0; line-height: 1.55; font-size: 0.98rem; }
+.buyers-action { margin: 0; font-size: 0.9rem; color: #34495E; }
+
+/* Direction arrows */
+.dir-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; max-width: 500px; }
+.dir-cell { text-align: center; padding: 0.5rem; background: #f8f9fa; border-radius: 4px; }
+.dir-label { font-size: 0.8rem; color: #666; }
+.dir-arrow { font-size: 2rem; font-weight: bold; line-height: 1; margin-top: 0.2rem; }
+.arrow-up { color: var(--green); }
+.arrow-down { color: var(--red); }
+.arrow-flat { color: #999; }
+.arrow-unknown { color: var(--grey); }
+.dir-story { margin-top: 0.6rem; font-size: 0.9rem; color: #555; font-style: italic; }
+
+/* Economics */
 .economics-grid { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
 .economics-grid td { padding: 0.4rem; vertical-align: top; }
-.econ-label { color: #666; font-size: 0.85rem; width: 25%; }
+.econ-label { color: #666; font-size: 0.85rem; width: 30%; }
 .econ-value { font-weight: bold; }
-.gap-positive { color: var(--red); }
-.card-prose { padding: 0.5rem 0; }
-.card-prose h4 { margin: 0.5rem 0 0.3rem 0; font-size: 1rem; }
-.prose { color: #1B2A4A; line-height: 1.5; }
-.card-scoring { margin: 1rem 0; }
-.card-scoring h4 { margin: 0 0 0.4rem 0; font-size: 1rem; }
-.metrics { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-.metrics td { padding: 0.3rem 0.5rem; vertical-align: middle; }
-.dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+.econ-aside { color: #999; font-weight: normal; font-size: 0.85em; }
+
+/* Supporting metrics */
+.metrics { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.metrics td { padding: 0.25rem 0.5rem; vertical-align: middle; }
+.dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 .dot-green { background: var(--green); }
 .dot-amber { background: var(--amber); }
 .dot-red { background: var(--red); }
 .dot-grey { background: transparent; border: 1.5px solid var(--grey); }
-.metric-label { width: 30%; }
-.metric-value { font-weight: bold; width: 15%; }
-.metric-rationale { color: #666; font-size: 0.85rem; }
-.card-next-action { padding-top: 0.6rem; border-top: 1px solid #eee; font-size: 0.95rem; }
-footer { margin-top: 2rem; color: #999; font-size: 0.85rem; }
+.metric-label { width: 25%; color: #555; }
+.metric-value { font-weight: bold; width: 18%; font-family: ui-monospace, monospace; }
+.metric-rationale { color: #777; font-size: 0.82rem; }
+
+/* Engine cross-check (small-print footer) */
+.engine-note { font-size: 0.85rem; color: #666; margin-top: 0.5rem; }
+.engine-note summary { cursor: pointer; padding: 0.3rem 0; }
+.engine-note dl { margin: 0.4rem 0 0 1rem; }
+.engine-note dt { font-weight: bold; color: #555; }
+.engine-note dd { margin: 0 0 0.4rem 1rem; }
+
+footer { margin-top: 2rem; color: #999; font-size: 0.85rem; text-align: center; }
+
 @media print {
   .toc { display: none; }
-  .card { page-break-inside: avoid; }
+  .card { page-break-inside: avoid; box-shadow: none; }
   body { background: white; }
 }
 </style>
 </head>
 <body>
-<header class="report-header"><h1>Buyer Report</h1><div class="run-meta">test · run 20260503_120000</div><div class="verdict-counts"><span class="vc vc-buy">BUY 1</span> <span class="vc vc-source-only">SOURCE_ONLY 1</span> <span class="vc vc-negotiate">NEGOTIATE 1</span> <span class="vc vc-watch">WATCH 1</span></div></header>
-<nav class="toc"><h3>Contents</h3><div class="toc-section"><a href="#section-buy">BUY (1)</a><ul><li><a href="#asin-B0BUY00001A">BUY product</a></li></ul></div><div class="toc-section"><a href="#section-source-only">SOURCE_ONLY (1)</a><ul><li><a href="#asin-B0SRC00001A">SOURCE product</a></li></ul></div><div class="toc-section"><a href="#section-negotiate">NEGOTIATE (1)</a><ul><li><a href="#asin-B0NEG00001A">NEGOTIATE product</a></li></ul></div><div class="toc-section"><a href="#section-watch">WATCH (1)</a><ul><li><a href="#asin-B0WAT00001A">WATCH product</a></li></ul></div></nav>
+<header class="report-header"><h1>Buyer Report</h1><div class="run-meta">test · run 20260503_120000</div><div class="verdict-counts"><span class="vc vc-buy">BUY 0</span> <span class="vc vc-negotiate">NEGOTIATE 0</span> <span class="vc vc-source">SOURCE 0</span> <span class="vc vc-wait">WAIT 0</span> <span class="vc vc-skip">SKIP 0</span></div><div class="vat-note">All prices inc-VAT</div></header>
+<nav class="toc"><h3>Contents</h3></nav>
 <main>
-<section id="section-buy" class="verdict-section">
-<h2>BUY (1)</h2>
-<article id="asin-B0BUY00001A" class="card verdict-buy"><header class="card-header"><span class="verdict-badge">BUY · HIGH</span><span class="card-score">Score: 85/100</span></header><div class="card-identity-economics"><a class="card-image" href="https://www.amazon.co.uk/dp/B0BUY00001A" target="_blank" rel="noopener"><img src="https://images-na.ssl-images-amazon.com/images/P/B0BUY00001A.jpg" onerror="this.style.display='none'" alt="BUY product" loading="lazy"></a><div class="card-summary"><h3 class="card-title">BUY product</h3><div class="card-id">ASIN <a href="https://www.amazon.co.uk/dp/B0BUY00001A">B0BUY00001A</a> · Brand Acme</div><table class="economics-grid"><tbody><tr><td class="econ-label">Buy cost</td><td class="econ-value">£4.00 (inc)</td><td class="econ-label">Target buy</td><td class="econ-value">£9.50 (inc) (stretch £8.52 (inc))</td></tr><tr><td class="econ-label">Order qty</td><td class="econ-value">13</td><td class="econ-label">Capital</td><td class="econ-value">£52.00 (inc)</td></tr><tr><td class="econ-label">Payback</td><td class="econ-value">22 days</td><td class="econ-label">30d profit</td><td class="econ-value">18 units · £150.30 (inc)</td></tr></tbody></table></div></div><section class="card-prose"><h4>Why we should buy</h4><div class="prose" data-asin="B0BUY00001A"><p class="prose-text">Order 13 units at £52.00 capital. Sell-through in ~22 days. Target buy cost ≤ £9.50. No risk flags.</p></div></section><section class="card-scoring"><h4>Scoring</h4><table class="metrics"><tbody><tr><td><span class="dot dot-green"></span></td><td class="metric-label">FBA Sellers</td><td class="metric-value">4</td><td class="metric-rationale">≤ 12 ceiling at this volume</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Amazon on Listing</td><td class="metric-value">No</td><td class="metric-rationale">Buy Box rotation safe</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Amazon BB Share 90d</td><td class="metric-value">10%</td><td class="metric-rationale">below 30% buy threshold</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Price Consistency</td><td class="metric-value">0.10</td><td class="metric-rationale">stable (&lt; 0.20 cap)</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Listing Sales/mo</td><td class="metric-value">250</td><td class="metric-rationale">strong listing demand (≥ 100/mo target)</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Your Share/mo</td><td class="metric-value">130 /mo</td><td class="metric-rationale">~58% of 225 non-Amazon sales — strong slice</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Sales Activity (30d)</td><td class="metric-value">200 sales</td><td class="metric-rationale">frequent — ~300/mo implied (BSR drops × 1.5)</td></tr></tbody></table></section><footer class="card-next-action"><strong>Next action:</strong> place test order</footer></article>
-</section>
-<section id="section-source-only" class="verdict-section">
-<h2>SOURCE_ONLY (1)</h2>
-<article id="asin-B0SRC00001A" class="card verdict-source-only"><header class="card-header"><span class="verdict-badge">SOURCE_ONLY · HIGH</span><span class="card-score">Score: 80/100</span></header><div class="card-identity-economics"><a class="card-image" href="https://www.amazon.co.uk/dp/B0SRC00001A" target="_blank" rel="noopener"><img src="https://images-na.ssl-images-amazon.com/images/P/B0SRC00001A.jpg" onerror="this.style.display='none'" alt="SOURCE product" loading="lazy"></a><div class="card-summary"><h3 class="card-title">SOURCE product</h3><div class="card-id">ASIN <a href="https://www.amazon.co.uk/dp/B0SRC00001A">B0SRC00001A</a> · Brand Acme</div><table class="economics-grid"><tbody><tr><td class="econ-label">Buy cost</td><td class="econ-value">— (no supplier yet)</td><td class="econ-label">Target buy</td><td class="econ-value">≤ £4.85 (inc) (stretch £4.10 (inc))</td></tr><tr><td class="econ-label">Projected 30d revenue</td><td class="econ-value">42 units · £710.00 (inc)</td><td class="econ-label">30d profit at target</td><td class="econ-value">£136.00 (inc)</td></tr></tbody></table></div></div><section class="card-prose"><h4>Why source this</h4><div class="prose" data-asin="B0SRC00001A"><p class="prose-text">Demand looks strong but no supplier cost is on file. Target supplier outreach at ≤ £4.85/unit (stretch £4.10). At target cost, this projects ~£710/mo revenue.</p></div></section><section class="card-scoring"><h4>Scoring</h4><table class="metrics"><tbody><tr><td><span class="dot dot-green"></span></td><td class="metric-label">FBA Sellers</td><td class="metric-value">4</td><td class="metric-rationale">≤ 12 ceiling at this volume</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Amazon on Listing</td><td class="metric-value">No</td><td class="metric-rationale">Buy Box rotation safe</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Amazon BB Share 90d</td><td class="metric-value">10%</td><td class="metric-rationale">below 30% buy threshold</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Price Consistency</td><td class="metric-value">0.10</td><td class="metric-rationale">stable (&lt; 0.20 cap)</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Listing Sales/mo</td><td class="metric-value">320</td><td class="metric-rationale">strong listing demand (≥ 100/mo target)</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Your Share/mo</td><td class="metric-value">165 /mo</td><td class="metric-rationale">~61% of 270 non-Amazon sales — strong slice</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Sales Activity (30d)</td><td class="metric-value">200 sales</td><td class="metric-rationale">frequent — ~300/mo implied (BSR drops × 1.5)</td></tr></tbody></table></section><footer class="card-next-action"><strong>Next action:</strong> find supplier</footer></article>
-</section>
-<section id="section-negotiate" class="verdict-section">
-<h2>NEGOTIATE (1)</h2>
-<article id="asin-B0NEG00001A" class="card verdict-negotiate"><header class="card-header"><span class="verdict-badge">NEGOTIATE · MEDIUM</span><span class="card-score">Score: 70/100</span></header><div class="card-identity-economics"><a class="card-image" href="https://www.amazon.co.uk/dp/B0NEG00001A" target="_blank" rel="noopener"><img src="https://images-na.ssl-images-amazon.com/images/P/B0NEG00001A.jpg" onerror="this.style.display='none'" alt="NEGOTIATE product" loading="lazy"></a><div class="card-summary"><h3 class="card-title">NEGOTIATE product</h3><div class="card-id">ASIN <a href="https://www.amazon.co.uk/dp/B0NEG00001A">B0NEG00001A</a> · Brand Acme</div><table class="economics-grid"><tbody><tr><td class="econ-label">Currently</td><td class="econ-value">£5.00 (inc)</td><td class="econ-label">Target ceiling</td><td class="econ-value">£4.38 (inc) (stretch £3.50 (inc))</td></tr><tr><td class="econ-label">Gap to BUY</td><td class="econ-value gap-positive">£0.62 (inc) (12.4%)</td><td class="econ-label">30d profit (current)</td><td class="econ-value">18 units · £42.30 (inc)</td></tr></tbody></table></div></div><section class="card-prose"><h4>Why negotiate</h4><div class="prose" data-asin="B0NEG00001A"><p class="prose-text">Currently £5.00; needs to come down to £4.38 to clear the BUY ceiling. Gap: £0.62 (12.4%). Worth a supplier negotiation.</p></div></section><section class="card-scoring"><h4>Scoring</h4><table class="metrics"><tbody><tr><td><span class="dot dot-green"></span></td><td class="metric-label">FBA Sellers</td><td class="metric-value">5</td><td class="metric-rationale">≤ 8 ceiling at this volume</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Amazon on Listing</td><td class="metric-value">No</td><td class="metric-rationale">Buy Box rotation safe</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Amazon BB Share 90d</td><td class="metric-value">20%</td><td class="metric-rationale">below 30% buy threshold</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Price Consistency</td><td class="metric-value">0.15</td><td class="metric-rationale">stable (&lt; 0.20 cap)</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Listing Sales/mo</td><td class="metric-value">180</td><td class="metric-rationale">strong listing demand (≥ 100/mo target)</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Your Share/mo</td><td class="metric-value">70 /mo</td><td class="metric-rationale">~65% of 108 non-Amazon sales — strong slice</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Sales Activity (30d)</td><td class="metric-value">90 sales</td><td class="metric-rationale">frequent — ~135/mo implied (BSR drops × 1.5)</td></tr></tbody></table></section><footer class="card-next-action"><strong>Next action:</strong> negotiate down</footer></article>
-</section>
-<section id="section-watch" class="verdict-section">
-<h2>WATCH (1)</h2>
-<article id="asin-B0WAT00001A" class="card verdict-watch"><header class="card-header"><span class="verdict-badge">WATCH · LOW</span><span class="card-score">Score: 60/100</span></header><div class="card-identity-economics"><a class="card-image" href="https://www.amazon.co.uk/dp/B0WAT00001A" target="_blank" rel="noopener"><img src="https://images-na.ssl-images-amazon.com/images/P/B0WAT00001A.jpg" onerror="this.style.display='none'" alt="WATCH product" loading="lazy"></a><div class="card-summary"><h3 class="card-title">WATCH product</h3><div class="card-id">ASIN <a href="https://www.amazon.co.uk/dp/B0WAT00001A">B0WAT00001A</a> · Brand Acme</div><table class="economics-grid"><tbody><tr><td class="econ-label">Buy cost</td><td class="econ-value">£4.00 (inc)</td><td class="econ-label">Target buy</td><td class="econ-value">£6.85 (inc) (stretch £5.20 (inc))</td></tr><tr><td class="econ-label">Projected 30d revenue</td><td class="econ-value">18 units · £303.30 (inc)</td><td class="econ-label">30d profit</td><td class="econ-value">£150.30 (inc)</td></tr></tbody></table></div></div><section class="card-prose"><h4>Why watch</h4><div class="prose" data-asin="B0WAT00001A"><p class="prose-text">Not BUY-grade today; worth monitoring. Risk flags: INSUFFICIENT_HISTORY. Target ceiling £6.85 if economics improve.</p></div></section><section class="card-scoring"><h4>Scoring</h4><table class="metrics"><tbody><tr><td><span class="dot dot-amber"></span></td><td class="metric-label">FBA Sellers</td><td class="metric-value">4</td><td class="metric-rationale">over 3 ceiling but within 50%</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Amazon on Listing</td><td class="metric-value">No</td><td class="metric-rationale">Buy Box rotation safe</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Amazon BB Share 90d</td><td class="metric-value">10%</td><td class="metric-rationale">below 30% buy threshold</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Price Consistency</td><td class="metric-value">0.10</td><td class="metric-rationale">stable (&lt; 0.20 cap)</td></tr><tr><td><span class="dot dot-amber"></span></td><td class="metric-label">Listing Sales/mo</td><td class="metric-value">70</td><td class="metric-rationale">moderate listing demand (under 100/mo target)</td></tr><tr><td><span class="dot dot-green"></span></td><td class="metric-label">Your Share/mo</td><td class="metric-value">18 /mo</td><td class="metric-rationale">~53% of 33 non-Amazon sales — strong slice</td></tr><tr><td><span class="dot dot-amber"></span></td><td class="metric-label">Sales Activity (30d)</td><td class="metric-value">25 sales</td><td class="metric-rationale">moderate — ~37/mo implied (BSR drops × 1.5)</td></tr></tbody></table></section><footer class="card-next-action"><strong>Next action:</strong> monitor</footer></article>
-</section>
 </main>
 <footer><div>Generated by 09_buy_plan_html · 2026-05-03T12:00:00Z</div></footer>
 </body></html>

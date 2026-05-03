@@ -1,4 +1,4 @@
-"""Tests for renderer.py — HTML skeleton emission."""
+"""Tests for renderer.py — HTML structure emission (v2 design)."""
 from __future__ import annotations
 
 import pytest
@@ -7,7 +7,13 @@ from bs4 import BeautifulSoup
 from sourcing_engine.buy_plan_html.renderer import render_html
 
 
-def _row_payload(asin: str, verdict: str, **overrides) -> dict:
+def _row_payload(asin: str, analyst_verdict: str, **overrides) -> dict:
+    """Build a row payload with the analyst block populated.
+
+    Mirrors the shape `payload.build_row_payload` produces + the
+    `analyst.fallback_analyse` output. Tests inject specific
+    values into the analyst block by overriding `analyst`.
+    """
     base = {
         "asin": asin,
         "title": f"Title for {asin}",
@@ -16,10 +22,25 @@ def _row_payload(asin: str, verdict: str, **overrides) -> dict:
         "supplier_sku": "SKU-X",
         "amazon_url": f"https://www.amazon.co.uk/dp/{asin}",
         "image_url": f"https://images-na.ssl-images-amazon.com/images/P/{asin}.jpg",
-        "verdict": verdict,
-        "verdict_confidence": "HIGH",
-        "opportunity_score": 80,
-        "next_action": "test action",
+        "engine_verdict": "BUY",
+        "engine_verdict_confidence": "HIGH",
+        "engine_opportunity_score": 80,
+        "next_action": "test engine next-action",
+        "analyst": {
+            "verdict": analyst_verdict,
+            "verdict_confidence": "HIGH",
+            "score": 80,
+            "dimensions": [
+                {"name": "Profit", "score": 22, "max": 25, "rationale": "healthy ROI"},
+                {"name": "Competition", "score": 20, "max": 25, "rationale": "few sellers"},
+                {"name": "Stability", "score": 18, "max": 25, "rationale": "stable"},
+                {"name": "Operational", "score": 20, "max": 25, "rationale": "ungated"},
+            ],
+            "trend_arrows": {"sales": "↗", "sellers": "→", "price": "→"},
+            "trend_story": "Demand rising, supply steady — entrance window.",
+            "narrative": "Strong economics; place a test order.",
+            "action_prompt": "Place a test order at the size suggested.",
+        },
         "economics": {
             "buy_cost_gbp": 4.00, "market_price_gbp": 16.85,
             "profit_per_unit_gbp": 8.35, "roi_conservative_pct": 1.114,
@@ -32,10 +53,18 @@ def _row_payload(asin: str, verdict: str, **overrides) -> dict:
             "gap_to_buy_gbp": None, "gap_to_buy_pct": None,
             "buy_plan_status": "OK",
         },
+        "trends": {
+            "bsr_slope_30d": -0.005, "bsr_slope_90d": -0.005,
+            "bsr_slope_365d": 0.0, "joiners_90d": 0,
+            "fba_count_90d_start": 4, "bb_drop_pct_90": 5.0,
+            "buy_box_avg_30d": 16.85, "buy_box_avg_90d": 16.85,
+            "buy_box_min_365d": 14.0, "buy_box_oos_pct_90": 0.05,
+            "listing_age_days": 800,
+        },
         "metrics": [
             {"key": "fba_seller_count", "label": "FBA Sellers",
              "value_display": "4", "verdict": "green", "rationale": "≤ 5"},
-            {"key": "sales_estimate", "label": "Volume",
+            {"key": "sales_estimate", "label": "Listing Sales/mo",
              "value_display": "250", "verdict": "green", "rationale": "above target"},
         ],
         "engine_reasons": [], "engine_blockers": [], "risk_flags": [],
@@ -65,122 +94,118 @@ class TestRenderHtmlStructure:
         assert soup.find("article", class_="card") is None
         assert "no actionable rows" in out.lower()
 
-    def test_buy_row_produces_card_with_marker(self):
-        p = _payload(
-            rows=[_row_payload("B0BUY00001", "BUY")],
-            verdict_counts={"BUY": 1, "SOURCE_ONLY": 0, "NEGOTIATE": 0, "WATCH": 0, "KILL": 0},
-        )
+    def test_buy_row_produces_card(self):
+        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
         out = render_html(p)
         soup = BeautifulSoup(out, "html.parser")
         card = soup.find("article", id="asin-B0BUY00001")
         assert card is not None
         assert "verdict-buy" in card.get("class", [])
+        # Image rail wraps in anchor pointing to amazon_url.
         a = card.find("a", class_="card-image")
         assert a is not None
         assert a.get("href") == "https://www.amazon.co.uk/dp/B0BUY00001"
-        img = a.find("img")
-        assert img is not None
-        assert "B0BUY00001.jpg" in img.get("src", "")
-        assert "<!-- prose:B0BUY00001 -->" in out
 
     def test_section_heading_with_count(self):
-        p = _payload(
-            rows=[_row_payload("B0001AAAAA", "BUY"), _row_payload("B0002BBBBB", "BUY")],
-            verdict_counts={"BUY": 2, "SOURCE_ONLY": 0, "NEGOTIATE": 0, "WATCH": 0, "KILL": 0},
-        )
+        p = _payload(rows=[
+            _row_payload("B0001AAAAA", "BUY"),
+            _row_payload("B0002BBBBB", "BUY"),
+        ])
         out = render_html(p)
-        # h2 says "BUY (2)".
         assert "BUY (2)" in out
 
     def test_per_verdict_section_ordering(self):
         rows = [
-            _row_payload("B0WATCH001", "WATCH"),
-            _row_payload("B0SRC0001A", "SOURCE_ONLY"),
-            _row_payload("B0NEG0001A", "NEGOTIATE"),
+            _row_payload("B0SKIP00001", "SKIP"),
+            _row_payload("B0WAIT00001", "WAIT"),
+            _row_payload("B0SRC0001AA", "SOURCE"),
+            _row_payload("B0NEG0001AA", "NEGOTIATE"),
             _row_payload("B0BUY00001", "BUY"),
         ]
-        p = _payload(
-            rows=rows,
-            verdict_counts={"BUY": 1, "SOURCE_ONLY": 1, "NEGOTIATE": 1, "WATCH": 1, "KILL": 0},
-        )
-        out = render_html(p)
+        out = render_html(_payload(rows=rows))
+        # BUY → NEGOTIATE → SOURCE → WAIT → SKIP
         i_buy = out.find('id="section-buy"')
-        i_src = out.find('id="section-source-only"')
         i_neg = out.find('id="section-negotiate"')
-        i_watch = out.find('id="section-watch"')
-        assert -1 < i_buy < i_src < i_neg < i_watch
+        i_src = out.find('id="section-source"')
+        i_wait = out.find('id="section-wait"')
+        i_skip = out.find('id="section-skip"')
+        assert -1 < i_buy < i_neg < i_src < i_wait < i_skip
 
-    def test_metrics_table_has_traffic_light_dots(self):
-        p = _payload(
-            rows=[_row_payload("B0BUY00001", "BUY")],
-            verdict_counts={"BUY": 1, "SOURCE_ONLY": 0, "NEGOTIATE": 0, "WATCH": 0, "KILL": 0},
-        )
+    def test_card_has_verdict_badge(self):
+        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
         out = render_html(p)
         soup = BeautifulSoup(out, "html.parser")
-        dots = soup.select(".card-scoring .dot")
-        assert len(dots) == 2
-        for span in dots:
-            assert "dot-green" in span.get("class", [])
+        card = soup.find("article", id="asin-B0BUY00001")
+        badge = card.find("div", class_="verdict-badge")
+        assert badge is not None
+        assert "BUY" in badge.get_text()
 
-    def test_buy_card_economics_grid_has_order_qty(self):
-        p = _payload(
-            rows=[_row_payload("B0BUY00001", "BUY")],
-            verdict_counts={"BUY": 1, "SOURCE_ONLY": 0, "NEGOTIATE": 0, "WATCH": 0, "KILL": 0},
-        )
+    def test_card_has_dimension_breakdown(self):
+        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
         out = render_html(p)
-        assert "Order qty" in out
-        assert "13" in out
-        assert "£52.00" in out
+        soup = BeautifulSoup(out, "html.parser")
+        # 4 dimension rows
+        dim_rows = soup.select(".dimensions tbody tr")
+        assert len(dim_rows) == 4
+        # Profit dimension shows score
+        profit_row = next(r for r in dim_rows if "Profit" in r.get_text())
+        assert "22" in profit_row.get_text()
 
-    def test_source_only_economics_grid_has_no_supplier_label(self):
-        rows = [_row_payload(
-            "B0SRC0001A", "SOURCE_ONLY",
-            economics={
-                "buy_cost_gbp": None, "market_price_gbp": 16.85,
-                "profit_per_unit_gbp": None, "roi_conservative_pct": None,
-                "target_buy_cost_gbp": 4.85, "target_buy_cost_stretch_gbp": 4.10,
-            },
-            buy_plan={
-                "order_qty_recommended": None, "capital_required_gbp": None,
-                "projected_30d_units": 42, "projected_30d_revenue_gbp": 710.00,
-                "projected_30d_profit_gbp": 136.00, "payback_days": None,
-                "gap_to_buy_gbp": None, "gap_to_buy_pct": None,
-                "buy_plan_status": "NO_BUY_COST",
-            },
-        )]
-        p = _payload(
-            rows=rows,
-            verdict_counts={"BUY": 0, "SOURCE_ONLY": 1, "NEGOTIATE": 0, "WATCH": 0, "KILL": 0},
-        )
+    def test_card_has_buyers_read_section(self):
+        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
         out = render_html(p)
-        assert "no supplier yet" in out
-        assert "£4.85" in out
+        soup = BeautifulSoup(out, "html.parser")
+        section = soup.find("section", class_="card-buyers-read")
+        assert section is not None
+        narrative = section.find("p", class_="buyers-narrative")
+        assert narrative is not None
+        assert "Strong economics" in narrative.get_text()
 
-    def test_negotiate_economics_grid_has_gap(self):
-        rows = [_row_payload(
-            "B0NEG0001A", "NEGOTIATE",
-            economics={
-                "buy_cost_gbp": 5.00, "market_price_gbp": 16.85,
-                "profit_per_unit_gbp": 1.50, "roi_conservative_pct": 0.20,
-                "target_buy_cost_gbp": 4.38, "target_buy_cost_stretch_gbp": 3.50,
-            },
-            buy_plan={
-                "order_qty_recommended": None, "capital_required_gbp": None,
-                "projected_30d_units": 18, "projected_30d_revenue_gbp": 303.30,
-                "projected_30d_profit_gbp": 42.30, "payback_days": None,
-                "gap_to_buy_gbp": 0.62, "gap_to_buy_pct": 0.124,
-                "buy_plan_status": "OK",
-            },
-        )]
-        p = _payload(
-            rows=rows,
-            verdict_counts={"BUY": 0, "SOURCE_ONLY": 0, "NEGOTIATE": 1, "WATCH": 0, "KILL": 0},
-        )
+    def test_card_has_direction_section_with_arrows(self):
+        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
         out = render_html(p)
-        assert "£0.62" in out
-        assert "12.4%" in out
+        soup = BeautifulSoup(out, "html.parser")
+        section = soup.find("section", class_="card-direction")
+        assert section is not None
+        arrows = section.select(".dir-arrow")
+        # 3 arrows: sales / sellers / price
+        assert len(arrows) == 3
+
+    def test_economics_grid_uses_aim_for_dont_exceed_labels(self):
+        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
+        out = render_html(p)
+        # Fixed labels per Q2 brainstorm
+        assert "Aim for" in out
+        assert "Don&#x27;t exceed" in out or "Don't exceed" in out
+        assert "stretch" not in out.lower()  # old confusing term gone
+
+    def test_economics_shows_units_and_prices_inc_vat(self):
+        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
+        out = render_html(p)
+        # Order qty rendered with capital
+        assert "13 units" in out
+        # All £ shown with (inc) per VAT clarification
+        assert "(inc)" in out
+
+    def test_supporting_metrics_table_renders(self):
+        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
+        out = render_html(p)
+        soup = BeautifulSoup(out, "html.parser")
+        section = soup.find("section", class_="card-supporting")
+        assert section is not None
+        dots = section.select(".dot")
+        assert len(dots) == 2  # 2 metrics in fixture
+
+    def test_engine_cross_check_collapsible(self):
+        p = _payload(rows=[_row_payload("B0BUY00001", "BUY")])
+        out = render_html(p)
+        soup = BeautifulSoup(out, "html.parser")
+        details = soup.find("details", class_="engine-note")
+        assert details is not None
+        assert "Engine cross-check" in details.find("summary").get_text()
 
     def test_within_verdict_buy_sorted_by_projected_30d_profit_desc(self):
+        # BUY tier sorts by projected_30d_profit desc.
         rows = [
             _row_payload("B0LOW00001", "BUY", buy_plan={
                 **_row_payload("X", "BUY")["buy_plan"],
@@ -195,11 +220,7 @@ class TestRenderHtmlStructure:
                 "projected_30d_profit_gbp": 80.0,
             }),
         ]
-        p = _payload(
-            rows=rows,
-            verdict_counts={"BUY": 3, "SOURCE_ONLY": 0, "NEGOTIATE": 0, "WATCH": 0, "KILL": 0},
-        )
-        out = render_html(p)
+        out = render_html(_payload(rows=rows))
         i_high = out.find('id="asin-B0HIGH0001"')
         i_mid = out.find('id="asin-B0MID00001"')
         i_low = out.find('id="asin-B0LOW00001"')
@@ -207,32 +228,19 @@ class TestRenderHtmlStructure:
         assert i_high < i_mid < i_low
 
     def test_toc_omitted_for_small_runs(self):
-        rows = [_row_payload("B0SMALL001", "BUY")]
-        p = _payload(
-            rows=rows,
-            verdict_counts={"BUY": 1, "SOURCE_ONLY": 0, "NEGOTIATE": 0, "WATCH": 0, "KILL": 0},
-        )
+        p = _payload(rows=[_row_payload("B0SMALL001", "BUY")])
         out = render_html(p)
         soup = BeautifulSoup(out, "html.parser")
         assert soup.find("nav", class_="toc") is None
 
     def test_toc_present_for_runs_above_threshold(self):
         rows = [_row_payload(f"B000000{i:03d}", "BUY") for i in range(4)]
-        p = _payload(
-            rows=rows,
-            verdict_counts={"BUY": 4, "SOURCE_ONLY": 0, "NEGOTIATE": 0, "WATCH": 0, "KILL": 0},
-        )
-        out = render_html(p)
+        out = render_html(_payload(rows=rows))
         soup = BeautifulSoup(out, "html.parser")
         assert soup.find("nav", class_="toc") is not None
 
     def test_supplier_null_falls_back_in_title(self):
-        p = _payload(rows=[], supplier=None, strategy="keepa_finder")
-        out = render_html(p)
-        assert "keepa_finder" in out
-        # Title contains strategy not the literal "None" string.
-        # (Allow "None" to not appear in user-visible places.)
-        # Specifically the title element:
+        out = render_html(_payload(rows=[], supplier=None, strategy="keepa_finder"))
         soup = BeautifulSoup(out, "html.parser")
         title_text = soup.find("title").string
         assert "keepa_finder" in title_text
@@ -240,11 +248,7 @@ class TestRenderHtmlStructure:
 
     def test_html_escaped_in_title(self):
         rows = [_row_payload("B0XSS00001A", "BUY", title="<script>alert(1)</script>")]
-        p = _payload(
-            rows=rows,
-            verdict_counts={"BUY": 1, "SOURCE_ONLY": 0, "NEGOTIATE": 0, "WATCH": 0, "KILL": 0},
-        )
-        out = render_html(p)
+        out = render_html(_payload(rows=rows))
         # The literal <script> tag must NOT appear; should be escaped.
-        assert "<script>" not in out
+        assert "<script>alert" not in out
         assert "&lt;script&gt;" in out
