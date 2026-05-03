@@ -15,15 +15,19 @@ from sourcing_engine.buy_plan_html.analyst import (
     VERDICT_SOURCE,
     VERDICT_WAIT,
     VERDICT_SKIP,
-    _direction_arrow,
-    _seller_arrow,
-    _price_arrow,
-    _build_trend_story,
-    _score_profit,
-    _score_competition,
-    _score_stability,
-    _score_operational,
     fallback_analyse,
+)
+from sourcing_engine.buy_plan_html.scoring import (
+    _score_competition,
+    _score_operational,
+    _score_profit,
+    _score_stability,
+)
+from sourcing_engine.buy_plan_html.trend import (
+    _build_trend_story,
+    _direction_arrow,
+    _price_arrow,
+    _seller_arrow,
 )
 
 
