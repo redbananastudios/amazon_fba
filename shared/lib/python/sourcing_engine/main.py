@@ -160,7 +160,22 @@ def run_pipeline(
     # Stage 03 — enrich (preflight). Order: legacy run_pipeline performs
     # preflight AFTER decide; preserved here. Strategies that want a
     # different order can compose YAML steps differently.
-    enriched_df = enrich_with_preflight(decided_df, enabled=preflight_enabled)
+    # `survivors_only=True` skips the MCP call for REJECT rows — a
+    # 5720-row ABGEE run has 5700 REJECTs that don't need SP-API data
+    # (saves ~10 minutes). REJECT rows pass through with preflight
+    # columns seeded as None.
+    enriched_df = enrich_with_preflight(
+        decided_df, enabled=preflight_enabled, survivors_only=True,
+    )
+
+    # Stage 05.45 — merge_live_pricing. SP-API preflight already fetched
+    # live Buy Box price + offer counts via getItemOffersBatch; this
+    # step maps the live_* columns into the canonical columns the
+    # engine reads (buy_box_price, fba_seller_count, amazon_status).
+    # Critical for niche listings where Keepa never tracked BB —
+    # SP-API has it in real-time. Live wins over stale.
+    from fba_engine.steps.merge_live_pricing import merge_live_pricing
+    merged_df = merge_live_pricing(enriched_df)
 
     # Stage 05.5 — keepa_enrich_survivors. Refresh per-ASIN market data
     # via live Keepa API for non-REJECT rows so the analyst layer sees
@@ -173,7 +188,7 @@ def run_pipeline(
     # Best-effort: if KEEPA_API_KEY is not set or the call fails,
     # fall back to the stale-but-usable static data and log a warning.
     # This keeps offline / no-creds environments unblocked.
-    refreshed_df = refresh_survivors(enriched_df, with_offers=False)
+    refreshed_df = refresh_survivors(merged_df, with_offers=False)
 
     # Stage 05.6 — calculate (re-run on survivors). Recompute economics
     # against the refreshed Buy Box prices.

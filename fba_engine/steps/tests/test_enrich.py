@@ -64,6 +64,97 @@ class TestEnrichWithPreflight:
         assert out.iloc[0]["restriction_status"] == "approved"
 
 
+class TestSurvivorsOnly:
+    """`survivors_only=True` skips the MCP call for REJECT rows. A
+    typical 5720-row supplier run has ~5700 REJECTs we don't need
+    SP-API data for; without this filter the run takes 10+ minutes
+    on the SP-API side."""
+
+    def test_only_non_reject_rows_passed_to_annotator(self):
+        df = pd.DataFrame([
+            _row(asin="B0KILL00001", decision="REJECT"),
+            _row(asin="B0LIVE00001", decision="SHORTLIST"),
+            _row(asin="B0KILL00002", decision="REJECT"),
+            _row(asin="B0LIVE00002", decision="REVIEW"),
+        ])
+
+        seen_asins = []
+
+        def fake_annotate(rows, **kwargs):
+            for r in rows:
+                seen_asins.append(r["asin"])
+                r["restriction_status"] = "approved"
+            return rows
+
+        with patch(
+            "fba_engine.steps.enrich.annotate_with_preflight",
+            side_effect=fake_annotate,
+        ):
+            out = enrich_with_preflight(df, enabled=True, survivors_only=True)
+        # MCP saw only the survivors.
+        assert set(seen_asins) == {"B0LIVE00001", "B0LIVE00002"}
+        # All 4 rows still in output, in original order.
+        assert list(out["asin"]) == [
+            "B0KILL00001", "B0LIVE00001", "B0KILL00002", "B0LIVE00002",
+        ]
+        # Survivors got the preflight column populated.
+        assert out[out["asin"] == "B0LIVE00001"].iloc[0]["restriction_status"] == "approved"
+        # REJECT rows have None for the preflight column (seeded by union).
+        reject_status = out[out["asin"] == "B0KILL00001"].iloc[0]["restriction_status"]
+        assert reject_status is None or pd.isna(reject_status)
+
+    def test_no_survivors_returns_input_unchanged(self):
+        df = pd.DataFrame([
+            _row(asin="B0KILL00001", decision="REJECT"),
+            _row(asin="B0KILL00002", decision="REJECT"),
+        ])
+        with patch(
+            "fba_engine.steps.enrich.annotate_with_preflight"
+        ) as m:
+            out = enrich_with_preflight(df, enabled=True, survivors_only=True)
+        m.assert_not_called()
+        assert len(out) == 2
+
+    def test_no_decision_column_falls_back_to_full_pass(self):
+        # A chain that hasn't run `decide` yet — survivors_only is a
+        # no-op fallback rather than a hard error, so older chains
+        # adding the flag accidentally don't break.
+        df = pd.DataFrame([_row(asin="B0NODECIDE", decision=None)])
+        df = df.drop(columns=["decision"])
+
+        def fake_annotate(rows, **kwargs):
+            for r in rows:
+                r["restriction_status"] = "approved"
+            return rows
+
+        with patch(
+            "fba_engine.steps.enrich.annotate_with_preflight",
+            side_effect=fake_annotate,
+        ) as m:
+            out = enrich_with_preflight(df, enabled=True, survivors_only=True)
+        m.assert_called_once()
+        assert "restriction_status" in out.columns
+
+    def test_run_step_truthy_string_survivors_only(self):
+        df = pd.DataFrame([
+            _row(asin="B0KILL00001", decision="REJECT"),
+            _row(asin="B0LIVE00001", decision="SHORTLIST"),
+        ])
+        seen = []
+
+        def fake_annotate(rows, **kwargs):
+            for r in rows:
+                seen.append(r["asin"])
+            return rows
+
+        with patch(
+            "fba_engine.steps.enrich.annotate_with_preflight",
+            side_effect=fake_annotate,
+        ):
+            run_step(df, {"survivors_only": "true"})
+        assert seen == ["B0LIVE00001"]
+
+
 class TestRunStep:
     def test_run_step_default_enabled_true(self):
         # Default to enabled=True (matches legacy behaviour). MCP failure
