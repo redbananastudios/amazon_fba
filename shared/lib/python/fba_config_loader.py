@@ -196,6 +196,19 @@ class OpportunityValidation:
 
 
 @dataclass(frozen=True)
+class BuyPlanHtml:
+    """Buyer-report writer thresholds (09_buy_plan_html).
+
+    Loaded from ``decision_thresholds.yaml::buy_plan_html``. Drives
+    the JSON+HTML emission. Traffic-light thresholds are derived from
+    `OpportunityValidation` and `BuyPlan` blocks (no duplicate knobs
+    here) — see PRD §4.3.
+    """
+
+    enabled: bool
+
+
+@dataclass(frozen=True)
 class BuyPlan:
     """Buy-plan thresholds (08_buy_plan).
 
@@ -264,6 +277,7 @@ def _load_all(
     DataSignals,
     OpportunityValidation,
     BuyPlan,
+    BuyPlanHtml,
 ]:
     """Internal cached loader keyed on resolved path."""
     config_dir = _find_config_dir(Path(config_dir_str) if config_dir_str else None)
@@ -407,11 +421,18 @@ def _load_all(
         ),
     )
 
+    # buy_plan_html block (09_buy_plan_html). Permissive defaults so
+    # existing YAML files without the block still load.
+    bph_data = thresh_data.get("buy_plan_html") or {}
+    buy_plan_html = BuyPlanHtml(
+        enabled=bool(bph_data.get("enabled", True)),
+    )
+
     _validate(business, thresh)
     _validate_data_signals(data_signals)
     _validate_opportunity_validation(opportunity)
     _validate_buy_plan(buy_plan)
-    return business, thresh, data_signals, opportunity, buy_plan
+    return business, thresh, data_signals, opportunity, buy_plan, buy_plan_html
 
 
 def _validate(business: BusinessRules, thresh: DecisionThresholds) -> None:
@@ -494,6 +515,16 @@ def get_buy_plan(config_dir: Path | None = None) -> BuyPlan:
     """
     key = str(config_dir.resolve()) if config_dir else None
     return _load_all(key)[4]
+
+
+def get_buy_plan_html(config_dir: Path | None = None) -> BuyPlanHtml:
+    """Get buyer-report writer thresholds. Cached.
+
+    Loaded from ``decision_thresholds.yaml::buy_plan_html``. Permissive
+    defaults when the block is absent (older configs).
+    """
+    key = str(config_dir.resolve()) if config_dir else None
+    return _load_all(key)[5]
 
 
 def _validate_opportunity_validation(ov: OpportunityValidation) -> None:
@@ -659,12 +690,14 @@ __all__ = [
     # Typed accessors (preferred)
     "BusinessRules",
     "BuyPlan",
+    "BuyPlanHtml",
     "DataSignals",
     "DecisionThresholds",
     "GlobalExclusions",
     "OpportunityValidation",
     "get_business_rules",
     "get_buy_plan",
+    "get_buy_plan_html",
     "get_data_signals",
     "get_opportunity_validation",
     "get_thresholds",

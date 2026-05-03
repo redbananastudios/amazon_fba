@@ -244,3 +244,11 @@ buy_plan:
   # --- Target buy cost ---
   stretch_roi_multiplier: 1.5           # stretch ROI = min_roi_buy × this
                                         # default: 0.30 × 1.5 = 0.45
+
+# === Buyer report (09_buy_plan_html) ===
+# Runs after the existing CSV/XLSX/MD writers. Pure additive: emits
+# a structured JSON payload and an HTML report with verdict-grouped
+# cards. Cowork orchestration injects LLM-generated prose; template-
+# prose fallback runs engine-alone.
+buy_plan_html:
+  enabled: true                         # produce JSON+HTML by default
