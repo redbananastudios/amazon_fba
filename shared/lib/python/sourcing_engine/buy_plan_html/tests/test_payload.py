@@ -170,3 +170,166 @@ def test_build_row_payload_does_not_mutate_input():
     before = dict(row)
     build_row_payload(row)
     assert row == before
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Traffic-light metric judgments (PRD §4.3)
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestMetricsTrafficLight:
+    def _row(self, **overrides) -> dict:
+        return _buy_row(**overrides)
+
+    # ──────────────── fba_seller_count ────────────────
+    def test_fba_green_at_healthy_low_volume(self):
+        row = self._row(fba_seller_count=2, sales_estimate=50)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "fba_seller_count")
+        assert m["verdict"] == "green"
+
+    def test_fba_green_at_healthy_high_volume(self):
+        row = self._row(fba_seller_count=4, sales_estimate=250)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "fba_seller_count")
+        assert m["verdict"] == "green"
+
+    def test_fba_amber_when_50pct_over_ceiling(self):
+        row = self._row(fba_seller_count=15, sales_estimate=250)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "fba_seller_count")
+        assert m["verdict"] == "amber"
+
+    def test_fba_red_when_far_over_ceiling(self):
+        row = self._row(fba_seller_count=25, sales_estimate=250)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "fba_seller_count")
+        assert m["verdict"] == "red"
+
+    # ──────────────── amazon_on_listing ────────────────
+    @pytest.mark.parametrize("value,expected", [
+        ("N", "green"), ("", "green"), (None, "green"),
+        ("UNKNOWN", "amber"),
+        ("Y", "red"),
+    ])
+    def test_amazon_on_listing_verdict(self, value, expected):
+        row = self._row(amazon_on_listing=value)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "amazon_on_listing")
+        assert m["verdict"] == expected
+
+    # ──────────────── amazon_bb_pct_90 ────────────────
+    @pytest.mark.parametrize("value,expected", [
+        (0.10, "green"),     # < 0.30
+        (0.29, "green"),
+        (0.30, "amber"),     # 0.30 ≤ x < 0.70
+        (0.50, "amber"),
+        (0.70, "red"),       # ≥ 0.70
+        (0.95, "red"),
+    ])
+    def test_amazon_bb_share_verdict(self, value, expected):
+        row = self._row(amazon_bb_pct_90=value)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "amazon_bb_pct_90")
+        assert m["verdict"] == expected
+
+    # ──────────────── price_volatility ────────────────
+    @pytest.mark.parametrize("value,expected", [
+        (0.05, "green"),
+        (0.20, "amber"),
+        (0.30, "amber"),
+        (0.40, "red"),
+        (0.50, "red"),
+    ])
+    def test_price_volatility_verdict(self, value, expected):
+        row = self._row(price_volatility_90d=value)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "price_volatility")
+        assert m["verdict"] == expected
+
+    # ──────────────── sales_estimate ────────────────
+    @pytest.mark.parametrize("value,expected", [
+        (250, "green"),
+        (100, "green"),
+        (50, "amber"),
+        (20, "amber"),
+        (15, "red"),
+    ])
+    def test_sales_estimate_verdict(self, value, expected):
+        row = self._row(sales_estimate=value)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "sales_estimate")
+        assert m["verdict"] == expected
+
+    # ──────────────── predicted_velocity ────────────────
+    def test_predicted_velocity_green_above_half_share(self):
+        # non_amazon_share = 250 × 0.9 = 225. Half = 112.5.
+        row = self._row(
+            predicted_velocity_mid=120, sales_estimate=250, amazon_bb_pct_90=0.10,
+        )
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "predicted_velocity")
+        assert m["verdict"] == "green"
+
+    def test_predicted_velocity_amber_quarter_to_half(self):
+        # 0.25 × 225 = 56.25 ≤ mid < 112.5 → amber.
+        row = self._row(
+            predicted_velocity_mid=70, sales_estimate=250, amazon_bb_pct_90=0.10,
+        )
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "predicted_velocity")
+        assert m["verdict"] == "amber"
+
+    def test_predicted_velocity_red_below_quarter_share(self):
+        row = self._row(
+            predicted_velocity_mid=20, sales_estimate=250, amazon_bb_pct_90=0.10,
+        )
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "predicted_velocity")
+        assert m["verdict"] == "red"
+
+    def test_predicted_velocity_grey_when_amazon_bb_missing(self):
+        row = self._row(
+            predicted_velocity_mid=18, sales_estimate=250,
+        )
+        row.pop("amazon_bb_pct_90")
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "predicted_velocity")
+        assert m["verdict"] == "grey"
+
+    # ──────────────── bsr_drops_30d ────────────────
+    def test_bsr_drops_green_above_green_floor(self):
+        # green_floor = max(20, 250 × 0.5) = 125. drops=200 → green.
+        row = self._row(bsr_drops_30d=200, sales_estimate=250)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "bsr_drops_30d")
+        assert m["verdict"] == "green"
+
+    def test_bsr_drops_amber_in_middle(self):
+        # amber_floor = max(10, 62.5) = 62.5. drops=75 → amber (between 62.5 and 125).
+        row = self._row(bsr_drops_30d=75, sales_estimate=250)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "bsr_drops_30d")
+        assert m["verdict"] == "amber"
+
+    def test_bsr_drops_red_below_amber_floor(self):
+        row = self._row(bsr_drops_30d=5, sales_estimate=250)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == "bsr_drops_30d")
+        assert m["verdict"] == "red"
+
+    # ──────────────── grey when source absent ────────────────
+    @pytest.mark.parametrize("missing_field,target_key", [
+        ("fba_seller_count", "fba_seller_count"),
+        ("amazon_bb_pct_90", "amazon_bb_pct_90"),
+        ("price_volatility_90d", "price_volatility"),
+        ("sales_estimate", "sales_estimate"),
+        ("bsr_drops_30d", "bsr_drops_30d"),
+    ])
+    def test_grey_when_source_absent(self, missing_field, target_key):
+        row = self._row()
+        row.pop(missing_field)
+        m = next(x for x in build_row_payload(row)["metrics"] if x["key"] == target_key)
+        assert m["verdict"] == "grey"
+        assert m["value_display"] == "—"
+        assert "signal missing" in m["rationale"].lower()
+
+
+def test_metrics_ordered_per_prd_4_3():
+    """The 7 metrics MUST appear in the exact order spec'd in PRD §4.3."""
+    out = build_row_payload(_buy_row())
+    keys = [m["key"] for m in out["metrics"]]
+    assert keys == [
+        "fba_seller_count",
+        "amazon_on_listing",
+        "amazon_bb_pct_90",
+        "price_volatility",
+        "sales_estimate",
+        "predicted_velocity",
+        "bsr_drops_30d",
+    ]

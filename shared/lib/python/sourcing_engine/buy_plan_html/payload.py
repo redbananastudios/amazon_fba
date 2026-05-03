@@ -105,12 +105,230 @@ def build_row_payload(row: dict) -> dict:
             "buy_plan_status": row.get("buy_plan_status") or "",
         },
 
-        "metrics": [],   # filled in Task 3
+        "metrics": _build_metrics(row),
 
         "engine_reasons": _to_list(row.get("opportunity_reasons")),
         "engine_blockers": _to_list(row.get("opportunity_blockers")),
         "risk_flags": _to_list(row.get("risk_flags")),
     }
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Traffic-light metric judgments (PRD §4.3)
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _grey(key: str, label: str) -> dict:
+    """Signal-missing entry — grey traffic light."""
+    return {
+        "key": key, "label": label, "value_display": "—",
+        "verdict": "grey", "rationale": "signal missing",
+    }
+
+
+def _judge_fba_seller_count(row: dict) -> dict:
+    from fba_config_loader import get_opportunity_validation
+    cfg = get_opportunity_validation()
+    fba = _num(row.get("fba_seller_count"))
+    sales = _num(row.get("sales_estimate")) or 0
+    if fba is None:
+        return _grey("fba_seller_count", "FBA Sellers")
+    if sales >= 200:
+        ceiling = cfg.max_fba_sellers_200_sales
+    elif sales >= 100:
+        ceiling = cfg.max_fba_sellers_100_sales
+    else:
+        ceiling = cfg.max_fba_sellers_low_sales
+    amber_top = ceiling * 1.5
+    if fba <= ceiling:
+        return {
+            "key": "fba_seller_count", "label": "FBA Sellers",
+            "value_display": str(int(fba)), "verdict": "green",
+            "rationale": f"≤ {int(ceiling)} ceiling at this volume",
+        }
+    if fba <= amber_top:
+        return {
+            "key": "fba_seller_count", "label": "FBA Sellers",
+            "value_display": str(int(fba)), "verdict": "amber",
+            "rationale": f"over {int(ceiling)} ceiling but within 50%",
+        }
+    return {
+        "key": "fba_seller_count", "label": "FBA Sellers",
+        "value_display": str(int(fba)), "verdict": "red",
+        "rationale": f"far above {int(ceiling)} ceiling",
+    }
+
+
+def _judge_amazon_on_listing(row: dict) -> dict:
+    raw = row.get("amazon_on_listing")
+    s = str(raw or "").upper().strip()
+    if s == "Y":
+        return {
+            "key": "amazon_on_listing", "label": "Amazon on Listing",
+            "value_display": "Yes", "verdict": "red",
+            "rationale": "Amazon competes on the Buy Box",
+        }
+    if s == "UNKNOWN":
+        return {
+            "key": "amazon_on_listing", "label": "Amazon on Listing",
+            "value_display": "Unknown", "verdict": "amber",
+            "rationale": "Amazon-on-listing status unverified",
+        }
+    return {
+        "key": "amazon_on_listing", "label": "Amazon on Listing",
+        "value_display": "No", "verdict": "green",
+        "rationale": "Buy Box rotation safe",
+    }
+
+
+def _judge_amazon_bb_share(row: dict) -> dict:
+    from fba_config_loader import get_opportunity_validation
+    cfg = get_opportunity_validation()
+    bb = _num(row.get("amazon_bb_pct_90"))
+    if bb is None:
+        return _grey("amazon_bb_pct_90", "Amazon BB Share 90d")
+    pct_str = f"{bb:.0%}"
+    if bb < cfg.max_amazon_bb_share_buy:
+        return {
+            "key": "amazon_bb_pct_90", "label": "Amazon BB Share 90d",
+            "value_display": pct_str, "verdict": "green",
+            "rationale": f"below {cfg.max_amazon_bb_share_buy:.0%} buy threshold",
+        }
+    if bb < cfg.max_amazon_bb_share_watch:
+        return {
+            "key": "amazon_bb_pct_90", "label": "Amazon BB Share 90d",
+            "value_display": pct_str, "verdict": "amber",
+            "rationale": "between buy and watch thresholds",
+        }
+    return {
+        "key": "amazon_bb_pct_90", "label": "Amazon BB Share 90d",
+        "value_display": pct_str, "verdict": "red",
+        "rationale": f"≥ {cfg.max_amazon_bb_share_watch:.0%} — Amazon dominates",
+    }
+
+
+def _judge_price_volatility(row: dict) -> dict:
+    from fba_config_loader import get_opportunity_validation
+    cfg = get_opportunity_validation()
+    vol = _num(row.get("price_volatility_90d"))
+    if vol is None:
+        return _grey("price_volatility", "Price Consistency")
+    val = f"{vol:.2f}"
+    if vol < cfg.max_price_volatility_buy:
+        return {
+            "key": "price_volatility", "label": "Price Consistency",
+            "value_display": val, "verdict": "green",
+            "rationale": f"stable (< {cfg.max_price_volatility_buy:.2f} cap)",
+        }
+    if vol < cfg.kill_price_volatility:
+        return {
+            "key": "price_volatility", "label": "Price Consistency",
+            "value_display": val, "verdict": "amber",
+            "rationale": "moderate volatility",
+        }
+    return {
+        "key": "price_volatility", "label": "Price Consistency",
+        "value_display": val, "verdict": "red",
+        "rationale": f"≥ {cfg.kill_price_volatility:.2f} — severe volatility",
+    }
+
+
+def _judge_sales_estimate(row: dict) -> dict:
+    from fba_config_loader import get_opportunity_validation
+    cfg = get_opportunity_validation()
+    sales = _num(row.get("sales_estimate"))
+    if sales is None:
+        return _grey("sales_estimate", "Volume (units/mo)")
+    val = f"{int(sales)}"
+    if sales >= cfg.target_monthly_sales:
+        return {
+            "key": "sales_estimate", "label": "Volume (units/mo)",
+            "value_display": val, "verdict": "green",
+            "rationale": f"above {cfg.target_monthly_sales} target",
+        }
+    if sales >= cfg.kill_min_sales:
+        return {
+            "key": "sales_estimate", "label": "Volume (units/mo)",
+            "value_display": val, "verdict": "amber",
+            "rationale": f"between {cfg.kill_min_sales} kill floor and {cfg.target_monthly_sales} target",
+        }
+    return {
+        "key": "sales_estimate", "label": "Volume (units/mo)",
+        "value_display": val, "verdict": "red",
+        "rationale": f"below {cfg.kill_min_sales} kill floor",
+    }
+
+
+def _judge_predicted_velocity(row: dict) -> dict:
+    sales = _num(row.get("sales_estimate"))
+    bb = _num(row.get("amazon_bb_pct_90"))
+    mid = _num(row.get("predicted_velocity_mid"))
+    if sales is None or bb is None or mid is None:
+        return _grey("predicted_velocity", "Your Expected Sales")
+    non_amazon_share = sales * (1 - bb)
+    if non_amazon_share <= 0:
+        return _grey("predicted_velocity", "Your Expected Sales")
+    val = f"{int(mid)} /mo"
+    if mid >= 0.5 * non_amazon_share:
+        return {
+            "key": "predicted_velocity", "label": "Your Expected Sales",
+            "value_display": val, "verdict": "green",
+            "rationale": "top-half share of non-Amazon rotation",
+        }
+    if mid >= 0.25 * non_amazon_share:
+        return {
+            "key": "predicted_velocity", "label": "Your Expected Sales",
+            "value_display": val, "verdict": "amber",
+            "rationale": "mid-tier share of non-Amazon rotation",
+        }
+    return {
+        "key": "predicted_velocity", "label": "Your Expected Sales",
+        "value_display": val, "verdict": "red",
+        "rationale": "bottom-quartile share — entrant struggles",
+    }
+
+
+def _judge_bsr_drops(row: dict) -> dict:
+    drops = _num(row.get("bsr_drops_30d"))
+    sales = _num(row.get("sales_estimate")) or 0
+    if drops is None:
+        return _grey("bsr_drops_30d", "Stock Replenishments")
+    val = f"{int(drops)} /mo"
+    green_floor = max(20.0, sales * 0.5)
+    amber_floor = max(10.0, sales * 0.25)
+    if drops >= green_floor:
+        return {
+            "key": "bsr_drops_30d", "label": "Stock Replenishments",
+            "value_display": val, "verdict": "green",
+            "rationale": "healthy turnover",
+        }
+    if drops >= amber_floor:
+        return {
+            "key": "bsr_drops_30d", "label": "Stock Replenishments",
+            "value_display": val, "verdict": "amber",
+            "rationale": "moderate turnover",
+        }
+    return {
+        "key": "bsr_drops_30d", "label": "Stock Replenishments",
+        "value_display": val, "verdict": "red",
+        "rationale": "low turnover — slow seller",
+    }
+
+
+def _build_metrics(row: dict) -> list[dict]:
+    """Compose the 7 traffic-light metric entries per PRD §4.3.
+
+    Order is contractual — tests pin it.
+    """
+    return [
+        _judge_fba_seller_count(row),
+        _judge_amazon_on_listing(row),
+        _judge_amazon_bb_share(row),
+        _judge_price_volatility(row),
+        _judge_sales_estimate(row),
+        _judge_predicted_velocity(row),
+        _judge_bsr_drops(row),
+    ]
 
 
 def build_payload(
