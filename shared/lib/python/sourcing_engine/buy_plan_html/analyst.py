@@ -459,7 +459,7 @@ def _fallback_narrative(payload_row: dict, verdict: str, dims: list[dict], trend
 
     # Sentence 1: lead with verdict + 1-line reason.
     s1_map = {
-        VERDICT_BUY: f"BUY signal — economics work and the chart looks healthy.",
+        VERDICT_BUY: "BUY signal — economics work and the chart looks healthy.",
         VERDICT_NEGOTIATE: (
             f"Currently £{cost:.2f}, ceiling £{target:.2f}; close that gap and this becomes BUY-grade."
             if cost is not None and target is not None

@@ -1,8 +1,11 @@
-"""Snapshot test for HTML structural stability.
+"""Snapshot test for HTML structural stability (v2 layout).
 
 The snapshot is stored at `snapshots/buyer_report_4_verdicts.html`.
-It captures structural HTML (post-template-prose injection) for a
-fixed 4-row fixture (one per verdict). Drift in renderer output
+It captures structural HTML for a fixed 4-row fixture (one per
+verdict) AFTER the analyst fallback has populated each row's
+analyst block — i.e. the same path the engine uses at run time.
+Drift in `_render_card_header` / `_render_dimension_bars` /
+`_render_buyers_read` / `_render_direction` / `_render_economics`
 fails this test; intentional changes update the snapshot via
 `pytest --snapshot-update`.
 """
@@ -13,10 +16,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from sourcing_engine.buy_plan_html.analyst import fallback_analyse
 from sourcing_engine.buy_plan_html.payload import build_payload
-from sourcing_engine.buy_plan_html.prose_injector import inject_prose
 from sourcing_engine.buy_plan_html.renderer import render_html
-from sourcing_engine.buy_plan_html.template_prose import render_template_prose
 
 
 SNAPSHOT_PATH = Path(__file__).parent / "snapshots" / "buyer_report_4_verdicts.html"
@@ -114,9 +116,14 @@ def _normalised_html() -> str:
     df = _fixture_df()
     payload = build_payload(df, run_id=RUN_ID, strategy="supplier_pricelist", supplier="test")
     payload["generated_at"] = "2026-05-03T12:00:00Z"  # freeze for determinism
-    html = render_html(payload)
-    proses = {row["asin"]: render_template_prose(row) for row in payload["rows"]}
-    return inject_prose(html, proses)
+    # Mirror the engine's run-time flow: populate each row's analyst
+    # block via the deterministic fallback before rendering. This is
+    # what `fba_engine/steps/buy_plan_html.py:add_buy_plan_html` does
+    # in production. Without this, the snapshot would capture an
+    # empty-analyst layout — undetected drift in the v2 sections.
+    for row in payload["rows"]:
+        row["analyst"] = fallback_analyse(row)
+    return render_html(payload)
 
 
 def test_html_snapshot_matches(request):

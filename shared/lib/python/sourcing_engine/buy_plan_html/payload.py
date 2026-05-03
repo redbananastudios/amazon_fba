@@ -44,6 +44,20 @@ def _num(v: Any) -> Optional[float]:
     return n
 
 
+def _bb_drop_pct(v: Any) -> Optional[float]:
+    """Convert engine's fractional bb_drop (0.07) to raw percent (7.0).
+
+    The engine's `pipeline/market_data.py::_parse_pct` stores BB-drop
+    as a fraction; the analyst's thresholds (3, 10, 15) and rationale
+    formatter (`f"{n:.0f}%"`) expect raw percent. Convert at the
+    boundary so the analyst code stays simple.
+    """
+    n = _num(v)
+    if n is None:
+        return None
+    return n * 100.0
+
+
 def _to_list(v: Any) -> list:
     if isinstance(v, list):
         return [str(x) for x in v if x]
@@ -125,13 +139,18 @@ def build_row_payload(row: dict) -> dict:
 
         # Trend signals — what a human chart-reader sees in the Keepa
         # chart. The analyst consumes these to form the trend_story.
+        # Unit convention for the analyst:
+        #   bb_drop_pct_90: raw percent (7.0 = 7%) — engine stores as
+        #     fraction (0.07), so we multiply at this boundary.
+        #   buy_box_oos_pct_90: fraction (0.26 = 26%) — analyst expects
+        #     fraction here for consistency with engine.
         "trends": {
             "bsr_slope_30d": _num(row.get("bsr_slope_30d")),
             "bsr_slope_90d": _num(row.get("bsr_slope_90d")),
             "bsr_slope_365d": _num(row.get("bsr_slope_365d")),
             "joiners_90d": _num(row.get("fba_offer_count_90d_joiners")),
             "fba_count_90d_start": _num(row.get("fba_offer_count_90d_start")),
-            "bb_drop_pct_90": _num(row.get("buy_box_drop_pct_90")),
+            "bb_drop_pct_90": _bb_drop_pct(row.get("buy_box_drop_pct_90")),
             "buy_box_avg_30d": _num(row.get("buy_box_avg30")),
             "buy_box_avg_90d": _num(row.get("buy_box_avg90")),
             "buy_box_min_365d": _num(row.get("buy_box_min_365d")),

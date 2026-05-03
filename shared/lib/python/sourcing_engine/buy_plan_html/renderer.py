@@ -302,7 +302,18 @@ def _render_identity_economics(row: dict) -> str:
     bp = row.get("buy_plan") or {}
 
     def gbp(v):
-        return f"£{float(v):.2f} (inc)" if v is not None else "—"
+        # Reject None / NaN — the renderer is also invoked from cli.py
+        # against arbitrary on-disk JSON, so float(NaN):.2f → "nan (inc)"
+        # would slip through without this guard.
+        if v is None:
+            return "—"
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            return "—"
+        if n != n:   # NaN
+            return "—"
+        return f"£{n:.2f} (inc)"
 
     def units_and_gbp(units, val):
         if val is None:
@@ -316,7 +327,7 @@ def _render_identity_economics(row: dict) -> str:
     target_buy = _num(eco.get("target_buy_cost_gbp"))     # BUY ceiling
     target_stretch = _num(eco.get("target_buy_cost_stretch_gbp"))  # tighter goal
 
-    cost_label = "Your cost" if cost and cost > 0 else "Your cost"
+    cost_label = "Your cost"
     cost_val = gbp(cost) if cost and cost > 0 else "— (no supplier yet)"
 
     units = bp.get("projected_30d_units")
@@ -408,8 +419,9 @@ def _render_engine_note(row: dict) -> str:
         '<dl>',
         f'<dt>Engine verdict</dt><dd>{_esc(eng_verdict)} ({_esc(eng_conf)} confidence)</dd>',
     ]
-    if eng_score is not None:
-        parts.append(f'<dt>Engine score</dt><dd>{int(eng_score)}/100</dd>')
+    eng_score_n = _num(eng_score)
+    if eng_score_n is not None:
+        parts.append(f'<dt>Engine score</dt><dd>{int(eng_score_n)}/100</dd>')
     if blockers:
         parts.append(
             f'<dt>BUY blockers</dt><dd>{_esc("; ".join(blockers))}</dd>'
