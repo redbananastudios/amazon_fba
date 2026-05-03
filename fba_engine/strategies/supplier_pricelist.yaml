@@ -70,13 +70,14 @@ steps:
   # rows), refresh those rows with live Keepa per-ASIN data so the
   # analyst layer (validate_opportunity / buy_plan_html) sees the same
   # signals it would in the single_asin chain — current Buy Box,
-  # bsr_slope_*, joiners_90d, buy_box_oos_pct_90, listing_age_days,
-  # buy_box_seller_stats. Token cost is bounded — typically 5-50 ASINs
-  # × ~7 tokens. REJECT rows pass through untouched.
+  # bsr_slope_*, joiners_90d, buy_box_oos_pct_90, listing_age_days.
+  # `with_offers: false` keeps per-product cost ~3 tokens so a typical
+  # 5-50 survivor batch fits in the 100-token bucket without chunking.
+  # REJECT rows pass through untouched.
   - name: keepa_enrich_survivors
     module: fba_engine.steps.keepa_enrich_survivors
     config:
-      with_offers: true
+      with_offers: false
 
   # Stage 05.6 — calculate (re-run on survivors). Recompute economics
   # against the refreshed Buy Box prices. `recalculate=true` clears

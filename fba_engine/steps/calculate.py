@@ -57,6 +57,31 @@ from sourcing_engine.utils.flags import (
 logger = logging.getLogger(__name__)
 
 
+# Risk flags this module emits — cleared on recalculate=True so the
+# second pass derives flags from current state instead of inheriting
+# stale ones from the first pass (e.g. a BUY_BOX_ABOVE_AVG90 flag set
+# against the static keepa_combined.csv must NOT carry through into
+# the analyst's read of the live-refreshed row).
+CALCULATE_LAYER_FLAGS: frozenset[str] = frozenset({
+    AMAZON_ON_LISTING,
+    AMAZON_ONLY_PRICE,
+    AMAZON_STATUS_UNKNOWN,
+    BSR_DECLINING,
+    BUY_BOX_ABOVE_AVG90,
+    BUY_BOX_ABOVE_FLOOR_365D,
+    COMPETITION_GROWING,
+    FBM_ONLY,
+    HIGH_MOQ,
+    HIGH_OOS,
+    INSUFFICIENT_HISTORY,
+    LISTING_TOO_NEW,
+    LOW_LISTING_QUALITY,
+    PRICE_MISMATCH_RRP,
+    PRICE_UNSTABLE,
+    SINGLE_FBA_SELLER,
+})
+
+
 def calculate_economics(
     df: pd.DataFrame, *, recalculate: bool = False,
 ) -> pd.DataFrame:
@@ -101,6 +126,17 @@ def calculate_economics(
             # output isn't mixed with the stale reason.
             row_dict["decision"] = None
             row_dict["decision_reason"] = None
+            # Clear flags emitted by this module on the first pass so
+            # the second pass derives them fresh. Discovery / resolver
+            # flags (case_detection, INVALID_EAN, etc.) survive — they
+            # predate calculate and don't change with refreshed market
+            # data. Without this, flags like BUY_BOX_ABOVE_AVG90 set
+            # against stale CSV data persist into the live-data verdict
+            # and silently undermine the survivor refresh.
+            existing_flags = row_dict.get("risk_flags") or []
+            row_dict["risk_flags"] = [
+                f for f in existing_flags if f not in CALCULATE_LAYER_FLAGS
+            ]
 
         try:
             output_rows.append(_calculate_match(row_dict))

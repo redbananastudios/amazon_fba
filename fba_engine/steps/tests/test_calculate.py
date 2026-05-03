@@ -147,6 +147,54 @@ class TestRecalculateFlag:
         # Recalculation happened — profit no longer the stale 5.0.
         assert out.iloc[0]["profit_current"] != 5.0
 
+    def test_recalculate_clears_stale_calculate_layer_flags(self):
+        """Calculate-layer flags (BUY_BOX_ABOVE_AVG90, INSUFFICIENT_HISTORY,
+        FBM_ONLY, etc.) emitted on the first pass against stale data
+        must NOT carry through to the second pass against live data —
+        otherwise the analyst layer reads a flag that wouldn't fire
+        against current state. PR #82 code-review issue 1.
+
+        Discovery / resolver flags (case_detection-emitted ones) survive
+        because they predate calculate and don't change with live data."""
+        # Row arrives with both calculate-emitted flags (stale) AND a
+        # discovery-emitted flag.
+        df = pd.DataFrame([_match_row(
+            decision="SHORTLIST", decision_reason="stale-pass profit OK",
+            buy_box_price=15.0,
+            profit_current=5.0, profit_conservative=5.0,
+            risk_flags=[
+                "BUY_BOX_ABOVE_AVG90",      # calculate-layer (must clear)
+                "AMAZON_ON_LISTING",        # calculate-layer (must clear)
+                "PACK_DETECTED",            # discovery-layer (survives)
+            ],
+        )])
+        out = calculate_economics(df, recalculate=True)
+        flags = out.iloc[0]["risk_flags"]
+        # Discovery-layer flag survives.
+        assert "PACK_DETECTED" in flags
+        # Stale calculate-layer flags cleared (they may re-fire if live
+        # data warrants, but they don't auto-carry from the prior pass).
+        # In this fixture, BB 15.0 vs avg90 (whatever default) shouldn't
+        # re-fire BUY_BOX_ABOVE_AVG90 from a 0% delta, and amazon_status
+        # is OFF_LISTING by default in _match_row so AMAZON_ON_LISTING
+        # also doesn't re-fire.
+        assert "BUY_BOX_ABOVE_AVG90" not in flags
+        assert "AMAZON_ON_LISTING" not in flags
+
+    def test_recalculate_does_not_clear_flags_on_first_pass(self):
+        """Sanity: when recalculate=False (the default first-pass call),
+        existing flags must survive — we're only clearing on the
+        explicit second-pass refresh."""
+        df = pd.DataFrame([_match_row(
+            risk_flags=["INSUFFICIENT_HISTORY", "PACK_DETECTED"],
+        )])
+        out = calculate_economics(df, recalculate=False)
+        flags = out.iloc[0]["risk_flags"]
+        # Both flags preserved (calculate-layer ones may grow; original
+        # set survives).
+        assert "INSUFFICIENT_HISTORY" in flags
+        assert "PACK_DETECTED" in flags
+
 
 class TestAmazonOnlyPriceFallback:
     """When both Keepa Buy Box (idx 18) and FBA-only (idx 10) stats are

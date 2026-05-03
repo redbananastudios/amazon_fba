@@ -173,15 +173,7 @@ def run_pipeline(
     # Best-effort: if KEEPA_API_KEY is not set or the call fails,
     # fall back to the stale-but-usable static data and log a warning.
     # This keeps offline / no-creds environments unblocked.
-    try:
-        refreshed_df = refresh_survivors(enriched_df, with_offers=True)
-    except Exception:
-        logger.warning(
-            "keepa_enrich_survivors failed; using stale market data — "
-            "verdicts may diverge from single_asin",
-            exc_info=True,
-        )
-        refreshed_df = enriched_df
+    refreshed_df = refresh_survivors(enriched_df, with_offers=False)
 
     # Stage 05.6 — calculate (re-run on survivors). Recompute economics
     # against the refreshed Buy Box prices.
