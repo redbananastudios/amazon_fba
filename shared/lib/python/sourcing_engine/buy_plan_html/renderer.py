@@ -188,18 +188,22 @@ def _render_economics_grid(row: dict) -> str:
     bp = row.get("buy_plan") or {}
 
     def gbp(v):
-        return f"£{float(v):.2f}" if v is not None else "—"
+        # All £ values in the engine are inc-VAT by convention
+        # (supplier adapters add VAT on input; market prices from
+        # Keepa/Amazon are inc-VAT). Annotating each value with
+        # "(inc)" so the buyer never has to wonder.
+        return f"£{float(v):.2f} (inc)" if v is not None else "—"
 
     def num(v, suffix=""):
         return f"{float(v):.0f}{suffix}" if v is not None else "—"
 
     def units_and_gbp(units, gbp_val):
-        # "{N} units · £X.XX" — keeps revenue/profit visually tied to
-        # the unit count that produced it. Falls back gracefully when
-        # either is None.
+        # "{N} units · £X.XX (inc)" — keeps revenue/profit visually tied
+        # to the unit count that produced it. Falls back gracefully
+        # when either is None.
         if gbp_val is None:
             return "—"
-        cash = f"£{float(gbp_val):.2f}"
+        cash = gbp(gbp_val)
         if units is None:
             return cash
         return f"{int(float(units))} units · {cash}"

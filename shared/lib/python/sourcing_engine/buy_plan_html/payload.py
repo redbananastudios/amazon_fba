@@ -237,8 +237,9 @@ def _judge_sales_estimate(row: dict) -> dict:
     from fba_config_loader import get_opportunity_validation
     cfg = get_opportunity_validation()
     sales = _num(row.get("sales_estimate"))
+    label = "Listing Sales/mo"
     if sales is None:
-        return _grey("sales_estimate", "Volume (units/mo)")
+        return _grey("sales_estimate", label)
     val = f"{int(sales)}"
     # Traffic-light boundaries are operator-visual cues, independent of
     # the kill_min_sales engine gate (which the operator may have set to
@@ -247,20 +248,20 @@ def _judge_sales_estimate(row: dict) -> dict:
     LOW_VOLUME_RED = 20.0
     if sales >= cfg.target_monthly_sales:
         return {
-            "key": "sales_estimate", "label": "Volume (units/mo)",
+            "key": "sales_estimate", "label": label,
             "value_display": val, "verdict": "green",
-            "rationale": f"above {cfg.target_monthly_sales} target",
+            "rationale": f"strong listing demand (≥ {cfg.target_monthly_sales}/mo target)",
         }
     if sales >= LOW_VOLUME_RED:
         return {
-            "key": "sales_estimate", "label": "Volume (units/mo)",
+            "key": "sales_estimate", "label": label,
             "value_display": val, "verdict": "amber",
-            "rationale": f"between {int(LOW_VOLUME_RED)} and {cfg.target_monthly_sales} target",
+            "rationale": f"moderate listing demand (under {cfg.target_monthly_sales}/mo target)",
         }
     return {
-        "key": "sales_estimate", "label": "Volume (units/mo)",
+        "key": "sales_estimate", "label": label,
         "value_display": val, "verdict": "red",
-        "rationale": f"very low volume (< {int(LOW_VOLUME_RED)}/mo)",
+        "rationale": f"very low listing demand (< {int(LOW_VOLUME_RED)}/mo)",
     }
 
 
@@ -268,55 +269,61 @@ def _judge_predicted_velocity(row: dict) -> dict:
     sales = _num(row.get("sales_estimate"))
     bb = _num(row.get("amazon_bb_pct_90"))
     mid = _num(row.get("predicted_velocity_mid"))
+    label = "Your Share/mo"
     if sales is None or bb is None or mid is None:
-        return _grey("predicted_velocity", "Your Expected Sales")
+        return _grey("predicted_velocity", label)
     non_amazon_share = sales * (1 - bb)
     if non_amazon_share <= 0:
-        return _grey("predicted_velocity", "Your Expected Sales")
+        return _grey("predicted_velocity", label)
     val = f"{int(mid)} /mo"
+    pct = mid / non_amazon_share if non_amazon_share > 0 else 0
     if mid >= 0.5 * non_amazon_share:
         return {
-            "key": "predicted_velocity", "label": "Your Expected Sales",
+            "key": "predicted_velocity", "label": label,
             "value_display": val, "verdict": "green",
-            "rationale": "top-half share of non-Amazon rotation",
+            "rationale": f"~{pct:.0%} of {int(non_amazon_share)} non-Amazon sales — strong slice",
         }
     if mid >= 0.25 * non_amazon_share:
         return {
-            "key": "predicted_velocity", "label": "Your Expected Sales",
+            "key": "predicted_velocity", "label": label,
             "value_display": val, "verdict": "amber",
-            "rationale": "mid-tier share of non-Amazon rotation",
+            "rationale": f"~{pct:.0%} of {int(non_amazon_share)} non-Amazon sales — mid-tier slice",
         }
     return {
-        "key": "predicted_velocity", "label": "Your Expected Sales",
+        "key": "predicted_velocity", "label": label,
         "value_display": val, "verdict": "red",
-        "rationale": "bottom-quartile share — entrant struggles",
+        "rationale": f"~{pct:.0%} of {int(non_amazon_share)} non-Amazon sales — small slice",
     }
 
 
 def _judge_bsr_drops(row: dict) -> dict:
+    """BSR drops = sales-event count Amazon's BSR registered in 30 days.
+    Higher number = more frequent sales activity = healthier listing.
+    """
     drops = _num(row.get("bsr_drops_30d"))
     sales = _num(row.get("sales_estimate")) or 0
+    label = "Sales Activity (30d)"
     if drops is None:
-        return _grey("bsr_drops_30d", "Stock Replenishments")
-    val = f"{int(drops)} /mo"
+        return _grey("bsr_drops_30d", label)
+    val = f"{int(drops)} sales"
     green_floor = max(20.0, sales * 0.5)
     amber_floor = max(10.0, sales * 0.25)
     if drops >= green_floor:
         return {
-            "key": "bsr_drops_30d", "label": "Stock Replenishments",
+            "key": "bsr_drops_30d", "label": label,
             "value_display": val, "verdict": "green",
-            "rationale": "healthy turnover",
+            "rationale": f"frequent sales (≥ {int(green_floor)} BSR drops/30d)",
         }
     if drops >= amber_floor:
         return {
-            "key": "bsr_drops_30d", "label": "Stock Replenishments",
+            "key": "bsr_drops_30d", "label": label,
             "value_display": val, "verdict": "amber",
-            "rationale": "moderate turnover",
+            "rationale": f"moderate sales (≥ {int(amber_floor)} BSR drops/30d)",
         }
     return {
-        "key": "bsr_drops_30d", "label": "Stock Replenishments",
+        "key": "bsr_drops_30d", "label": label,
         "value_display": val, "verdict": "red",
-        "rationale": "low turnover — slow seller",
+        "rationale": f"slow listing (< {int(amber_floor)} BSR drops/30d)",
     }
 
 
