@@ -64,9 +64,11 @@ def _public_image_url(asin: str) -> str:
 def build_row_payload(row: dict) -> dict:
     """Build the JSON payload for one row. Pure function.
 
-    Identity / verdict / economics / buy_plan blocks are populated
-    from existing engine columns. Metrics traffic-light judgments
-    are filled in by `_build_metrics` (Task 3).
+    Identity / verdict / economics / buy_plan / trends blocks are
+    populated from existing engine columns. Metrics traffic-light
+    judgments are filled by `_build_metrics`. Analyst-layer
+    (verdict / score / dimensions / narrative) is left as nulls
+    here; `analyst.py` fills them in downstream.
     """
     asin = row.get("asin") or ""
     score_v = row.get("opportunity_score")
@@ -79,10 +81,26 @@ def build_row_payload(row: dict) -> dict:
         "amazon_url": row.get("amazon_url") or "",
         "image_url": _public_image_url(asin) if asin else None,
 
-        "verdict": row.get("opportunity_verdict") or "",
-        "verdict_confidence": row.get("opportunity_confidence") or "",
-        "opportunity_score": int(score_v) if _is_present(score_v) else None,
+        # Engine's deterministic verdict — kept as a secondary signal
+        # the analyst can compare against. The buyer-report's primary
+        # verdict comes from analyst.py.
+        "engine_verdict": row.get("opportunity_verdict") or "",
+        "engine_verdict_confidence": row.get("opportunity_confidence") or "",
+        "engine_opportunity_score": int(score_v) if _is_present(score_v) else None,
         "next_action": row.get("next_action") or "",
+
+        # Analyst layer — populated by analyst.py per row. Defaults to
+        # None so the renderer can fall through gracefully when the
+        # analyst hasn't run yet (e.g. tests, dev runs without key).
+        "analyst": {
+            "verdict": None,            # BUY / NEGOTIATE / SOURCE / WAIT / SKIP
+            "verdict_confidence": None,  # HIGH / MEDIUM / LOW
+            "score": None,              # 0-100
+            "dimensions": None,         # [{name, score, max, rationale}, ...]
+            "trend_story": None,        # one-line synthesis
+            "narrative": None,          # 2-3 sentence buyer's read
+            "action_prompt": None,      # what to do next
+        },
 
         "economics": {
             "buy_cost_gbp": _num(row.get("buy_cost")),
@@ -103,6 +121,22 @@ def build_row_payload(row: dict) -> dict:
             "gap_to_buy_gbp": _num(row.get("gap_to_buy_gbp")),
             "gap_to_buy_pct": _num(row.get("gap_to_buy_pct")),
             "buy_plan_status": row.get("buy_plan_status") or "",
+        },
+
+        # Trend signals — what a human chart-reader sees in the Keepa
+        # chart. The analyst consumes these to form the trend_story.
+        "trends": {
+            "bsr_slope_30d": _num(row.get("bsr_slope_30d")),
+            "bsr_slope_90d": _num(row.get("bsr_slope_90d")),
+            "bsr_slope_365d": _num(row.get("bsr_slope_365d")),
+            "joiners_90d": _num(row.get("fba_offer_count_90d_joiners")),
+            "fba_count_90d_start": _num(row.get("fba_offer_count_90d_start")),
+            "bb_drop_pct_90": _num(row.get("buy_box_drop_pct_90")),
+            "buy_box_avg_30d": _num(row.get("buy_box_avg30")),
+            "buy_box_avg_90d": _num(row.get("buy_box_avg90")),
+            "buy_box_min_365d": _num(row.get("buy_box_min_365d")),
+            "buy_box_oos_pct_90": _num(row.get("buy_box_oos_pct_90")),
+            "listing_age_days": _num(row.get("listing_age_days")),
         },
 
         "metrics": _build_metrics(row),

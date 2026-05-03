@@ -16,10 +16,9 @@ from typing import Any
 import pandas as pd
 
 from fba_config_loader import get_buy_plan_html
+from sourcing_engine.buy_plan_html.analyst import fallback_analyse
 from sourcing_engine.buy_plan_html.payload import build_payload
-from sourcing_engine.buy_plan_html.prose_injector import inject_prose
 from sourcing_engine.buy_plan_html.renderer import render_html
-from sourcing_engine.buy_plan_html.template_prose import render_template_prose
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +73,22 @@ def add_buy_plan_html(
         logger.exception("buy_plan_html: payload build failed; skipping")
         return df
 
-    # Atomic JSON write.
+    # Populate the analyst block per row using the deterministic
+    # fallback. When Cowork orchestration is in the loop, the
+    # orchestration step overwrites this with Claude's analysis
+    # before the HTML is finalised — see orchestration/runs/
+    # buyer_report_prose.yaml for the wire-up.
+    for row in payload.get("rows") or []:
+        try:
+            row["analyst"] = fallback_analyse(row)
+        except Exception:
+            logger.exception(
+                "buy_plan_html: analyst fallback failed for asin=%s",
+                row.get("asin"),
+            )
+            # Leave analyst block as-is (nulls); renderer falls through.
+
+    # Atomic JSON write — payload now contains analyst block.
     tmp_json = json_path.with_suffix(".json.tmp")
     tmp_json.write_text(
         json.dumps(payload, indent=2, default=str),
@@ -82,28 +96,12 @@ def add_buy_plan_html(
     )
     tmp_json.replace(json_path)
 
-    # Render HTML skeleton with per-card prose markers.
+    # Render HTML from the populated payload.
     try:
         html = render_html(payload)
     except Exception:
         logger.exception("buy_plan_html: HTML render failed; skipping HTML")
         return df
-
-    # Engine-alone fallback: template-prose for every row.
-    template_proses: dict[str, str] = {}
-    for row in payload.get("rows") or []:
-        asin_key = row.get("asin") or ""
-        if not asin_key:
-            continue
-        try:
-            template_proses[asin_key] = render_template_prose(row)
-        except Exception:
-            logger.exception(
-                "buy_plan_html: template prose failed for asin=%s", asin_key,
-            )
-            template_proses[asin_key] = "[prose unavailable]"
-
-    html = inject_prose(html, template_proses)
 
     tmp_html = html_path.with_suffix(".html.tmp")
     tmp_html.write_text(html, encoding="utf-8")
