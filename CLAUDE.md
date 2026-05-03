@@ -6,9 +6,55 @@
 > See `docs/architecture.md`.
 
 ## Current State
-**Last updated:** 2026-05-02 late night — Keepa Browser scrape cache (PR #74) makes the engine read chart-quality per-seller data for single-ASIN deep dives.
-**Currently working on:** Nothing in flight. The cache-as-contract architecture (scraper writes JSON, engine reads JSON) means the engine stays MCP-free while consuming the richest Keepa-Browser data per ASIN. Single branch (main) holds all work.
-**Status:** main at HEAD of #74. **1268 Python tests pass** (was 1250 pre-PR; +18 in this PR). MCP suite at 114 + 5 live SP-API still green. Working tree clean.
+**Last updated:** 2026-05-03 late evening — Decision-data discipline pipeline complete (PRs #82–#86). Engine now refuses to confidently route any actionable row to BUY without the data needed to make that call.
+**Currently working on:** Nothing in flight. End-state for the supplier_pricelist data pipeline: live SP-API pricing on survivors, Keepa-API enrichment with Amazon-fallback for niche listings, Keepa Browser scrape gate for the irreducible historical-data gap. Single branch (main) holds all work.
+**Status:** main at HEAD of PR #86. **1209 Python tests pass** in fast suite (was 1196 pre-PR; +13 in #86). MCP suite at 114 + 5 live SP-API still green. Working tree clean.
+
+### What landed this session (2026-05-03 evening — decision-data discipline)
+
+Peter's directive was *"we need solid data to make decisions — do whatever is required"*. Five PRs deliver a layered data-coverage architecture where the engine refuses to confidently ship a BUY verdict without the data needed to back it up.
+
+| PR | Summary |
+|---|---|
+| **#82** | Survivor refresh chain. Bulk supplier_pricelist now refreshes non-REJECT rows with live Keepa per-ASIN data + Amazon-fallback in `market_snapshot` for BB-derived signals when csv[18] (BB) is empty but csv[0] (Amazon) is rich. Adds `recalculate` flag to calculate, `force` flag to decide, new `keepa_enrich_survivors` step. New `price_history_basis: "BB" \| "AMAZON" \| None` flag tells the analyst which series fed each signal; metric labels get "(Amazon-tracked)" suffix when basis is Amazon. ABGEE: stale 17 actionable rows → live-fresh 9 rows; Britains tractor went Stability 0/25 score 52 → 21/25 score 73 from reading the rich Amazon series that was always there. +37 tests. |
+| **#83** | SP-API live pricing for survivors. The preflight step already fetched live BB price + offer counts via getItemOffersBatch — but wrote them to dedicated `live_*` columns the engine's calculate step never read. Added `survivors_only` flag to enrich (filter to non-REJECT before MCP call → 5720-row run drops from 10+ minutes to 40 seconds). New `merge_live_pricing` step maps `live_buy_box → buy_box_price`, `live_offer_count_fba → fba_seller_count`, `live_buy_box_seller=="AMZN" → amazon_status`. Live wins over stale. After this PR: every active ASIN gets current state regardless of Keepa coverage — 4 dark-data ABGEE ASINs that were entirely blank now have live BB price + seller count. +27 tests. |
+| **#84** | Decision-data audit validator. `scripts/validate_decision_data.py` audits a buyer-report run and reports each row's coverage band: FULL_DATA / LOW_CONFIDENCE / PROBE_ONLY / INSUFFICIENT_DATA. Surfaced two real findings: CSV writer was dropping ~30 populated columns (operator-visibility issue) + 4 niche ASINs have genuine historical-signal gaps (only Browser scrape can fill). |
+| **#85** | CSV writer exposes every engine-computed signal. OUTPUT_COLUMNS expanded from ~52 to **119**. Added all the previously-dropped fields: `roi_conservative`, `candidate_score`, `opportunity_verdict`, `next_action`, `bsr_drops_30d`, `buy_box_oos_pct_90`, `price_volatility_90d`, `listing_age_days`, `fba_pick_pack_fee`, `referral_fee_pct`, predicted_velocity tuple, etc. List fields join with "; ", dict fields (buy_box_seller_stats) JSON-stringify. +6 schema-pinning tests. |
+| **#86** | Browser-scrape gate. New `flag_browser_scrape_needed` step. For survivors lacking the historical Browser-only signals (`amazon_bb_pct_90`, `buy_box_drop_pct_90`, `buy_box_min_365d`, `buy_box_oos_pct_90`) AND no cache file: adds `BROWSER_SCRAPE_NEEDED` to risk_flags, drops `data_confidence` to LOW (validator routes away from BUY), writes `<run_dir>/keepa_browser_scrape_needed.json` manifest. Operator runs Claude+MCP scrape per `docs/KEEPA_BROWSER_SCRAPE.md` for those ASINs, re-runs engine. ABGEE produces 4 ASINs in manifest (Schleich + 3 TUBBZ niche listings). +13 tests. |
+
+### Decision quality contract (now enforced)
+
+| Decision support | Source | Status after this session |
+|---|---|---|
+| Current BB price | SP-API live | ✅ All actionable rows |
+| FBA seller count | SP-API live | ✅ All actionable rows |
+| Amazon presence | SP-API live | ✅ All actionable rows |
+| Gating / restrictions | SP-API | ✅ All actionable rows |
+| Sales velocity (rank-based) | Keepa-API | ✅ All rows where rank tracked |
+| Listing age, BSR slope, joiners | Keepa-API | ✅ Most rows |
+| BB price history 90d/365d | Keepa-API w/ Amazon fallback | ✅ Most rows |
+| **Per-seller BB share %** | **Keepa Browser only** | **⚠️ Engine blocks BUY without** |
+| **Historical BB drop / OOS pattern** | **Keepa Browser only** | **⚠️ Engine blocks BUY without** |
+
+Operator workflow now:
+
+```
+1. python run.py --supplier abgee
+   → produces buyer report with full data on most rows
+   → flags 4 dark-data ASINs in keepa_browser_scrape_needed.json
+
+2. Operator triggers Claude+MCP scrape on those 4 ASINs
+   (manual workflow per docs/KEEPA_BROWSER_SCRAPE.md)
+   → cache files appear at .cache/keepa_browser/<asin>.json
+
+3. Re-run engine
+   → keepa_browser_enrich step merges cache data into rows
+   → flag clears, validator can confidently route those rows
+```
+
+### Architectural pattern: cache-as-contract
+
+The `keepa_browser_enrich` step reads from `.cache/keepa_browser/<asin>.json`. The cache file format IS the contract — any future scraper (Claude+MCP today, Playwright tomorrow) that writes the same JSON shape works without engine changes. This deliberately keeps the engine MCP-free while the scraper layer is operator-driven.
 
 **Latest tests baseline:**
 ```bash
