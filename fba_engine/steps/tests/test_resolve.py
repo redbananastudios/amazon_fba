@@ -40,6 +40,24 @@ def _write_keepa(tmp_path: Path) -> Path:
     return p
 
 
+def _write_keepa_with_upc_only(tmp_path: Path) -> Path:
+    p = tmp_path / "keepa_upc.csv"
+    p.write_text(
+        (
+            'ASIN,Title,Brand,Buy Box: Current,Amazon: Current,'
+            'New Offer Count: Current,Sales Rank: Current,Bought in past month,'
+            'Buy Box: 90 days avg.,"New, 3rd Party FBA: Current",'
+            'FBA Pick&Pack Fee,Referral Fee %,Product Codes: EAN,'
+            'Product Codes: UPC,Product Codes: GTIN,'
+            'Reviews: Rating,Reviews: Rating Count\n'
+            'B0UPC001,UPC Widget,Acme,£15.00,£14.00,5,5000,150,'
+            '£14.50,£14.80,£3.00,15%,,856739001159,,4.5,200\n'
+        ),
+        encoding="utf-8",
+    )
+    return p
+
+
 def _input_row(**overrides) -> dict:
     """A normalised-with-costs row, ready for resolve."""
     base = {
@@ -104,6 +122,59 @@ class TestResolveMatches:
         df = pd.DataFrame([_input_row()])
         out = resolve_matches(df, market_data_path=str(_write_keepa(tmp_path)))
         assert out.iloc[0]["buy_cost"] == pytest.approx(6.0)
+
+    def test_upc_only_keepa_product_code_matches_supplier_barcode(self, tmp_path):
+        df = pd.DataFrame([_input_row(ean="856739001159")])
+        out = resolve_matches(
+            df, market_data_path=str(_write_keepa_with_upc_only(tmp_path)),
+        )
+        assert len(out) == 1
+        assert out.iloc[0]["asin"] == "B0UPC001"
+
+    def test_sp_api_code_resolver_fills_keepa_no_match(self, monkeypatch):
+        def fake_resolver(codes):
+            assert codes == ["856739001159"]
+            return {
+                "856739001159": {
+                    "asin": "B0SPAPI001",
+                    "title": "SP-API Widget",
+                    "brand": "Acme",
+                    "buy_box_price": 12.99,
+                    "new_fba_price": None,
+                    "amazon_price": None,
+                    "fba_seller_count": 3,
+                    "monthly_sales_estimate": None,
+                    "size_tier": "UNKNOWN",
+                    "gated": "UNKNOWN",
+                    "history_days": 0,
+                    "price_history": None,
+                }
+            }
+
+        monkeypatch.setattr(
+            "fba_engine.steps.resolve.resolve_codes_to_market_data",
+            fake_resolver,
+        )
+        df = pd.DataFrame([_input_row(ean="856739001159")])
+        out = resolve_matches(df, market_data={})
+        assert len(out) == 1
+        assert out.iloc[0]["asin"] == "B0SPAPI001"
+        assert out.iloc[0]["product_name"] == "SP-API Widget"
+
+    def test_sp_api_code_resolver_can_be_disabled(self, monkeypatch):
+        monkeypatch.setattr(
+            "fba_engine.steps.resolve.resolve_codes_to_market_data",
+            lambda codes: {"856739001159": {"asin": "B0SHOULDNOTUSE"}},
+        )
+        df = pd.DataFrame([_input_row(ean="856739001159")])
+        out = resolve_matches(
+            df,
+            market_data={},
+            sp_api_code_resolver_enabled=False,
+        )
+        assert len(out) == 1
+        assert out.iloc[0]["decision"] == "REJECT"
+        assert out.iloc[0]["decision_reason"] == "No Amazon match found"
 
     def test_market_data_path_none_means_empty_market(self, tmp_path):
         # When no market data is provided, every input should be a no-match

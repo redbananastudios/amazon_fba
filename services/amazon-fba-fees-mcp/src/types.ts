@@ -133,6 +133,18 @@ export interface CatalogItemResult {
   raw?: unknown;
 }
 
+export interface ProductCodeResolveResult {
+  code: string;
+  marketplace_id: string;
+  status: "FOUND" | "NO_MATCH" | "MULTIPLE_MATCHES" | "ERROR";
+  asin?: string;
+  asins?: string[];
+  title?: string;
+  brand?: string;
+  error?: string;
+  raw?: unknown;
+}
+
 export interface LivePricingResult {
   asin: string;
   buy_box_price?: number;

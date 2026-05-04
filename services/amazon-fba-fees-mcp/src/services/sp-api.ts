@@ -241,6 +241,31 @@ export class SpApiService {
     );
   }
 
+  async searchCatalogItems(params: {
+    keywords: string[];
+    marketplaceId: string;
+    includedData?: string[];
+    pageSize?: number;
+  }): Promise<unknown> {
+    const includedData = params.includedData ?? [
+      "summaries",
+      "identifiers",
+    ];
+    return this.withSemaphore(() =>
+      this.client.callAPI({
+        operation: "searchCatalogItems",
+        endpoint: "catalogItems",
+        query: {
+          keywords: params.keywords,
+          marketplaceIds: [params.marketplaceId],
+          includedData,
+          pageSize: params.pageSize ?? 10,
+        },
+        options: { version: "2022-04-01" },
+      })
+    );
+  }
+
   /**
    * Batch item-offers (Buy Box + offer summary per ASIN). Up to 20 ASINs per
    * call. Each request inside the batch carries its own MarketplaceId, so

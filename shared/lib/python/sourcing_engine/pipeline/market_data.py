@@ -29,6 +29,7 @@ _KEEPA_COLUMN_MAP = {
     "Referral Fee based on current Buy Box price": "referral_fee_amount",
     "Product Codes: EAN": "ean",
     "Product Codes: UPC": "upc",
+    "Product Codes: GTIN": "gtin",
     "Sales Rank: 90 days avg.": "sales_rank_avg90",
     "Sales Rank: Drops last 90 days": "sales_rank_drops_90",
     # PR F — chart-readable conservative sales proxy. The Browser CSV
@@ -131,22 +132,59 @@ def load_market_data(source=None) -> dict:
     # No price history series in CSV export — set to None
     df["price_history"] = None
 
-    # Build lookup dict keyed by EAN
-    # Keepa sometimes has multiple EANs per product (comma-separated)
+    # Build lookup dict keyed by product code.
+    # Keepa sometimes has multiple codes per product (comma-separated), and
+    # browser exports may place supplier barcodes under EAN, UPC, or GTIN.
     data = {}
     for _, row in df.iterrows():
-        ean_field = str(row.get("ean", "")).strip()
-        if not ean_field or ean_field == "nan":
-            continue
         row_dict = row.to_dict()
-        for ean in ean_field.split(","):
-            ean = ean.strip()
-            if ean and len(ean) >= 8:
-                if ean not in data:
-                    data[ean] = row_dict
+        for code_field in ("ean", "upc", "gtin"):
+            for code in _split_product_codes(row.get(code_field)):
+                for alias in _product_code_aliases(code):
+                    if alias not in data:
+                        data[alias] = row_dict
 
-    logger.info("Market data indexed: %d unique EANs", len(data))
+    logger.info("Market data indexed: %d unique product codes", len(data))
     return data
+
+
+def _split_product_codes(value) -> list[str]:
+    """Split Keepa product-code fields into digit-only barcode strings."""
+    if pd.isna(value):
+        return []
+    text = str(value).strip()
+    if not text or text == "nan":
+        return []
+
+    codes = []
+    for part in re.split(r"[,;\s|]+", text):
+        code = re.sub(r"\D", "", part)
+        if len(code) >= 8:
+            codes.append(code)
+    return codes
+
+
+def _product_code_aliases(code: str) -> set[str]:
+    """Return lookup aliases for UPC/EAN/GTIN matching.
+
+    Supplier rows may carry a 12-digit UPC-A while Keepa has the same product
+    as a 13-digit EAN with a leading zero, or vice versa. Index both forms so
+    exact EAN matching stays strict on product identity without missing the
+    common UPC/EAN representation difference.
+    """
+    clean = re.sub(r"\D", "", str(code))
+    if len(clean) < 8:
+        return set()
+
+    aliases = {clean}
+    stripped = clean.lstrip("0")
+    if stripped:
+        aliases.add(stripped)
+    if len(clean) == 12:
+        aliases.add("0" + clean)
+    elif len(clean) == 13 and clean.startswith("0"):
+        aliases.add(clean[1:])
+    return aliases
 
 
 def _derive_amazon_status(row) -> str:

@@ -13,6 +13,7 @@
  *   fba             Check FBA eligibility for one or more ASINs
  *   fees            Batch fee estimate
  *   catalog         Fetch catalog item for one ASIN
+ *   resolve-codes   Resolve EAN/UPC/GTIN product codes to ASINs
  *   pricing         Get live pricing for one or more ASINs
  *
  * Output is always JSON on stdout. Logs/errors go to stderr.
@@ -25,6 +26,7 @@ import { checkListingRestrictions } from "./tools/check-listing-restrictions.js"
 import { checkFbaEligibility } from "./tools/check-fba-eligibility.js";
 import { estimateFeesBatch } from "./tools/estimate-fees-batch.js";
 import { getCatalogItem } from "./tools/get-catalog-item.js";
+import { resolveProductCodes } from "./tools/resolve-product-codes.js";
 import { getLivePricing } from "./tools/get-live-pricing.js";
 import {
   preflightAsin,
@@ -37,6 +39,7 @@ import type {
   FeeEstimate,
   ListingRestrictionsResult,
   LivePricingResult,
+  ProductCodeResolveResult,
 } from "./types.js";
 
 interface ParsedArgs {
@@ -160,6 +163,10 @@ function buildCaches() {
       resource: "catalog",
       defaultTtlSeconds: ttls.catalog,
     }),
+    productCodeResolve: new DiskCache<ProductCodeResolveResult>({
+      resource: "product_code_resolve",
+      defaultTtlSeconds: ttls.catalog,
+    }),
     pricing: new DiskCache<LivePricingResult>({
       resource: "pricing",
       defaultTtlSeconds: ttls.pricing,
@@ -178,6 +185,7 @@ function printUsage(): void {
       "  fba             Check FBA eligibility for one or more ASINs",
       "  fees            Batch fee estimate",
       "  catalog         Fetch catalog item for one ASIN",
+      "  resolve-codes   Resolve EAN/UPC/GTIN product codes to ASINs",
       "  pricing         Get live pricing for one or more ASINs",
       "",
       "Common flags:",
@@ -197,6 +205,10 @@ function printUsage(): void {
       "",
       "catalog flags:",
       "  --asin <id>             Single ASIN",
+      "",
+      "resolve-codes flags:",
+      "  --codes <list>          Comma-separated EAN/UPC/GTIN codes",
+      "  --input <path|->        JSON file with { codes: [...] }",
       "",
       "fees flags:",
       "  --input <path|->        JSON file with { items: [{ asin, selling_price }, ...] }",
@@ -349,6 +361,31 @@ async function runCatalog(flags: Record<string, string | boolean>): Promise<unkn
   );
 }
 
+async function runResolveCodes(flags: Record<string, string | boolean>): Promise<unknown> {
+  let payload: { codes?: string[]; marketplace_id?: string; refresh_cache?: boolean } = {};
+  if (typeof flags["input"] === "string") {
+    payload = readInput(flags["input"]) as typeof payload;
+  }
+  const fromFlag = splitList(flags["codes"]);
+  const codes = fromFlag.length > 0 ? fromFlag : payload.codes ?? [];
+  if (!Array.isArray(codes) || codes.length === 0) {
+    throw new Error("--codes or --input with codes[] required");
+  }
+  const marketplaceId =
+    (typeof flags["marketplace-id"] === "string"
+      ? flags["marketplace-id"]
+      : undefined) ?? payload.marketplace_id;
+  const refresh = bool(flags["refresh-cache"]) || payload.refresh_cache;
+  const spApi = buildSpApi();
+  const cache = buildCaches().productCodeResolve;
+  const results = await resolveProductCodes(
+    { codes, marketplace_id: marketplaceId, refresh_cache: refresh },
+    spApi,
+    cache
+  );
+  return { results };
+}
+
 async function runPricing(flags: Record<string, string | boolean>): Promise<unknown> {
   const asins = splitList(flags["asins"]);
   if (asins.length === 0) throw new Error("--asins required");
@@ -400,6 +437,9 @@ async function main(): Promise<number> {
         break;
       case "catalog":
         result = await runCatalog(args.flags);
+        break;
+      case "resolve-codes":
+        result = await runResolveCodes(args.flags);
         break;
       case "pricing":
         result = await runPricing(args.flags);

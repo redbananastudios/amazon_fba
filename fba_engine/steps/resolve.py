@@ -27,6 +27,9 @@ import pandas as pd
 
 from sourcing_engine.pipeline.market_data import load_market_data
 from sourcing_engine.pipeline.match import match_product
+from sourcing_engine.pipeline.sp_api_code_resolver import (
+    resolve_codes_to_market_data,
+)
 from sourcing_engine.utils.ean_validator import validate_ean
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,7 @@ def resolve_matches(
     market_data_path: str | None = None,
     *,
     market_data: dict | None = None,
+    sp_api_code_resolver_enabled: bool = True,
 ) -> pd.DataFrame:
     """Validate EAN + match to market data; return a flat result df.
 
@@ -62,6 +66,8 @@ def resolve_matches(
 
     if market_data is None:
         market_data = load_market_data(market_data_path)
+    if sp_api_code_resolver_enabled:
+        _augment_market_data_from_sp_api(df, market_data)
     output_rows: list[dict] = []
 
     for idx, row in df.iterrows():
@@ -104,6 +110,36 @@ def resolve_matches(
             })
 
     return pd.DataFrame(output_rows)
+
+
+def _augment_market_data_from_sp_api(
+    df: pd.DataFrame,
+    market_data: dict,
+) -> None:
+    """Fill market_data gaps by resolving supplier barcodes through SP-API.
+
+    This is intentionally a second pass: local Keepa CSV data remains the
+    first source because it carries richer history/sales fields. SP-API only
+    runs for valid EAN/UPC rows that have no local market-data key.
+    """
+    missing_codes: list[str] = []
+    for _, row in df.iterrows():
+        code = row.get("ean")
+        if not code or not validate_ean(code):
+            continue
+        code = str(code).strip()
+        if code in market_data:
+            continue
+        missing_codes.append(code)
+
+    missing_codes = list(dict.fromkeys(missing_codes))
+    if not missing_codes:
+        return
+
+    resolved = resolve_codes_to_market_data(missing_codes)
+    for code, market_row in resolved.items():
+        if code not in market_data:
+            market_data[code] = market_row
 
 
 def run_step(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
