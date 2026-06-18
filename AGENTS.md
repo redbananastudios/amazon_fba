@@ -1,279 +1,110 @@
-# AGENTS.md — Amazon FBA Sourcing System
+# AGENTS.md — generated from vault on 2026-05-06 17:09
 
-This file describes how AI agents should operate within this workspace.
+<!-- managed-by-vault-compose: do not hand-edit. Re-run compose.py from the vault to refresh. -->
 
-> **Step 3 update (2026-04-28):** Repo restructured. One engine, named
-> strategies, ordered steps. The two former pipelines no longer exist as
-> separate top-level trees. See `docs/architecture.md`.
+Composed from `.brain.yml` in this repo. Project key: `fba_engine`. Vault root: `O:\Obsidian`.
 
 ---
 
-## Workspace Structure
+## Global context (shared/global)
 
-```
-amazon_fba/
-├── README.md                              ← Human-facing overview
-├── CLAUDE.md                              ← Agent quick-start
-├── AGENTS.md                              ← This file (agent behaviour rules)
-├── run.py                                 ← Launcher
-│
-├── docs/
-│   ├── SPEC.md                            ← Business logic source of truth
-│   ├── architecture.md                    ← Repo layout and conventions
-│   ├── strategies/                        ← Per-strategy docs
-│   └── archive/                           ← Historical (legacy PRDs, etc.)
-│
-├── shared/                                ← Cross-engine concerns
-│   ├── config/
-│   │   ├── business_rules.yaml            ← VAT, marketplace, price range
-│   │   └── decision_thresholds.yaml       ← TARGET_ROI + derived gates
-│   ├── niches/                            ← Per-niche YAML (kids-toys, etc.)
-│   └── lib/python/
-│       ├── fba_config_loader.py
-│       ├── fba_roi_gate.py
-│       └── sourcing_engine/               ← Canonical engine (single copy)
-│
-├── fba_engine/
-│   ├── adapters/                          ← Per-supplier ingest+normalise
-│   │   ├── abgee/
-│   │   ├── connect-beauty/
-│   │   ├── shure/
-│   │   └── zappies/
-│   ├── data/                              ← Gitignored (pricelists, niche outputs)
-│   ├── _legacy_keepa/                     ← TEMPORARY — Keepa pipeline
-│   └── tests/
-│
-├── services/
-│   └── amazon-fba-fees-mcp/               ← SP-API MCP server
-│
-└── orchestration/                         ← Cowork-facing
-```
+_Source: `O:\Obsidian\08_Meta\Agent\GLOBAL-CONTEXT.md`_
 
----
+This file is what Claude / Codex read cold to brief themselves on Peter's setup. If anything here contradicts the vault, the vault wins.
 
-## Agent Rules
+### About Peter
 
-### 1. Read Before You Act
+UK-based solo entrepreneur. Works with Claude Code (this) and Codex CLI as collaborators, not assistants — wants honest pushback when warranted, decisive action without permission-asking, and verification before claiming done. No sycophancy. Warm tone but tight: no fluff openings, no trailing summaries that just restate the diff. Primary language: C#, but not all repos are C# — check the repo's `CLAUDE.md` / `AGENTS.md` for the per-project stack.
 
-Read in this order before any work:
-1. `docs/SPEC.md` — business logic source of truth
-2. `docs/architecture.md` — how the system is laid out
-3. The relevant `docs/strategies/<strategy>.md` if working on a specific strategy
+Permissions: Claude Code's `defaultMode` is set to `bypassPermissions`, so tool prompts don't surface. The "is this sensible" judgement sits with the agent, not Peter. Take that responsibility seriously: destructive or irreversible actions still warrant an explicit confirmation even when the harness won't ask.
 
-The v5 PRD/BUILD_PROMPT in `docs/archive/` are kept for context only — they
-are NOT authoritative. The current authoritative spec is `docs/SPEC.md`.
+### Business model
 
-### 2. Path Handling
+Multiple businesses with overlapping infrastructure. The agency layer is **Red Banana Studios** (RBS) at `O:\red-banana-studio`, which has its own brand presence (RBS Instagram + Facebook) and runs client engagements. A common engagement type is **build-rent-market**: Peter builds a local-business site, an operator rents it, RBS handles ongoing marketing. **Marley Moves** and **First Taxis** are both on this model. Other businesses (**Red Taxi**, **FBA Engine**, **Willow & Weir**) run independently of RBS.
 
-- **Never hardcode absolute paths.** All paths must be relative to repo root or resolved via `__dirname` / `path.resolve` / `Path(__file__)`.
-- Python scripts accept `--input` and `--output` CLI arguments.
-- Default paths follow the convention `fba_engine/data/pricelists/<supplier>/{raw,results}/`.
+### Workspaces and projects
 
-### 3. Accuracy Is Non-Negotiable
+The vault has a workspaces layer above projects. Source of truth: [[config|config.yml]] in this folder.
 
-This system handles real money. Conservative assumptions always win over optimistic ones.
+**Workspace — Red Banana Studios** (`O:\red-banana-studio`):
 
-- **Never use `lowest_fba_price` alone as the sell price.** Use `min(buy_box_price, lowest_fba_price)` when both > 0.
-- **Never strip VAT from the Amazon sell price.** Seller is not VAT registered.
-- **Never use `floored_conservative_price` in profit, ROI, or decision logic.** Use `raw_conservative_price`.
-- **Never mix FBA and FBM fee paths.** They are calculated separately.
-- **Never crash on a single bad row.** Log the error, flag as REVIEW, continue processing.
-- **Decision gate is ROI-based, not margin-based.** SHORTLIST requires `roi_conservative >= TARGET_ROI` AND `profit_conservative >= MIN_PROFIT_ABSOLUTE`. See `shared/lib/python/fba_roi_gate.py`.
-- **Never hardcode a threshold.** Add to `shared/config/*.yaml` and import via `fba_config_loader`.
+- **Red Banana Brand** (`O:\red-banana-studio\agency`) — agency's own brand work: RBS socials, agency website, internal ops.
+- **Bex** (`O:\red-banana-studio\bex`) — chief orchestrator persona under RBS; separate Instagram brand voice from the agency feed.
+- **AI Library** (`O:\red-banana-studio\ai-library`) — shared lib of patterns, prompts, and reusable AI assets across RBS work.
+- **Marley Moves** (`O:\marley`) — RBS client; build-rent-market; first SEO engagement.
+- **First Taxis** (no repo yet) — RBS client; build-rent-market; planned second test of the SEO Engine.
 
-### 4. Strategy Execution
+**Standalone projects:**
 
-**`supplier_pricelist`** — supplier-feed-first reseller sourcing:
-```bash
-python run.py --supplier <supplier-name>
-# Defaults to fba_engine/data/pricelists/<supplier>/{raw,results}/
-```
+- **Red Taxi** (`O:\RedTaxi`) — independent.
+- **FBA Engine** (`O:\fba`) — Amazon FBA buy-recommendation engine.
+- **Willow & Weir** (`O:\willow`) — independent.
 
-**`keepa_niche`** — Amazon-listing-first niche discovery (legacy phases until step 4):
-The phases live in `fba_engine/_legacy_keepa/` and run via Claude Code skill invocations until step 4 ports them to Python.
+### Tooling stack
 
-### 5. Testing
+Obsidian is the brain — vault at `O:\Obsidian`, in git with 15-minute auto-commit, paid Obsidian Sync for mobile. Claude Code (Cowork mode) is the primary orchestration surface for code work. Codex CLI also in regular use. Both consume the same vault as their shared brain — write decisions and learnings into [[10_Decisions]] and [[11_Learnings]] so the next session can find them.
 
-The full test suite must pass before any code change is deployed.
+### The vault-ship skill
 
-```bash
-# Shared library + canonical engine (68 tests total)
-cd shared/lib/python && pytest tests/ sourcing_engine/tests/ -v
+User-level Claude Code skill at `~/.claude/skills/vault-ship/`. Captures decisions to `10_Decisions/`, learnings to `11_Learnings/`, project status updates to project READMEs, and pattern candidates to `08_Meta/Agent/pattern-candidates.md`. Reads `08_Meta/Agent/config.yml` to identify projects from repo paths. Cowork mode auto-invokes the skill after meaningful code-task completions; a Stop hook in `~/.claude/settings.json` prints a soft reminder at session end.
 
-# Pipeline steps (run from repo root for fba_engine package import)
-pytest fba_engine/steps/tests/
+### SEO Engine v0
 
-# Per-supplier adapter tests (run from supplier data folder so relative paths resolve)
-for s in abgee connect-beauty shure zappies; do
-  cd fba_engine/data/pricelists/$s
-  pytest ../../../adapters/$s/tests/
-  cd ../../../..
-done
-```
+Local-business SEO IP lives at `O:\red-banana-studio\ai-library\skills\`. Two kits: `local-business-seo` (orchestrator agent + 8 sub-skills) and `local-business-conversion` (3 sub-skills for lead-capture and analytics). Two cross-cutting top-level skills: `dataforseo-keyword-pipeline` and `ai-content-workflow`. **Status: v0** — patterns extracted from Marley Moves, untested elsewhere. First Taxis will be the second test; success there hardens to v1. Vault domain index at [[09_Domains/SEO/README|09_Domains/SEO]].
 
-Baseline counts as of step 4b:
+### Default behaviours
 
-| Suite | Pass | Fail | Notes |
-|---|---|---|---|
-| shared lib (config_loader, roi_gate) | 26 | 0 | clean |
-| canonical engine | 51 | 0 | clean (was 42 pre-integration; +9 end-to-end pipeline tests against fixture supplier+Keepa CSVs) |
-| pipeline steps (`fba_engine/steps/`) | 452 | 0 | 4a IP risk (71) + 4b decision (157) + 4c.1 build output (65) + 4c.2 build xlsx (71) + 4c.3 push gsheets (57) + supplier_leads (17) + oa_csv (14) |
-| strategies (`fba_engine/strategies/`) | 23 | 0 | YAML strategy runner (step 5) — interpolation + chain execution + end-to-end keepa_niche |
-| `keepa_client` (`shared/lib/python/keepa_client/`) | 38 | 0 | typed Keepa client — pydantic models, token bucket + refund, disk cache, JSONL log, retry on 429 / 502-504 |
-| `oa_importers` (`shared/lib/python/oa_importers/`) | 13 | 0 | OA-feed importer registry — SellerAmp 2DSorter (full impl) + Tactical Arbitrage / OAXray (stubs) |
-| `cli/` launch helpers | 20 | 0 | `python run.py open --asin / --target keepa\|amazon\|supplier\|storefront` |
-| abgee adapter | 12 | 0 | clean |
-| connect-beauty adapter | 15 | 0 | clean |
-| shure adapter | 9 | 3 | pre-existing — `test_ingest.py` expects abgee PDF format |
-| zappies adapter | 9 | 3 | pre-existing — same as shure |
-| MCP server (vitest) | 110 | 0 | clean — `services/amazon-fba-fees-mcp/`, `npm test` |
-| MCP server (live SP-API) | 5 | 0 | `npm run test:integration` — auto-skipped without creds |
+- Take initiative on in-scope work; don't ask routine permissions.
+- When work ships meaningfully, invoke vault-ship to capture decisions and learnings.
+- Surface real architectural forks for Peter's call — frame as "I'd consider X instead because Y", not "are you sure?".
+- Don't pre-bake archetypes or backfill historic content unsolicited.
+- Patterns earn promotion to `09_Domains/` only after validation across two-plus projects. Until then, queue in `pattern-candidates.md`.
 
-The 6 pre-existing failures are NOT regressions; they exist because two
-suppliers' adapter tests were copy-pasted from abgee but never adapted to
-their actual file formats. Fixing them requires writing real tests, not part
-of the structural reorganisation.
+### Working files in this folder
 
-Critical tests that must never be broken:
-- `test_profit_uses_raw_conservative_not_floored`
-- `test_price_floor_hit_blocks_shortlist`
-- `test_fbm_can_shortlist`
-- `test_fbm_fee_path_no_fba_fee`
-- `test_fba_fee_path_no_shipping_cost`
-- `test_case_qty_1_no_duplicate_row`
-- `test_vat_unclear_blocks_shortlist`
-- `test_gated_y_shortlists_with_indicator`
+- `CLAUDE-template.md` — per-repo skeleton. Copy-paste into a new repo as `CLAUDE.md` / `AGENTS.md`.
+- `config.yml` — source-of-truth registry of workspaces and projects.
+- `pattern-candidates.md` — staging area for unverified cross-project patterns.
 
-### 6. Output Files
+### When the brief and the vault disagree
 
-For `supplier_pricelist`, produced per run in `fba_engine/data/pricelists/<supplier>/results/<timestamp>/`:
-- `shortlist_<ts>.csv` — all rows, all decisions, full schema
-- `shortlist_<ts>.xlsx` — colour-coded SHORTLIST + REVIEW
-- `report_<ts>.md` — per-supplier markdown summary
-
-The CSV schema includes `roi_current` and `roi_conservative` alongside `margin_current` and `margin_conservative`.
-
-### 7. Configuration
-
-**Single source of truth:** `shared/config/`
-
-- All thresholds → `decision_thresholds.yaml` (single tunable: `target_roi`)
-- Cross-pipeline business rules → `business_rules.yaml`
-- Per-niche filters → `shared/niches/<niche>.yaml`
-
-Never hardcode a threshold in pipeline logic. Add to YAML and import via `fba_config_loader`.
-
-### 8. Adding a New Supplier
-
-1. Create `fba_engine/adapters/<new-supplier>/` (start from another supplier's adapter as a template)
-2. Implement `ingest.py` (parses files into a DataFrame) and `normalise.py` (maps columns to canonical schema)
-3. Create `fba_engine/data/pricelists/<new-supplier>/{raw,results}/`
-4. Run `python run.py --supplier <new-supplier>`
-
-No engine changes required.
-
-### 9. When Multiple Agents Run in Parallel
-
-Each agent operates on its own supplier's data folder, so there are no file conflicts. Agents should:
-- Stay within their assigned supplier's data directory
-- Not modify shared files (`shared/config/`, `shared/niches/`, the canonical engine) without coordination
-- Write handoff files where appropriate so the next phase or agent knows where to pick up
-
-### 10. MCP Preflight Annotation (informational)
-
-The supplier pipeline auto-calls `services/amazon-fba-fees-mcp/dist/cli.js` after
-the match loop to annotate each row with SP-API-derived informational columns:
-restriction status, FBA eligibility, live Buy Box, catalog brand, etc.
-
-**Auto-on requirements:**
-- `services/amazon-fba-fees-mcp/dist/cli.js` exists (run `npm run build` in that folder)
-- `node` is on `PATH`
-- `SP_API_CLIENT_ID` is set (creds live in `~/.claude/settings.json` env block)
-
-If any of these are missing, the step **skips silently** (logs "preflight: skipping (...)")
-and the rows get the new columns set to `None`. Existing pipeline behaviour is
-unchanged. Opt out explicitly with `python run.py --supplier <s> --no-preflight`.
-
-**The preflight is INFORMATIONAL ONLY. Decision logic is unchanged.**
-
-- `decision.py` does NOT consider any preflight column. SHORTLIST/REVIEW/REJECT
-  counts are identical with and without preflight running.
-- A SHORTLIST item that is `BRAND_GATED` or `RESTRICTED` still SHORTLISTs. The
-  user decides whether to apply for ungating; the engine doesn't auto-reject.
-- The markdown report adds a "🚫 Restriction notes" section listing
-  SHORTLIST rows with non-`UNRESTRICTED` status, so they surface visibly.
-
-**New columns appended to CSV/Excel/output_rows** (all default to `None` if
-the preflight didn't run or the source erred):
-
-| Column | Source |
-|---|---|
-| `restriction_status` | UNRESTRICTED / RESTRICTED / BRAND_GATED / CATEGORY_GATED |
-| `restriction_reasons` | comma-joined reason codes |
-| `restriction_links` | semicolon-joined Seller Central Apply-to-sell URLs (one per distinct reason) — click straight from the CSV/XLSX |
-| `fba_eligible` | True / False |
-| `fba_ineligibility` | comma-joined ineligibility codes |
-| `live_buy_box` | real-time Buy Box landed price (GBP) |
-| `live_buy_box_seller` | "FBA" / "FBM" |
-| `live_offer_count_new` | total new-condition offers |
-| `live_offer_count_fba` | FBA offers (subset) |
-| `catalog_brand` | SP-API canonical brand (per spec, wins over Keepa brand) |
-| `keepa_brand` | original Keepa brand string (for diff tracking) |
-| `catalog_hazmat` | True / None |
-| `preflight_errors` | comma-joined per-source error messages |
-
-**Ungate-tracking columns** (reserved schema — blank by default; operator fills them as ungate applications progress, or a future click-through bot populates them automatically):
-
-| Column | Source / values |
-|---|---|
-| `ungate_status` | `INSTANT_APPROVED` / `DOCS_REQUIRED` / `IN_QUEUE` / `DENIED` / `RATE_LIMITED` / `NOT_ATTEMPTED` (free-text accepted; canonical values listed) |
-| `ungate_required_docs` | `invoice` / `brand_letter` / `category_cert` / `""` — what Amazon's form is asking for when status is DOCS_REQUIRED |
-| `ungate_brand_required` | brand whose invoice/letter is needed (sometimes more specific than the listing's brand field — e.g. "Hasbro Inc" not "Transformers") |
-| `ungate_attempted_at` | ISO 8601 timestamp — set by bot or operator; lets reruns avoid re-attempting recent applications |
-| `ungate_message` | free-text from Amazon's response page — useful for debugging unexpected outcomes |
-
-These columns are seeded as `None` for every row in the preflight output. The engine never writes them — they exist purely so the operator's CSV/XLSX has the cells ready to fill in.
-
-**Disk cache:** lives at `<repo>/.cache/fba-mcp/` (gitignored). TTLs default to
-restrictions 7d, FBA 7d, catalog 30d, fees 24h, pricing 5min. Override via
-`MCP_CACHE_TTL_*_S` env vars. Wipe with `rm -rf .cache/fba-mcp/`.
-
-**Direct CLI access** (for ad-hoc debugging or other tools):
-
-```bash
-node services/amazon-fba-fees-mcp/dist/cli.js preflight --input -
-node services/amazon-fba-fees-mcp/dist/cli.js restrictions --asins B001,B002
-node services/amazon-fba-fees-mcp/dist/cli.js --help
-```
+If this file contradicts what you find in the vault or in `config.yml`, trust the vault. This brief is point-in-time; the vault is live.
 
 ---
 
-## Verdict Reference
+## Project — FBA Engine (project)
 
-### Supplier Pipeline Decisions
-| Decision | Meaning |
-|----------|---------|
-| SHORTLIST | Profitable at conservative price (ROI ≥ TARGET_ROI, profit ≥ MIN_PROFIT_ABSOLUTE) — act on this. Gated rows reach SHORTLIST with a "GATED" indicator. |
-| REVIEW | Profitable but flagged — needs human eyes (e.g. AMAZON_ON_LISTING, INSUFFICIENT_HISTORY, low sales 10-19) |
-| REJECT | Hard block: invalid EAN, no Amazon match, sales below floor, or unprofitable at both current and conservative prices |
+_Source: `O:\Obsidian\01_Projects\FBA Engine\README.md`_
 
-### Keepa Niche Finder Verdicts (legacy until step 4)
-| Verdict | Meaning |
-|---------|---------|
-| YES | Composite 8.5+, all filters pass |
-| MAYBE | Composite 7-8.4, one concern |
-| MAYBE-ROI | ROI below `target_roi` |
-| BRAND APPROACH | 2-3 sellers, weak listing, contact brand |
-| BUY THE DIP | Price 30%+ below 90-day avg |
-| PRICE EROSION | Consistent downward slope |
-| GATED | Restricted listing |
-| HAZMAT | Confirmed hazmat |
-| NO | Fails filters |
+---
+type: project
+name: FBA Engine
+status: active
+archetype: tbd
+domains: []
+repo: O:\fba
+started: unknown
+last_activity: 2026-05-06
+---
 
-### Decision Engine Verdicts (Phase 6 / `_legacy_keepa`)
-| Verdict | Action |
-|---------|--------|
-| BUY | Purchase now at current terms |
-| NEGOTIATE | Pursue but negotiate better price |
-| WATCH | Monitor for price recovery or better terms |
-| KILL | Do not pursue |
+Project context to be added by Peter.
+
+### Activity Log
+
+- 2026-05-06 — Baseline recon completed; identified BUY-row scarcity as primary friction; Option A (auto-fill Browser scrape cache for top WATCH rows) recommended as next move ([[recon-2026-05-06]])
+
+---
+
+## Vault context — all known projects
+
+**Workspace — Red Banana Studios** (`O:\red-banana-studio`)
+- Marley Moves (`O:\marley`)
+- First Taxis (`no repo yet`)
+- AI Library (`O:\red-banana-studio\ai-library`)
+- Red Banana Brand (`O:\red-banana-studio\agency`)
+- Bex (`O:\red-banana-studio\bex`)
+
+**Standalone projects**
+- Red Taxi (`O:\RedTaxi`)
+- FBA Engine (`O:\fba`)  ← this repo
+- Willow & Weir (`O:\willow`)

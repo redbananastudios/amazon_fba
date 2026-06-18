@@ -1,0 +1,7 @@
+project: fba_engine
+include:
+  - shared/global
+  - project
+output:
+  agents_md: AGENTS.md
+  also_write_claude_md: true
